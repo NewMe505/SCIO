@@ -1,0 +1,14 @@
+name: Chore
+description: Maintenance, refactors, dependency updates, docs
+labels: [chore]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done

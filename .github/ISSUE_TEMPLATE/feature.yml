@@ -1,0 +1,29 @@
+name: Feature
+description: Request new functionality (an agent can pick this up)
+labels: [feature]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be true when this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Testable checks, one per line. These become the feature_list.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Relevant files, links, constraints, non-goals.
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Expected effort tier (optional hint for the router)
+      options: ["Let the router decide", "T0 trivial", "T1 standard", "T2 large/ambiguous"]
