@@ -13,10 +13,14 @@ dependencies = [
     "openai>=1.60,<4",
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
+    "langgraph>=1.0,<2",
+    "langgraph-checkpoint-sqlite>=3.0,<4",
 ]
 
 [project.optional-dependencies]
 otlp = ["opentelemetry-exporter-otlp-proto-http>=1.30"]
+postgres = ["langgraph-checkpoint-postgres>=3.0,<4"]
+e2b = ["e2b>=2.0,<3"]
 
 [dependency-groups]
 dev = [

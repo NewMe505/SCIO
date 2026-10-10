@@ -94,8 +94,16 @@ def check_changelog() -> list[str]:
     return [] if "## [Unreleased]" in text else ["CHANGELOG.md: missing '## [Unreleased]' section"]
 
 
+def check_graph_sections() -> list[str]:
+    """docs/ARCHITECTURE.md generated Mermaid sections must match the compiled graphs."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import gen_mermaid
+
+    return gen_mermaid.check()
+
+
 def main() -> int:
-    errors = check_links() + check_model_ids() + check_changelog()
+    errors = check_links() + check_model_ids() + check_changelog() + check_graph_sections()
     for e in errors:
         print(f"docs-check: {e}")
     print(f"docs-check: {len(errors)} problem(s)")

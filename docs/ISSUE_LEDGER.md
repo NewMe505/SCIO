@@ -96,6 +96,46 @@ Template:
 - Sweep: every regex in `check_docs.py` reviewed for the same "scan raw text" mistake: `check_model_ids` scans code lines on purpose (model IDs in comments or strings are also leaks). Searched `scio/`, `evals/`, `scripts/` for other `Path.exists()` checks on user-supplied strings: none. Guard: `tests/unit/test_check_docs.py` covers code spans, fenced blocks and the `...` target, and runs the three checks against the real repo
 - Resolved: 2026-10-10 · Status: resolved
 
+### I-012 · `uv pip install` outside `pyproject.toml` triggered a rebuild that hit the TLS error again
+- Found: 2026-10-10 · M2 · installing LangGraph ad hoc to introspect its API
+- Symptom: `Failed to fetch https://pypi.org/simple/hatchling/ ... invalid peer certificate: UnknownIssuer` on the next `uv run`
+- Root cause: two mistakes. Dependencies were added with `uv pip install` instead of `pyproject.toml`, so the next `uv run` re-resolved the project; and the TLS flag was passed per command instead of being a session default (I-002 was fixed for one command, not systemically)
+- Fix: dependencies added to `pyproject.toml` (`langgraph`, `langgraph-checkpoint-sqlite`; `postgres` and `e2b` extras) and `UV_SYSTEM_CERTS=1` exported for every `uv` call (`UV_NATIVE_TLS` is deprecated)
+- Sweep: CLAUDE.md and README now name the environment variable; no other ad-hoc installs in the session
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-013 · Fake `gh` runner parsed nested branch names wrongly
+- Found: 2026-10-10 · M2 · `tests/unit/test_github_client.py::test_ensure_branch_is_idempotent_and_guards_default`
+- Symptom: second `ensure_branch("agent/3-x")` created the branch again
+- Root cause: the test double took the last path segment of `repos/o/r/git/ref/heads/agent/3-x` (`3-x`) as the branch name; the client itself was correct
+- Fix: the double splits on `/git/ref/heads/`
+- Sweep: searched the client and tests for other `rsplit("/", 1)` on ref paths: none. Branch names with slashes are the project convention (`agent/<issue>-<slug>`), so every ref-handling path must assume them
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-014 · Error signature ignored the evaluated assertion in pytest output
+- Found: 2026-10-10 · M2 · `tests/unit/test_state.py::test_error_signature_pytest_style`
+- Symptom: two pytest failures that differ only in the evaluated `E   assert 2 == 3` line hashed to the same signature
+- Root cause: the first matching `assert` line was the *source* line (`assert len(...) == 3`), identical in both failures; the evaluated `E   assert` line came later and was ignored
+- Fix: pytest's `E` explanation line takes precedence over the source assertion when both are present
+- Sweep: reviewed every regex in `signatures.py` for the same "first match wins" assumption; the frame regex intentionally keeps the *last* frame and is documented as such. Test covers both traceback and pytest shapes
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-015 · mypy on Windows rejects the POSIX-only `resource` module
+- Found: 2026-10-10 · M2 · `uv run mypy` on `scio/aci/sandbox/local.py`
+- Symptom: `Module has no attribute "setrlimit"`; a `**kwargs` dict for `preexec_fn` also broke the `subprocess.run` overloads
+- Root cause: platform-conditional stdlib modules are typed per platform; building keyword arguments dynamically loses the overload match
+- Fix: `importlib.import_module("resource")` typed as `Any` inside the POSIX-only function; `preexec_fn=... if sys.platform != "win32" else None` passed directly
+- Sweep: no other platform-conditional imports in `scio/`
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-016 · Docker and E2B backends not exercised live
+- Found: 2026-10-10 · M2 · `docker --version` → command not found on the dev machine; no E2B key
+- Symptom: `DockerSandbox` and `E2BSandbox` are verified only through injected runners and fake clients
+- Root cause: environment
+- Fix: pending. Needs one run of a gated live test on a machine with Docker, and one with `E2B_API_KEY`
+- Sweep: n/a
+- Resolved: — · Status: open
+
 ### I-009 · Branch protection unavailable on a private free-plan repository
 - Found: 2026-10-10 · M0 · `gh api repos/.../rulesets`
 - Symptom: `Upgrade to GitHub Pro or make this repository public to enable this feature` (403)

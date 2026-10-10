@@ -2,7 +2,7 @@
 
 A model-agnostic, multi-agent framework built on LangGraph. It takes a software task from spec (or a GitHub Issue) to a merged, tested and documented pull request.
 
-> Status: **Milestone 1 (harness + providers + evals skeleton + CI)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> Status: **Milestone 2 (state, checkpointing, ACI tools, sandbox, GitHub client)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Design in one paragraph
 A cheap router classifies each task into an effort tier (T0, T1 or T2). **Opus 5.5** plans, advises and checks that the objective was met before finishing. **Sonnet 5** does the work: coding, testing, debugging and documentation. Only one agent writes code. Parallel fan-out is used only for read-only exploration and review. Tests, linters and type checks decide pass/fail, not LLM opinion. Sonnet escalates to Opus only on specific signals (repeated errors, stalls, low confidence, plan drift, high-impact changes), with a cap on how often. Every run produces a GitHub PR, and the docs are updated in that same PR.
@@ -16,7 +16,7 @@ A cheap router classifies each task into an effort tier (T0, T1 or T2). **Opus 5
 | Loop | Bounded act → verify → fix loops with explicit exit conditions |
 | Graph | Checkpointed LangGraph StateGraph and routing |
 
-## Usage (M1: harness only)
+## Usage (M1 harness, M2 state and tools)
 
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
@@ -56,18 +56,24 @@ tracing (`otlp` reads `OTEL_EXPORTER_OTLP_ENDPOINT`, install the `otlp` extra);
 are read by the SDKs (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Live tests:
 `SCIO_RUN_LIVE_TESTS=1 uv run pytest tests/live -m live`.
 
+M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sqlite`, `postgresql://...`),
+`SCIO_EFFECTS_PATH` (idempotent side-effect log), `SCIO_SANDBOX_BACKEND=local|docker|e2b` with
+`SCIO_SANDBOX_DOCKER_IMAGE` / `SCIO_SANDBOX_E2B_TEMPLATE` and the `postgres` / `e2b` extras, and
+`SCIO_GH_REPO=owner/name` for the GitHub client. Regenerate graph diagrams with
+`uv run python scripts/gen_mermaid.py` (the docs check fails when they drift).
+
 ## Docs
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Milestone 0 design (graphs, State, agent contracts, directory tree, milestone plan)
 - [docs/PROMPT.md](docs/PROMPT.md): the build spec / generation prompt
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Roadmap
 - M0 (done): architecture, State schema, agent contracts, directory tree
 - M1 (done): harness, providers (Anthropic, OpenAI, Fake), prompt layer, eval skeleton, CI
-- M2: state, checkpointing, agent tools, sandbox, GitHubClient
+- M2 (done): state, checkpointing with idempotent effects, ACI tools, sandbox backends, GitHubClient
 - M3: router and T0 loop
 - M4: T1/T2 tiers and the escalation policy
 - M5: observability and eval tuning
