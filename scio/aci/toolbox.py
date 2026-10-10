@@ -83,7 +83,9 @@ class ToolBox:
         human_gate: bool,
         extra_capabilities: dict[str, Iterable[Capability]] | None = None,
         max_calls: int | None = None,
+        role: str = "agent",
     ) -> None:
+        self.role = role
         names = list(tool_names)
         unknown = [n for n in names if n not in TOOLS]
         if unknown:
@@ -105,7 +107,7 @@ class ToolBox:
 
     def call(self, tool_use_id: str, name: str, raw_input: dict[str, object]) -> ToolResultPart:
         self.calls += 1
-        with execute_tool_span(name, call_index=self.calls):
+        with execute_tool_span(name, call_index=self.calls, role=self.role):
             if self.max_calls is not None and self.calls > self.max_calls:
                 return ToolResultPart(
                     tool_use_id=tool_use_id,

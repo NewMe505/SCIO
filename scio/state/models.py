@@ -190,6 +190,8 @@ class ProgressLedger(BaseModel):
     tool_calls: int = 0
     """T0 cap = 10."""
     last_fingerprint: str | None = None
+    last_failure_kind: Literal["none", "tests", "lint_only", "no_changes"] = "none"
+    """What the last verify failed on; ``lint_only`` is on the never-escalate list."""
 
 
 class Budget(BaseModel):
@@ -339,6 +341,14 @@ class GateOutput(BaseModel):
     reasoning: str = Field(max_length=2000)
 
 
+class TriageDecision(BaseModel):
+    """Result of the pure triage function, stored so the conditional edge only reads state."""
+
+    route: Literal["debug", "advise", "halt"]
+    triggers: list[EscalationTrigger] = Field(default_factory=list)
+    reason: str = ""
+
+
 # ---------- the graph state ----------
 
 
@@ -355,13 +365,33 @@ class SCIOState(BaseModel):
     artifacts: dict[str, ArtifactRef] = Field(default_factory=dict)
     """Keyed by logical name, e.g. ``diff:S3:attempt2``."""
     explorer_summaries: Annotated[list[ArtifactRef], operator.add] = Field(default_factory=list)
-    escalations: Annotated[list[EscalationRecord], operator.add] = Field(default_factory=list)
+    """Reducer: parallel explorers append. Every other list is written by one node at a time."""
+    escalations: list[EscalationRecord] = Field(default_factory=list)
     github: GitHubRefs
     last_worker_output: WorkerOutput | None = None
     last_review: ReviewerOutput | None = None
     last_gate: GateOutput | None = None
     exit_reason: ExitReason | None = None
     human_notes: Annotated[list[str], operator.add] = Field(default_factory=list)
+    # --- M4: planning and escalation ---
+    exploration_questions: list[str] = Field(default_factory=list)
+    advisor_guidance: str | None = None
+    """Latest advisor guidance, shown to the next worker turn and then cleared."""
+    high_impact_flags: list[str] = Field(default_factory=list)
+    high_impact_reviewed: bool = False
+    sample_disagreement: bool = False
+    triage: TriageDecision | None = None
+
+    def current_step(self) -> PlanStep | None:
+        if self.plan is None or self.progress.current_step_id is None:
+            return None
+        return self.plan.step(self.progress.current_step_id)
+
+    def step_features(self) -> list[FeatureItem]:
+        step = self.current_step()
+        if step is None:
+            return list(self.feature_list)
+        return [f for f in self.feature_list if f.id in step.feature_ids]
 
     def failing_features(self) -> list[FeatureItem]:
         return [f for f in self.feature_list if f.status is FeatureStatus.FAILING]

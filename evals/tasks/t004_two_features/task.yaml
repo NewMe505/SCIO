@@ -1,0 +1,8 @@
+id: t004_two_features
+suite: regression
+title: Add circle and rectangle area helpers
+tier_hint: T1
+trials: 5
+budget: { tokens: 200000, usd: 2.0 }
+grader: tests
+hidden_tests: hidden/test_shapes_hidden.py

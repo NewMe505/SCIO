@@ -192,6 +192,30 @@ Template:
 - Sweep: CLAUDE.md's pre-push command does not pass `-q`; CI runs `pytest` without it. Pre-flight item 11 added: anything that must not run after a failed check belongs on the same `&&` line, and a heredoc's continuation `&&` goes on the opener line
 - Resolved: 2026-10-10 · Status: resolved
 
+### I-024 · Schema-kind detection in the fake matched the planner before the router
+- Found: 2026-10-10 · M4 · first T1 end-to-end test
+- Symptom: `StructuredOutputError: RouterOutput: still invalid after 2 repairs`; the fake answered the router's schema with a plan
+- Root cause: the fake decides which JSON to return by the first property marker it finds; `rationale` (checked for the planner) is also a `RouterOutput` field, and the router check came later
+- Fix: markers reordered most-specific first (`tier`, `exploration_questions`, `steps`, ...); the planner is detected by `steps`
+- Sweep: every marker in the table is now unique to its schema (`tier`, `exploration_questions`, `steps`, `relevant_files`, `guidance`, `findings`, `objective_met`, `plan_vs_done`, `next_action`); adding a schema requires a field no other schema has
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-025 · Step advanced before the edge evaluated it; checkpoint stamped every feature
+- Found: 2026-10-10 · M4 · `test_t1_two_steps_one_commit_each` (one combined commit instead of one per step)
+- Symptom: after step S1 passed, the run routed to triage/debug for S2 instead of committing S1; after that fix, S2 had nothing to commit
+- Root cause: two defects. `verify` advanced `current_step_id` to the next step inside the node, so the `after_verify` edge judged the *next* step's features; and `git_checkpoint` stamped the commit SHA on every feature without one, not only the features it committed
+- Fix: `verify` marks the step done and sets `last_failure_kind`; the edge reads only that; `git_checkpoint` commits the pending passing features, stamps exactly those, and advances the step (ADR 0005 decision 7)
+- Sweep: searched the nodes for other "node mutates what the following edge reads" patterns: `advise` sets `phase` for `after_advise` and `exit_reason` for `halt`, both intentionally and documented. No other node advances a cursor its edge depends on
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-026 · Writer toolboxes untagged, so the one-writer assertion saw role "agent"
+- Found: 2026-10-10 · M4 · `test_t2_parallel_explorers_and_one_writer`
+- Symptom: `execute_tool edit_file` spans carried `scio.role=agent` for the T0 coder and the documenter
+- Root cause: `ToolBox(role=...)` was added for M4 and set in the new nodes only; the M3 call sites kept the default
+- Fix: every `ToolBox` construction names its role; the assertion is `edit roles ⊆ {coder, debugger, documenter}`
+- Sweep: `grep -n "ToolBox(" scio/` shows five construction sites, all with `role=`; a default of `"agent"` remains for ad-hoc use but no node uses it
+- Resolved: 2026-10-10 · Status: resolved
+
 ### I-009 · Branch protection unavailable on a private free-plan repository
 - Found: 2026-10-10 · M0 · `gh api repos/.../rulesets`
 - Symptom: `Upgrade to GitHub Pro or make this repository public to enable this feature` (403)

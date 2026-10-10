@@ -7,7 +7,7 @@ sandbox, the effect log, the artifact store and the optional GitHub client.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from scio.aci.sandbox.base import Limits, Sandbox
@@ -17,6 +17,7 @@ from scio.graph.effects import EffectLog
 from scio.harness.budget import BudgetGuard, BudgetLimits, BudgetsConfig
 from scio.harness.core import Harness
 from scio.harness.github.client import GitHubClient
+from scio.loop.escalation import EscalationConfig
 from scio.loop.exits import LoopLimits
 from scio.prompt.registry import PromptRegistry
 from scio.settings import Settings, get_settings
@@ -37,6 +38,8 @@ class RunContext:
     limits: LoopLimits
     budget: Budget
     github: GitHubClient | None = None
+    escalation: EscalationConfig = field(default_factory=EscalationConfig)
+    tier: str = "T0"
 
     @classmethod
     def create(
@@ -94,6 +97,8 @@ class RunContext:
             ),
             budget=budget,
             github=github,
+            escalation=EscalationConfig(**budgets.escalation.model_dump()),
+            tier=tier,
         )
 
     def budget_update(self) -> dict[str, object]:

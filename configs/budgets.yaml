@@ -7,3 +7,12 @@ tiers:
 # Fraction of max_tokens the budget pre-check assumes an output will use.
 # 1.0 is fully conservative: a call is refused if it *could* exceed the cap.
 reserve_output_fraction: 1.0
+
+# Escalation thresholds (M5 tunes these from eval data; see ADR 0005).
+escalation:
+  repeat_threshold: 3       # same error signature seen this many times (= after 2 fix attempts)
+  max_stall: 2              # stall_count above this escalates
+  high_impact_files: 8      # a diff touching more files than this is high impact
+  sample_n: 1               # patches sampled per implement when the error repeats (1 = off)
+  explorers_min: 2
+  explorers_max: 4

@@ -80,6 +80,7 @@ def to_task_like(task: EvalTask) -> EvalTaskLike:
         hidden_tests=task.hidden_tests,
         tokens=task.budget.tokens,
         usd=task.budget.usd,
+        tier=task.tier_hint or "T0",
     )
 
 

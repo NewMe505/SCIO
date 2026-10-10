@@ -1,6 +1,6 @@
 # SCIO architecture (Milestone 0)
 
-Status: **M0 approved; M1, M2 and M3 implemented.** All five layers exist: `scio/prompt`, `scio/context`, `scio/harness`, `scio/loop`, `scio/graph`, plus `scio/aci` and `scio/state`. The T0 tier runs end to end (`scio run`); T1/T2 and the escalation policy follow in M4. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
+Status: **M0 approved; M1 to M4 implemented.** All five layers exist and all three tiers run end to end through one graph (`scio run`); the signal-driven, capped escalation to the Opus advisor is live. M5 (observability and eval tuning) remains. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
 
 From M2 on, the Mermaid diagrams in section (a) are regenerated from the compiled graph by `scripts/gen_mermaid.py`, and CI fails if this file and the compiled graph disagree.
 
@@ -68,7 +68,6 @@ graph TD;
 	intake(intake)
 	route(route)
 	prepare_repo(prepare_repo)
-	t0_loop(t0_loop)
 	verify(verify)
 	git_checkpoint(git_checkpoint)
 	document(document)
@@ -76,18 +75,19 @@ graph TD;
 	pr_ready(pr_ready)
 	merge_wait(merge_wait)
 	halt(halt)
+	t0_loop(t0_loop)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> intake;
 	document -.-> gate;
 	document -.-> halt;
 	gate -.-> halt;
 	gate -.-> pr_ready;
-	git_checkpoint --> document;
+	git_checkpoint -.-> document;
 	intake --> route;
 	pr_ready --> merge_wait;
-	prepare_repo --> t0_loop;
+	prepare_repo -.-> t0_loop;
 	route -.-> halt;
-	route -. &nbsp;prepare&nbsp; .-> prepare_repo;
+	route -. &nbsp;T0&nbsp; .-> prepare_repo;
 	t0_loop -.-> halt;
 	t0_loop -.-> verify;
 	verify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
@@ -135,6 +135,78 @@ flowchart TD
   impl -. "max_iters / budget / stall" .-> H
 ```
 
+#### T1 as compiled (generated; do not edit by hand)
+
+<!-- scio:graph:t1:begin -->
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	route(route)
+	prepare_repo(prepare_repo)
+	verify(verify)
+	git_checkpoint(git_checkpoint)
+	document(document)
+	gate(gate)
+	pr_ready(pr_ready)
+	merge_wait(merge_wait)
+	halt(halt)
+	plan(plan)
+	post_plan(post_plan)
+	implement(implement)
+	debug(debug)
+	advise(advise)
+	review(review)
+	localize(localize)
+	triage(triage)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	advise -.-> halt;
+	advise -.-> implement;
+	advise -.-> plan;
+	debug -.-> halt;
+	debug -.-> verify;
+	document -.-> gate;
+	document -.-> halt;
+	gate -.-> halt;
+	gate -.-> pr_ready;
+	git_checkpoint -.-> document;
+	git_checkpoint -.-> implement;
+	git_checkpoint -.-> review;
+	implement -.-> halt;
+	implement -.-> verify;
+	intake --> route;
+	localize -.-> halt;
+	localize -. &nbsp;verify&nbsp; .-> implement;
+	plan -.-> halt;
+	plan -.-> post_plan;
+	post_plan -.-> implement;
+	post_plan -.-> localize;
+	pr_ready --> merge_wait;
+	prepare_repo -.-> plan;
+	review -.-> document;
+	review -.-> halt;
+	route -.-> halt;
+	route -. &nbsp;T1&nbsp; .-> prepare_repo;
+	triage -.-> advise;
+	triage -.-> debug;
+	triage -.-> halt;
+	verify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
+	verify -.-> halt;
+	verify -.-> triage;
+	halt --> __end__;
+	merge_wait --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+<!-- scio:graph:t1:end -->
+
 ### T2: large or ambiguous
 
 Same backbone as T1 with two changes: a short Opus `scope` call produces 2–4 exploration questions, and those run as parallel read-only Explorers (LangGraph `Send`) whose summaries reduce into state before planning. Still exactly one writer.
@@ -171,6 +243,80 @@ flowchart TD
   gate -->|replan| plan
   gate -->|escalate_human| H
 ```
+
+#### T2 as compiled (generated; do not edit by hand)
+
+<!-- scio:graph:t2:begin -->
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	route(route)
+	prepare_repo(prepare_repo)
+	verify(verify)
+	git_checkpoint(git_checkpoint)
+	document(document)
+	gate(gate)
+	pr_ready(pr_ready)
+	merge_wait(merge_wait)
+	halt(halt)
+	plan(plan)
+	post_plan(post_plan)
+	implement(implement)
+	debug(debug)
+	advise(advise)
+	review(review)
+	scope(scope)
+	explore(explore)
+	triage(triage)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	advise -.-> halt;
+	advise -.-> implement;
+	advise -.-> plan;
+	debug -.-> halt;
+	debug -.-> verify;
+	document -.-> gate;
+	document -.-> halt;
+	explore --> plan;
+	gate -.-> halt;
+	gate -.-> pr_ready;
+	git_checkpoint -.-> document;
+	git_checkpoint -.-> implement;
+	git_checkpoint -.-> review;
+	implement -.-> halt;
+	implement -.-> verify;
+	intake --> route;
+	plan -.-> halt;
+	plan -.-> post_plan;
+	post_plan --> implement;
+	pr_ready --> merge_wait;
+	prepare_repo -.-> plan;
+	prepare_repo -.-> scope;
+	review -.-> document;
+	review -.-> halt;
+	route -.-> halt;
+	route -. &nbsp;T2&nbsp; .-> prepare_repo;
+	scope -.-> explore;
+	scope -.-> halt;
+	triage -.-> advise;
+	triage -.-> debug;
+	triage -.-> halt;
+	verify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
+	verify -.-> halt;
+	verify -.-> triage;
+	halt --> __end__;
+	merge_wait --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+<!-- scio:graph:t2:end -->
 
 ### Escalation triage (conditional edge, all tiers except T0)
 
@@ -714,3 +860,11 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 - Every side-effecting node (`prepare_repo`, `git_checkpoint`, `document`'s docs commit / push / draft PR, `pr_ready`) goes through `run_effect` with an intent and, where visible in the world, a probe. Commit subjects carry `[scio:<key>]`.
 - `tests/graph/test_t0_fake.py` runs the whole graph on the Fake provider with `evals/fake_scripts.ScriptedResponder`: the happy path (resume through the merge interrupt, three commits, hidden tests green) and one test per exit reason.
 - Offline mode: without `SCIO_GH_REPO` the run never pushes or opens a PR; the PR body is written to the artifact store and `pr_ready` is a no-op.
+
+### M4: T1/T2 and escalation
+- One builder (`scio/graph/build.py`) wires every tier; `after_route` sends the run down the chosen tier and the generated sections above are the `tier="T0"|"T1"|"T2"` restrictions of that graph.
+- T2 `scope` (Opus) produces 2–4 exploration questions; `explore` runs them in parallel through LangGraph `Send` with a read-only toolbox and reduces ≤1.5k-token summaries into `explorer_summaries`. T1 runs a single `localize` explorer for the first step.
+- `plan` (Opus) owns the feature list's `test_filter`s and the steps; `post_plan` mirrors the checklist to the issue (idempotent by marker). `implement` executes one step per cycle; `git_checkpoint` commits that step's features and advances the cursor (ADR 0005).
+- `verify` stores a `TriageDecision` after a failing check; the `triage` edge reads it: `debug` (the default and the never-escalate path), `advise` (any of the six signals while the caps allow), or `halt` with exit `advisor_cap`. `advise` records an `EscalationRecord` (trigger, brief artifact, verdict, tokens, $, outcome) and routes on the verdict; the next verify resolves the record.
+- `review` is a fresh-context Reviewer over task + diff + test output; its findings go into the PR body. The Documenter writes an ADR in the target repository when the advisor replanned or changed approach, or the diff is high impact.
+- `evals/` carries five real tasks across the tiers (t001 T0, t002 T1, t003 T0, t004 T1 two steps, t005 T2); `evals/fake_scripts.TaskScript` drives them deterministically on the Fake provider, including the escalation scenarios.

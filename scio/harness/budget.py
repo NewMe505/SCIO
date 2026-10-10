@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scio.harness.accounting import ModelPricing
 from scio.harness.failures import BudgetExceeded
@@ -101,9 +101,19 @@ class BudgetGuard:
         return s.tokens_used >= s.tokens_max or s.usd_used >= s.usd_max
 
 
+class EscalationSettings(BaseModel):
+    repeat_threshold: int = 3
+    max_stall: int = 2
+    high_impact_files: int = 8
+    sample_n: int = 1
+    explorers_min: int = 2
+    explorers_max: int = 4
+
+
 class BudgetsConfig(BaseModel):
     tiers: dict[str, BudgetLimits]
     reserve_output_fraction: float = 1.0
+    escalation: EscalationSettings = Field(default_factory=EscalationSettings)
 
     @classmethod
     def load(cls, path: Path) -> BudgetsConfig:

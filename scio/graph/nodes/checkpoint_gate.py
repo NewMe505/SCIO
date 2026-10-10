@@ -13,6 +13,7 @@ from scio.context.assembler import gate_message
 from scio.graph.effects import effect_key, run_effect
 from scio.graph.nodes.common import decision, diff_stat, fact
 from scio.graph.nodes.verify import lint
+from scio.graph.nodes.worker import run_docs_check
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
@@ -24,7 +25,9 @@ Node = Callable[[SCIOState], dict[str, Any]]
 def checkpoint(ctx: RunContext) -> Node:
     def node(state: SCIOState) -> dict[str, Any]:
         sb = ctx.sandbox
-        pending = [f for f in state.feature_list if f.commit_sha is None]
+        pending = [
+            f for f in state.feature_list if f.commit_sha is None and f.status.value == "passing"
+        ]
         if not pending:
             return {"phase": "document"}
         ids = "+".join(f.id for f in pending)
@@ -44,20 +47,42 @@ def checkpoint(ctx: RunContext) -> Node:
             apply=apply,
             probe=lambda: find_commit(sb, marker),
         )
+        committed = {f.id for f in pending}
         features = [
-            f.model_copy(update={"commit_sha": sha}) if f.commit_sha is None else f
+            f.model_copy(update={"commit_sha": sha}) if f.id in committed else f
             for f in state.feature_list
         ]
         entry = fact(f"committed {ids} as {sha[:12]}", source=Role.SYSTEM)
         github = state.github.model_copy(update={"head_sha": sha})
+        progress = state.progress
+        if state.plan is not None:
+            next_open = next((s.id for s in state.plan.steps if not s.done), None)
+            progress = progress.model_copy(
+                update={
+                    "current_step_id": next_open,
+                    "attempts_on_step": 0,
+                    "fix_attempts_on_error": 0,
+                    "last_error_signature": None,
+                }
+            )
         return {
             "feature_list": features,
             "github": github,
+            "progress": progress,
             "task_ledger": [entry],
             "phase": "document",
         }
 
     return node
+
+
+def after_checkpoint(state: SCIOState) -> Literal["implement", "review", "document"]:
+    """T0 goes straight to docs; T1/T2 continue with the next step or go to review."""
+    if state.plan is None:
+        return "document"
+    if any(not s.done for s in state.plan.steps):
+        return "implement"
+    return "review"
 
 
 def gate(ctx: RunContext) -> Node:
@@ -71,7 +96,7 @@ def gate(ctx: RunContext) -> Node:
             diff_stat=diff_stat(sb, state.github.base_sha),
             test_output=test_out,
             lint_output=lint(ctx),
-            docs_check=None,  # the Documenter already fixed or reported it in the PR body
+            docs_check=run_docs_check(ctx),
         )
         req = ctx.harness.build_request(
             "gate",
@@ -162,11 +187,12 @@ def halt(ctx: RunContext) -> Node:
     def node(state: SCIOState) -> dict[str, Any]:
         reason = state.exit_reason or ExitReason.ESCALATE_HUMAN
         notes: list[str] = []
-        if reason is ExitReason.ESCALATE_HUMAN:
+        if reason in (ExitReason.ESCALATE_HUMAN, ExitReason.ADVISOR_CAP):
             answer = interrupt(
                 {
                     "question": "The run needs a human decision.",
                     "reason": reason.value,
+                    "triage": state.triage.model_dump() if state.triage else None,
                     "last_gate": state.last_gate.model_dump() if state.last_gate else None,
                     "ledger_tail": [e.text for e in state.task_ledger[-5:]],
                 }
