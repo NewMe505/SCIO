@@ -98,7 +98,7 @@ def check_ignored_sources() -> list[str]:
     """No source file under the code directories may be git-ignored (ledger I-017)."""
     import subprocess
 
-    proc = subprocess.run(  # noqa: S603
+    proc = subprocess.run(
         ["git", "ls-files", "--others", "--ignored", "--exclude-standard", *CODE_DIRS],
         cwd=ROOT,
         capture_output=True,

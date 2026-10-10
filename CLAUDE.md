@@ -11,7 +11,7 @@ SCIO is a model-agnostic LangGraph framework that takes a software task from spe
 ## Engineering rules
 
 - Workflow and commits follow `CONTRIBUTING.md`: issue first, branch `feat/<issue#>-<slug>`, Conventional Commits, draft PR from the template with `Closes #N`, docs in the same PR, human merge.
-- Run the CI-equivalent locally before every push: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest && uv run python scripts/check_docs.py && uv run python -m evals.runner --suite regression --provider fake --trials 5 --min-pass-pow-k 1.0`.
+- Run the CI-equivalent locally before every push (in one shell command, start with `set -o pipefail`; never pipe a check through `tail` without it): `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest && uv run python scripts/check_docs.py && uv run python -m evals.runner --suite regression --provider fake --trials 5 --min-pass-pow-k 1.0`.
 - Offline by default: `SCIO_PROVIDER_OVERRIDE=fake`. Live provider calls only in `tests/live` behind `SCIO_RUN_LIVE_TESTS=1`.
 - Model IDs live only in `configs/models.yaml`. Code names roles. Check the Claude API reference (the `claude-api` skill) before writing any provider code; never write SDK calls from memory.
 - Write files with LF line endings (`newline="\n"` in Python on Windows). Behind a corporate proxy, set `UV_SYSTEM_CERTS=1` for every `uv` command (`--native-tls` and `UV_NATIVE_TLS` are deprecated spellings).

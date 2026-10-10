@@ -66,7 +66,7 @@ class E2BSandbox:
                 timeout=timeout,
             )
             exit_code, stdout, stderr = int(r.exit_code), r.stdout or "", r.stderr or ""
-        except Exception as exc:  # noqa: BLE001 - SDK raises on non-zero exit and on timeout
+        except Exception as exc:
             exit_code = int(getattr(exc, "exit_code", 124))
             stdout = str(getattr(exc, "stdout", "") or "")
             stderr = str(getattr(exc, "stderr", "") or str(exc))

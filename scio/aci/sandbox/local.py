@@ -66,7 +66,7 @@ class LocalSandbox:
             run_env.setdefault("PIP_NO_INDEX", "1")
         t0 = time.perf_counter()
         try:
-            proc = subprocess.run(  # noqa: S603 - argv is a list, no shell
+            proc = subprocess.run(
                 argv,
                 cwd=self.resolve(cwd) if cwd else self.root,
                 env=run_env,

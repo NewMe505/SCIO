@@ -23,7 +23,7 @@ Runner = Callable[[list[str], int | None], ExecResult]
 def subprocess_runner(argv: list[str], timeout_s: int | None) -> ExecResult:
     t0 = time.perf_counter()
     try:
-        proc = subprocess.run(  # noqa: S603
+        proc = subprocess.run(
             argv,
             capture_output=True,
             text=True,
