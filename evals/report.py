@@ -90,8 +90,10 @@ class SuiteReport(BaseModel):
         stamp = self.finished_at.strftime("%Y%m%dT%H%M%SZ")
         json_path = out_dir / f"{self.suite}-{self.provider}-{stamp}.json"
         md_path = out_dir / f"{self.suite}-{self.provider}-{stamp}.md"
-        json_path.write_text(json.dumps(self.model_dump(mode="json"), indent=2), encoding="utf-8")
-        md_path.write_text(self.to_markdown(), encoding="utf-8")
+        json_path.write_text(
+            json.dumps(self.model_dump(mode="json"), indent=2), encoding="utf-8", newline="\n"
+        )
+        md_path.write_text(self.to_markdown(), encoding="utf-8", newline="\n")
         return json_path, md_path
 
 

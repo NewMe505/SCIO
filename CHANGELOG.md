@@ -11,6 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - Eval skeleton (`evals/`): task loader, n-trial runner, pass@1 / pass^k / tokens / $ / latency / advisor-rate metrics, Markdown and JSON reports, three placeholder regression tasks.
 - CI (`.github/workflows/ci.yml`): ruff, mypy, pytest on the Fake provider, docs checks, regression evals, API docs artifact. `scripts/check_docs.py`, `scripts/gen_api_docs.py`.
 - ADR 0002: harness conventions.
+- Continuous-improvement protocols: `CLAUDE.md`, `docs/ISSUE_LEDGER.md` (I-001 to I-010), `docs/LESSONS_LEARNED.md` (M0 and M1 retrospectives), Debugger template v2 with systemic sweeps, PR template checklist.
 - Build spec and generation prompt (`docs/PROMPT.md`).
 - Research basis with sources (`docs/RESEARCH.md`).
 - ADR 0001: single writer, Sonnet 5 worker, Opus 5.5 planner/advisor.

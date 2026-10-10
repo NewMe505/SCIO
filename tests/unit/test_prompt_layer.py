@@ -27,7 +27,7 @@ def test_registry_has_every_role_at_v1() -> None:
     assert set(reg.roles()) == EXPECTED_ROLES
     for role in EXPECTED_ROLES:
         t = reg.get(role)
-        assert t.version == 1 and t.text.strip()
+        assert t.version >= 1 and t.text.strip()
         assert t.placeholders() == []  # v1 templates are fully static (cacheable)
 
 

@@ -36,14 +36,16 @@ from pydantic import BaseModel
 from scio.harness import Harness, Message
 from scio.prompt import PromptRegistry
 
+
 class Verdict(BaseModel):
     verdict: str
     guidance: str
 
-harness = Harness.from_settings(tier="T1")            # budget guard from configs/budgets.yaml
-system = PromptRegistry().get("advisor").render()      # static, cacheable system prompt
+
+harness = Harness.from_settings(tier="T1")  # budget guard from configs/budgets.yaml
+system = PromptRegistry().get("advisor").render()  # static, cacheable system prompt
 request = harness.build_request("advisor", system=system, messages=[Message.user("...brief...")])
-result = harness.structured(request, Verdict)          # validate locally, repair ≤2 times
+result = harness.structured(request, Verdict)  # validate locally, repair ≤2 times
 print(result.value, result.attempts, harness.summary())
 ```
 
