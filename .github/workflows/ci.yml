@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SCIO_PROVIDER_OVERRIDE: fake
+  PYTHONUTF8: "1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras --group dev
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy
+
+      - name: Tests (Fake provider, offline)
+        run: uv run pytest --cov=scio --cov=evals --cov-report=term-missing
+
+      - name: Docs checks
+        run: uv run python scripts/check_docs.py
+
+      - name: Regression evals (Fake provider)
+        run: uv run python -m evals.runner --suite regression --provider fake --trials 5 --min-pass-pow-k 1.0 --out evals/results
+
+      - name: Post eval table to job summary
+        if: always()
+        run: cat evals/results/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: API docs
+        run: uv run python scripts/gen_api_docs.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-docs
+          path: docs/api
+          retention-days: 14

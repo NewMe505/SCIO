@@ -1,0 +1,7 @@
+id: t002_fix_failing_test
+suite: regression
+title: Fix an off-by-one bug exposed by an existing failing test
+tier_hint: T1
+trials: 5
+budget: { tokens: 150000, usd: 1.5 }
+grader: placeholder   # M3: tests

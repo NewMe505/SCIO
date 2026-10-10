@@ -1,0 +1,80 @@
+# The ONLY place model IDs live. Roles reference models; code references roles.
+# Prices are USD per million tokens. Re-check against the provider price list
+# when bumping a model. `cache_min_tokens` is the minimum cacheable prefix.
+
+providers:
+  anthropic:
+    adapter: anthropic
+  openai:
+    adapter: openai
+  fake:
+    adapter: fake
+
+models:
+  claude-opus-5-5:
+    provider: anthropic
+    input_per_mtok: 4.00
+    output_per_mtok: 20.00
+    cache_read_per_mtok: 0.20
+    cache_write_per_mtok: 5.00
+    context_window: 1000000
+    max_output_tokens: 128000
+    cache_min_tokens: 512
+    refusal_fallback: true      # server-side fallbacks ("default" mode) on refusal
+  claude-sonnet-5:
+    provider: anthropic
+    input_per_mtok: 2.00
+    output_per_mtok: 10.00
+    cache_read_per_mtok: 0.20
+    cache_write_per_mtok: 2.50
+    context_window: 1000000
+    max_output_tokens: 128000
+    cache_min_tokens: 1024
+    refusal_fallback: false
+  claude-haiku-5-5:
+    provider: anthropic
+    input_per_mtok: 0.10
+    output_per_mtok: 0.50
+    cache_read_per_mtok: 0.01
+    cache_write_per_mtok: 0.125
+    context_window: 1000000
+    max_output_tokens: 128000
+    cache_min_tokens: 512
+    refusal_fallback: false
+  # Second provider (assumption F-6). Prices below are placeholders: verify
+  # against the OpenAI price list before any paid run on this provider.
+  gpt-5:
+    provider: openai
+    input_per_mtok: 1.25
+    output_per_mtok: 10.00
+    cache_read_per_mtok: 0.125
+    cache_write_per_mtok: 0.0
+    context_window: 400000
+    max_output_tokens: 128000
+    cache_min_tokens: 1024
+    refusal_fallback: false
+  fake-model:
+    provider: fake
+    input_per_mtok: 1.00
+    output_per_mtok: 5.00
+    cache_read_per_mtok: 0.10
+    cache_write_per_mtok: 1.25
+    context_window: 200000
+    max_output_tokens: 8192
+    cache_min_tokens: 0
+    refusal_fallback: false
+
+# Opus 5.5 defaults to effort "medium"; every role sets effort explicitly.
+roles:
+  router:     { model: claude-haiku-5-5, effort: low,    max_tokens: 256 }
+  compactor:  { model: claude-haiku-5-5, effort: low,    max_tokens: 2048 }
+  scoper:     { model: claude-opus-5-5,  effort: high,   max_tokens: 1200 }
+  planner:    { model: claude-opus-5-5,  effort: high,   max_tokens: 4096 }
+  advisor:    { model: claude-opus-5-5,  effort: high,   max_tokens: 1200 }
+  gate:       { model: claude-opus-5-5,  effort: high,   max_tokens: 1200 }
+  explorer:   { model: claude-sonnet-5,  effort: medium, max_tokens: 4096 }
+  coder:      { model: claude-sonnet-5,  effort: high,   max_tokens: 16000 }
+  tester:     { model: claude-sonnet-5,  effort: high,   max_tokens: 16000 }
+  debugger:   { model: claude-sonnet-5,  effort: high,   max_tokens: 16000 }
+  reviewer:   { model: claude-sonnet-5,  effort: medium, max_tokens: 4096 }
+  documenter: { model: claude-sonnet-5,  effort: medium, max_tokens: 16000 }

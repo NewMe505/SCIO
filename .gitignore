@@ -34,3 +34,8 @@ sandbox/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Generated
+docs/api/
+evals/results/
+uv.lock.bak
