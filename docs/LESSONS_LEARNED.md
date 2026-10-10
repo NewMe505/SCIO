@@ -10,6 +10,10 @@ One section per milestone, written when the milestone closes. **Read this whole 
 4. Run the full local CI-equivalent (command in `CLAUDE.md`) before every push, not just the tests. A check that passes on Windows can still fail on Linux (I-011): any check touching paths needs a unit test with explicit inputs, not only a run against the repo.
 5. Write files with LF endings; pass `newline="\n"` from Python on Windows (I-006).
 6. One heredoc per shell command when the body contains quotes, and never pass backslash escapes (`\n`, `\t`) through a shell-embedded script; use the file tools for those edits (I-001, I-010).
+7. Add dependencies to `pyproject.toml` and run `uv sync`; never `uv pip install` ad hoc. Export `UV_SYSTEM_CERTS=1` once per session (I-012).
+8. Introspect an installed SDK (`inspect.signature`, `dir`) before writing an adapter against it; write the adapter's tests with an injected client or runner so they run without the service (M2).
+9. Before pushing, compare what git will send with what the working tree has: `git status --short` must show every new package, and `git ls-files --others --ignored --exclude-standard scio evals tests scripts` must be empty (I-017). The docs check enforces the second. Note that ruff skips git-ignored files, so an ignored package is also an unlinted package.
+10. When chaining checks in one shell command, start with `set -o pipefail` and never pipe a check whose exit code matters through `tail`/`grep` without it (I-018). A chain that reaches `git commit` must have been able to fail.
 
 ---
 
@@ -57,3 +61,40 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - I-008 (pdoc warning) is open; I-007 (token scope) and I-011 (link checker) were closed after the first CI run.
 - The `WorkerOutput` structured schema (M2 state) must gain a `sweep` field so the Debugger's codebase sweep is recorded in state and the PR body, not only in prose.
 - Open questions 2 and 3 in ARCHITECTURE.md (sandbox in CI, patch sampling N) are due in M2.
+
+---
+
+## M2: state, checkpointing, ACI tools, sandbox, GitHub client (closed 2026-10-10)
+
+### Lessons applied from M1
+- Pre-flight item 3: token scope checked before branching (no push problems this time).
+- Pre-flight items 5 and 6: every patch script avoided backslash escapes; hand edits with escapes went through the file tools. Zero CRLF files, zero corrupted patches.
+- Pre-flight item 4 (platform differences): the sandbox path rules got explicit Windows and POSIX unit tests instead of only a repo run.
+- Carried item: `WorkerOutput.sweep` exists and is tested.
+
+### What succeeded
+- Introspecting the installed LangGraph and E2B packages before writing the adapters (signatures of `invoke`, `task`, `interrupt`, `Sandbox.create`, `commands.run`, `files.*`) meant no API was written from memory.
+- The two-layer idempotency design (effect log plus world probe) passed the crash-resume test at both crash points on the first run.
+- Injected runners for Docker and `gh`, and a fake client for E2B, gave full coverage of command construction without any daemon, key or network.
+- The ACI tools were testable end to end on a throwaway repo with real pytest, ruff and git, so "edit rejected by lint" and "failures only" are verified behaviour, not intent.
+
+### What failed
+- Installing packages ad hoc with `uv pip install` re-triggered the TLS failure (I-012); the M1 fix had been applied to one command, not to the environment.
+- A test double parsed nested branch names wrongly (I-013): the double was less careful than the code under test.
+- The error signature preferred the source assertion over pytest's evaluated one (I-014): a "first match wins" rule chose the wrong line.
+- Platform-conditional stdlib typing (I-015) cost one mypy round.
+- Docker is not installed on the dev machine and there is no E2B key, so two backends are verified structurally only (I-016).
+- The whole `scio/aci/sandbox/` package was silently excluded from the commit by an unanchored `sandbox/` line in `.gitignore` (I-017). Local checks run on the working tree and could not see it; CI could.
+
+### Actions
+- `scripts/check_docs.py::check_ignored_sources` fails when any source file under the code directories is git-ignored (I-017). Pre-flight item 9 below.
+- `pyproject.toml` owns every dependency; `UV_SYSTEM_CERTS=1` is in CLAUDE.md as the environment rule (I-012).
+- `docs/adr/0003-idempotent-effects-and-sandbox-tiers.md` records the durability and sandbox decisions.
+- `tests/durability/test_crash_resume.py` is the executable acceptance criterion for crash safety and runs in CI.
+- Ledger I-012 to I-016.
+
+### Carried into M3
+- I-016 open: run the gated Docker and E2B live tests when a suitable machine is available.
+- Register the `t0` graph in `scio.graph.registry` and replace the hand-drawn T0 diagram in ARCHITECTURE.md with a generated section.
+- Open question 3 (patch sampling N) is deferred to M4 where sampling is built.
+- Every side-effecting node must name an `intent` and a `probe`; make that the node template shape from the first M3 node.

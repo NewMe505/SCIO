@@ -27,7 +27,7 @@ htmlcov/
 *.db
 .scio/
 evals/results/
-sandbox/
+/sandbox/
 
 # Editors and OS
 .vscode/

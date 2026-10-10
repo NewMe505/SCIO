@@ -40,6 +40,23 @@ class Settings(BaseSettings):
     run_live_tests: bool = False
     """Enable tests marked ``live`` (real provider calls that cost money)."""
 
+    # --- M2: graph durability, sandbox, GitHub ---
+    checkpoint_dsn: str = "sqlite:///.scio/checkpoints.sqlite"
+    """``memory://`` (tests), ``sqlite:///<path>`` (dev) or ``postgresql://...`` (prod)."""
+    effects_path: Path = Path(".scio/effects.sqlite")
+    """Durable log of idempotent side effects, keyed by hash(thread_id, node, intent)."""
+
+    sandbox_backend: Literal["local", "docker", "e2b"] = "local"
+    """``local`` is for tests and dev only: it cannot disable the network."""
+    sandbox_docker_image: str = "python:3.12-slim"
+    sandbox_e2b_template: str | None = None
+    sandbox_timeout_s: int = 120
+    sandbox_memory_mb: int = 2048
+    sandbox_cpus: float = 1.0
+
+    gh_repo: str | None = None
+    """``owner/name`` the GitHubClient acts on. None disables GitHub writes."""
+
 
 def get_settings() -> Settings:
     """Build settings from the environment. Not cached so tests can override env."""

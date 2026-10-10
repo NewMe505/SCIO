@@ -94,8 +94,43 @@ def check_changelog() -> list[str]:
     return [] if "## [Unreleased]" in text else ["CHANGELOG.md: missing '## [Unreleased]' section"]
 
 
+def check_ignored_sources() -> list[str]:
+    """No source file under the code directories may be git-ignored (ledger I-017)."""
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", *CODE_DIRS],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return []  # not a git checkout (e.g. an sdist); nothing to check
+    ignored = [
+        ln for ln in proc.stdout.splitlines()
+        if ln.endswith((".py", ".md", ".yaml", ".yml"))
+        and "__pycache__" not in ln
+        and not any(ln.startswith(s + "/") for s in SKIP_DIRS)  # generated outputs are fine
+    ]  # fmt: skip
+    return [f"{ln}: source file is git-ignored; fix .gitignore" for ln in ignored]
+
+
+def check_graph_sections() -> list[str]:
+    """docs/ARCHITECTURE.md generated Mermaid sections must match the compiled graphs."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import gen_mermaid
+
+    return gen_mermaid.check()
+
+
 def main() -> int:
-    errors = check_links() + check_model_ids() + check_changelog()
+    errors = (
+        check_links()
+        + check_model_ids()
+        + check_changelog()
+        + check_ignored_sources()
+        + check_graph_sections()
+    )
     for e in errors:
         print(f"docs-check: {e}")
     print(f"docs-check: {len(errors)} problem(s)")
