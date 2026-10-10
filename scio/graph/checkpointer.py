@@ -61,9 +61,11 @@ def open_checkpointer(dsn: str) -> Iterator[BaseCheckpointSaver]:
         return
     if dsn.startswith(("postgresql://", "postgres://")):
         from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg import Connection
 
-        with PostgresSaver.from_conn_string(dsn) as saver:
-            saver.setup()
-            yield saver
+        with Connection.connect(dsn, autocommit=True, prepare_threshold=0) as pg_conn:
+            pg_saver = PostgresSaver(pg_conn, serde=serializer())  # type: ignore[arg-type]
+            pg_saver.setup()
+            yield pg_saver
         return
     raise ValueError(f"unsupported checkpoint DSN: {dsn!r}")

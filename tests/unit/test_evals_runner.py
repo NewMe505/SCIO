@@ -12,7 +12,10 @@ def test_tasks_load() -> None:
         "t001_add_function",
         "t002_fix_failing_test",
         "t003_update_docs",
+        "t004_two_features",
+        "t005_cli_json_flag",
     ]
+    assert all(t.grader == "tests" and t.hidden_tests for t in tasks)
     assert all(t.trials >= 5 for t in tasks)
     assert "Acceptance criteria" in tasks[0].spec
 

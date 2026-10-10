@@ -15,6 +15,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 9. Before pushing, compare what git will send with what the working tree has: `git status --short` must show every new package, and `git ls-files --others --ignored --exclude-standard scio evals tests scripts` must be empty (I-017). The docs check enforces the second. Note that ruff skips git-ignored files, so an ignored package is also an unlinted package.
 10. When chaining checks in one shell command, start with `set -o pipefail` and never pipe a check whose exit code matters through `tail`/`grep` without it (I-018). A chain that reaches `git commit` must have been able to fail.
 11. Commands that must not run after a failed check go on the same `&&` line; a heredoc's `&&` continuation goes on the opener line, because the line after `EOF` is a new command. Do not pass `-q` to pytest: `addopts` already does, and `-qq` hides the summary (I-023).
+12. When adding a keyword argument that every call site should pass (a role tag, an intent), grep for every existing call site in the same change; a default value hides the ones you missed (I-026). When a node writes a value that a following edge reads, the node must not also advance past it (I-025).
 
 ---
 
@@ -133,3 +134,33 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - Move test ownership from `tests_added` to the plan (`PlanStep.feature_ids` → `FeatureItem.test_filter`).
 - Postgres checkpointer: construct with the serializer allow-list (I-021 sweep).
 - The gate should receive docs-check output directly, not only through the PR body (ADR 0004 consequence).
+
+---
+
+## M4: T1/T2 tiers and the escalation policy (closed 2026-10-10)
+
+### Lessons applied from M3
+- All five carried items closed: T1/T2 replace the halt; the plan owns `test_filter` (the planner must set one per feature; `tests_added` remains the T0 fallback); the Postgres saver is built with the serializer allow-list; the gate runs the docs check itself; `advisor_cap` is an exit and interrupts for a human.
+- Pre-flight 11: every chained check started with `set -o pipefail`, pytest ran without `-q`, and no command followed a heredoc on its own line. No masked failures this milestone.
+
+### What succeeded
+- Making triage a pure function that `verify` stores and the edge reads gave the six-signal policy a unit-test surface with no graph at all: one flip test and one non-flip test per signal, the never-escalate list, both caps, and the exit precedence.
+- One builder for all tiers (`build_graph(ctx, tier)`) kept T0 byte-for-byte reusable: the M3 tests passed unchanged on the unified graph before any T1/T2 test was written.
+- A data-driven fake (`TaskScript` per task, schema-keyed replies) drove five real eval tasks across all three tiers and every escalation scenario with four switches.
+- Span attributes made the one-writer invariant an assertion over traces rather than a claim in prose.
+
+### What failed
+- The fake answered the router with a plan because marker detection was ordered wrongly (I-024).
+- `verify` advanced the step cursor before the edge evaluated it, and `git_checkpoint` stamped every feature with the first commit (I-025). Two separate defects behind one symptom; the second only appeared after the first was fixed.
+- Writer toolboxes created in M3 were untagged, so the trace assertion saw `agent` (I-026). A new keyword argument added in M4 was not applied to the call sites that predated it.
+
+### Actions
+- `docs/adr/0005-escalation-policy.md`: signals as implemented, caps, brief, outcome rule, step advancement at checkpoint time, ADRs in the target repository.
+- `tests/unit/test_escalation.py` (six flip / non-flip pairs, never-escalate, caps) and `tests/graph/test_t1_t2_fake.py` (T1 happy paths, repeated-error escalation resolved, advisor cap interrupt, plan drift with a generated ADR, advisor `escalate_human`, T2 parallel explorers with one writer, T0 docs task via the router).
+- Ledger I-024 to I-026. Pre-flight item 12 below.
+
+### Carried into M5
+- I-019 still blocks the live Anthropic acceptance run; M5's A/B configs need it.
+- Tune `configs/budgets.yaml` `escalation` thresholds and `advisor_calls_max` from eval data; decide whether to enable `sample_n > 1` (open question 3) after measuring its token cost.
+- Plan drift is evaluated only after a failing verify (ADR 0005 consequence); check the capability suite for silent scope creep on passing runs.
+- Nightly capability suite and release workflow (M5 scope).

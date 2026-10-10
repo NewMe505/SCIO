@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Added
+- T1 and T2 tiers in one graph builder (`scio/graph/build.py`): `scope`, parallel `explore` (LangGraph `Send`, read-only), `localize`, `plan` (plan-owned test filters), `post_plan` (issue checklist), `implement` (one step per cycle), `debug`, `advise`, `review`; generated `t1`/`t2` diagrams.
+- Escalation policy (`scio/loop/escalation.py`, `scio/loop/impact.py`): six signals, never-escalate list, per-step and per-run caps, `advisor_cap` exit with human interrupt; `TriageDecision` in state; `EscalationRecord` with trigger, brief, verdict, tokens, $ and outcome; advisor guidance injected into the next worker turn; ADR generation in the target repository.
+- `ToolBox(role=...)` on spans; `WorkerOutput.sweep` surfaced in the ledger; PR body carries the escalation log and reviewer notes.
+- Five real regression tasks (t001–t005) with fixture repositories, hidden tests and a data-driven `ScriptedResponder`; the runner reports advisor call and resolution rates from the graph.
+- Postgres checkpointer built with the serializer allow-list; the gate runs the docs check directly.
+- ADR 0005: escalation policy implementation.
 - Context layer (`scio/context`): artifact store, per-role prompt projections, size-triggered transcript trimming.
 - Loop layer (`scio/loop`): `AgentLoop` (tools until done, tool/model caps, typed `WorkerOutput` summary) and exit conditions.
 - T0 graph (`scio/graph/tiers/t0.py`): intake, route, prepare_repo, t0_loop, verify, git_checkpoint, document (docs commit, push, draft PR), gate with ground-truth override, pr_ready, merge_wait interrupt, halt. `scio run` / `scio resume` CLI.

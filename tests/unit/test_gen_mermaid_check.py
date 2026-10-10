@@ -7,6 +7,7 @@ from types import ModuleType
 import pytest
 from langgraph.graph import END, START, StateGraph
 
+import scio.graph.tiers  # noqa: F401 - register t0/t1/t2 before any test patches the registry
 from scio.graph import registry
 from scio.settings import REPO_ROOT
 

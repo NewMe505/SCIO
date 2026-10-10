@@ -13,7 +13,9 @@ The loop never decides success. ``verify`` (tests, lint) does.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from scio.aci.toolbox import ToolBox
 from scio.context.trim import trim_messages
@@ -33,7 +35,8 @@ StopKind = Literal["end_turn", "tool_cap", "model_cap", "truncated"]
 
 @dataclass
 class LoopResult:
-    output: WorkerOutput
+    output: Any
+    """The closing structured output: ``WorkerOutput`` by default, else the model passed."""
     stop: StopKind
     tool_calls: int
     model_calls: int
@@ -72,6 +75,17 @@ class AgentLoop:
         self.max_repairs = max_repairs
 
     def run(self, user_message: str, *, tags: dict[str, str] | None = None) -> LoopResult:
+        return self.run_typed(user_message, WorkerOutput, tags=tags)
+
+    def run_typed[T: BaseModel](
+        self,
+        user_message: str,
+        output_model: type[T],
+        *,
+        summary_prompt: str = SUMMARY_PROMPT,
+        tags: dict[str, str] | None = None,
+    ) -> LoopResult:
+        """Same turn shape, but the closing structured call returns ``output_model``."""
         system = self.prompts.get(self.role).render()
         specs = self.toolbox.specs()
         messages: list[Message] = [Message.user(user_message)]
@@ -115,10 +129,10 @@ class AgentLoop:
         summary_req = self.harness.build_request(
             self.role,
             system=system,
-            messages=[*trim_messages(messages), Message.user(SUMMARY_PROMPT)],
+            messages=[*trim_messages(messages), Message.user(summary_prompt)],
             tags=tags,
         )
-        summary = self.harness.structured(summary_req, WorkerOutput, max_repairs=self.max_repairs)
+        summary = self.harness.structured(summary_req, output_model, max_repairs=self.max_repairs)
         model_calls += summary.attempts
         messages.append(Message.assistant(summary.response.text))
         return LoopResult(

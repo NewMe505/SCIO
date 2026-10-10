@@ -10,13 +10,14 @@ from pydantic import BaseModel, Field
 from scio.aci.toolbox import ToolBox
 from scio.aci.tools import GitCheckpointInput, find_commit, git_checkpoint, git_push, head_sha
 from scio.context.assembler import coder_message, documenter_message, pr_body_message
+from scio.context.projections import review_notes
 from scio.graph.effects import effect_key, run_effect
-from scio.graph.nodes.common import decision, diff_stat, fact
+from scio.graph.nodes.common import decision, diff_stat, fact, slug
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
 from scio.loop.agent_loop import AgentLoop
-from scio.state.models import ExitReason, Role, SCIOState
+from scio.state.models import ExitReason, Role, SCIOState, Verdict
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
@@ -41,7 +42,11 @@ def t0_loop(ctx: RunContext) -> Node:
         if ref is not None:
             last_verify = ctx.artifacts.head(ref, 3000)
         toolbox = ToolBox(
-            ctx.sandbox, CODER_TOOLS, human_gate=False, max_calls=ctx.limits.max_tool_calls_per_iter
+            ctx.sandbox,
+            CODER_TOOLS,
+            human_gate=False,
+            max_calls=ctx.limits.max_tool_calls_per_iter,
+            role="coder",
         )
         loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "coder")
         msg = coder_message(
@@ -105,7 +110,7 @@ def document(ctx: RunContext) -> Node:
         stat = diff_stat(sb, state.github.base_sha)
         test_ref = state.artifacts.get("verify:last")
         test_summary = ctx.artifacts.head(test_ref, 1500) if test_ref else "(no verify output)"
-        toolbox = ToolBox(sb, DOCUMENTER_TOOLS, human_gate=False, max_calls=12)
+        toolbox = ToolBox(sb, DOCUMENTER_TOOLS, human_gate=False, max_calls=12, role="documenter")
         loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "documenter")
         docs_check: str | None = None
         for round_ in (1, 2):
@@ -148,6 +153,7 @@ def document(ctx: RunContext) -> Node:
         body_ref = ctx.artifacts.put(
             "pr_body", body_text, produced_by=Role.DOCUMENTER, name="pr-body"
         )
+        adr_path = write_adr(ctx, state)
 
         marker = f"[scio:{effect_key(ctx.thread_id, 'document', 'commit:docs')}]"
         run_effect(
@@ -162,6 +168,8 @@ def document(ctx: RunContext) -> Node:
         )
         github = state.github
         entries = [fact("documentation updated and committed", source=Role.DOCUMENTER)]
+        if adr_path:
+            entries.append(fact(f"ADR written: {adr_path}", source=Role.DOCUMENTER))
         if ctx.github is not None and github.branch:
             default = ctx.github.default_branch()
             run_effect(
@@ -219,6 +227,72 @@ def _ensure_pr(ctx: RunContext, state: SCIOState, body: str) -> Any:
     )
 
 
+def adr_needed(state: SCIOState) -> list[str]:
+    """Reasons an ADR must be written: advisor replan / change_approach, or a high-impact change."""
+    reasons = [
+        f"advisor verdict {e.verdict.value} at step {e.step_id} ({e.trigger.value})"
+        for e in state.escalations
+        if e.verdict in (Verdict.REPLAN, Verdict.CHANGE_APPROACH)
+    ]
+    if state.high_impact_flags:
+        reasons.append("high-impact change: " + "; ".join(state.high_impact_flags))
+    return reasons
+
+
+def write_adr(ctx: RunContext, state: SCIOState) -> str | None:
+    """Write ``docs/adr/NNNN-<slug>.md`` in the target repo when it keeps ADRs and one is due."""
+    reasons = adr_needed(state)
+    sb = ctx.sandbox
+    adr_dir = f"{sb.root}/docs/adr"
+    if not reasons or not sb.exists(adr_dir):
+        return None
+    listing = sb.exec(["ls", adr_dir], timeout_s=30).stdout.split()
+    numbers = [int(n[:4]) for n in listing if n[:4].isdigit()]
+    number = (max(numbers) + 1) if numbers else 1
+    path = f"{adr_dir}/{number:04d}-{slug(state.task.title)}.md"
+    if sb.exists(path):
+        return path
+    plan_lines = (
+        [f"- {s.id}: {s.description}" for s in state.plan.steps]
+        if state.plan
+        else ["- (no plan: T0 run)"]
+    )
+    guidance = (
+        "\n".join(
+            f"- {e.id} ({e.trigger.value}): "
+            f"{e.verdict.value if e.verdict else 'pending'}, {e.outcome}"
+            for e in state.escalations
+        )
+        or "- none"
+    )
+    text = "\n".join(
+        [
+            f"# ADR {number:04d}: {state.task.title}",
+            "",
+            "- **Status:** Proposed (written by SCIO; a human accepts it on merge)",
+            f"- **Run:** {state.thread_id}",
+            "",
+            "## Context",
+            state.task.description.strip()[:1500],
+            "",
+            "## Why this record exists",
+            *[f"- {r}" for r in reasons],
+            "",
+            "## Decision",
+            *plan_lines,
+            "",
+            "## Advisor consultations",
+            guidance,
+            "",
+            "## Consequences",
+            "See the pull request's risk notes and test evidence.",
+            "",
+        ]
+    )
+    sb.write_text(path, text)
+    return path
+
+
 def run_docs_check(ctx: RunContext) -> str | None:
     """Run the target repository's own docs check if it has one. None means clean/absent."""
     sb = ctx.sandbox
@@ -237,6 +311,14 @@ def render_pr_body(state: SCIOState, body: PRBody, docs_check: str | None) -> st
         for f in state.feature_list
     )
     spend = state.budgets
+    escalation_rows = (
+        "\n".join(
+            f"| {e.id} | {e.trigger.value} (step {e.step_id}) | "
+            f"{e.verdict.value if e.verdict else 'pending'} | {e.outcome} | ${e.usd:.4f} |"
+            for e in state.escalations
+        )
+        or "| none | | | | |"
+    )
     return "\n".join(
         [
             "## Summary",
@@ -268,7 +350,13 @@ def render_pr_body(state: SCIOState, body: PRBody, docs_check: str | None) -> st
             "## Risk notes",
             body.risk_notes.strip(),
             "",
+            review_notes(state.last_review),
+            "",
             "## Agent run log",
+            "| Escalation | Trigger | Opus verdict | Resolved? | Cost |",
+            "|---|---|---|---|---|",
+            escalation_rows,
+            "",
             f"Tokens: {spend.tokens_used} · Cost: ${spend.usd_used:.4f} · "
             f"Advisor calls: {spend.advisor_calls_used}/{spend.advisor_calls_max}",
         ]

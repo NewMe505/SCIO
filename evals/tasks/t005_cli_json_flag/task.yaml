@@ -1,0 +1,8 @@
+id: t005_cli_json_flag
+suite: regression
+title: Let the greeting CLI emit JSON
+tier_hint: T2
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_cli_hidden.py

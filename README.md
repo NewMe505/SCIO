@@ -2,7 +2,7 @@
 
 A model-agnostic, multi-agent framework built on LangGraph. It takes a software task from spec (or a GitHub Issue) to a merged, tested and documented pull request.
 
-> Status: **Milestone 3 (router + T0 loop end to end)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> Status: **Milestone 4 (T1/T2 tiers and the escalation policy)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Design in one paragraph
 A cheap router classifies each task into an effort tier (T0, T1 or T2). **Opus 5.5** plans, advises and checks that the objective was met before finishing. **Sonnet 5** does the work: coding, testing, debugging and documentation. Only one agent writes code. Parallel fan-out is used only for read-only exploration and review. Tests, linters and type checks decide pass/fail, not LLM opinion. Sonnet escalates to Opus only on specific signals (repeated errors, stalls, low confidence, plan drift, high-impact changes), with a cap on how often. Every run produces a GitHub PR, and the docs are updated in that same PR.
@@ -28,7 +28,7 @@ uv run python -m evals.runner --suite regression --provider fake --trials 5
 uv run python scripts/gen_api_docs.py      # API docs → docs/api/ (pdoc)
 ```
 
-Run a task (T0) against a repository. The spec is Markdown: first heading = title, checkbox
+Run a task against a repository (the router picks T0, T1 or T2). The spec is Markdown: first heading = title, checkbox
 lines = acceptance criteria. The run pauses for a human before merge; resume with a decision.
 
 ```bash
@@ -78,7 +78,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Milestone 0 design (graphs, State, agent contracts, directory tree, milestone plan)
 - [docs/PROMPT.md](docs/PROMPT.md): the build spec / generation prompt
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 
@@ -87,5 +87,5 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - M1 (done): harness, providers (Anthropic, OpenAI, Fake), prompt layer, eval skeleton, CI
 - M2 (done): state, checkpointing with idempotent effects, ACI tools, sandbox backends, GitHubClient
 - M3 (done): router, context and loop layers, the T0 graph end to end, graph-driven evals
-- M4: T1/T2 tiers and the escalation policy
+- M4 (done): T1/T2 tiers, parallel explorers, planner, six-signal triage, capped Opus advisor, reviewer
 - M5: observability and eval tuning
