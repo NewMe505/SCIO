@@ -1,0 +1,7 @@
+# A/B config: every role on the worker model; no Opus anywhere.
+name: sonnet_only
+roles:
+  scoper: claude-sonnet-5
+  planner: claude-sonnet-5
+  advisor: claude-sonnet-5
+  gate: claude-sonnet-5

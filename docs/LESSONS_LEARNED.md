@@ -9,7 +9,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 3. Confirm the `gh` token scopes cover what the milestone will push (`workflow` for CI files) before creating the branch (I-007).
 4. Run the full local CI-equivalent (command in `CLAUDE.md`) before every push, not just the tests. A check that passes on Windows can still fail on Linux (I-011): any check touching paths needs a unit test with explicit inputs, not only a run against the repo.
 5. Write files with LF endings; pass `newline="\n"` from Python on Windows (I-006).
-6. One heredoc per shell command when the body contains quotes, and never pass backslash escapes (`\n`, `\t`) through a shell-embedded script; use the file tools for those edits (I-001, I-010).
+6. One heredoc per shell command when the body contains quotes, and never pass backslash escapes (`\n`, `\t`) through a shell-embedded script; use the file tools for those edits (I-001, I-010, I-027). After any shell-embedded patch, run the lint step or `python -c "import scio"` in the same command before doing anything else.
 7. Add dependencies to `pyproject.toml` and run `uv sync`; never `uv pip install` ad hoc. Export `UV_SYSTEM_CERTS=1` once per session (I-012).
 8. Introspect an installed SDK (`inspect.signature`, `dir`) before writing an adapter against it; write the adapter's tests with an injected client or runner so they run without the service (M2).
 9. Before pushing, compare what git will send with what the working tree has: `git status --short` must show every new package, and `git ls-files --others --ignored --exclude-standard scio evals tests scripts` must be empty (I-017). The docs check enforces the second. Note that ruff skips git-ignored files, so an ignored package is also an unlinted package.
@@ -164,3 +164,33 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - Tune `configs/budgets.yaml` `escalation` thresholds and `advisor_calls_max` from eval data; decide whether to enable `sample_n > 1` (open question 3) after measuring its token cost.
 - Plan drift is evaluated only after a failing verify (ADR 0005 consequence); check the capability suite for silent scope creep on passing runs.
 - Nightly capability suite and release workflow (M5 scope).
+
+---
+
+## M5: observability, eval tuning, release (closed 2026-10-10)
+
+### Lessons applied from M4
+- I-019 was closed as a decision, not a fix: the owner is on a Max subscription, so the key stays a placeholder and every measurement is labelled Fake-provider data. The nightly workflow switches to the real provider on its own when a repository secret appears.
+- Thresholds were set from a recorded sweep (ADR 0006), with the data's limits written down next to the numbers.
+- Pre-flight 12: the new `ToolBox`-style keyword (`scenario`, `fixture`) was applied to the runner, the solver and the task files in the same change.
+
+### What succeeded
+- The first run against a real GitHub repository worked end to end on the first attempt: issue intake, branch push, draft PR with the template and `Closes #1`, docs in the same PR, gate, ready, and that repository's CI green.
+- The tuning sweep produced an actionable result and, more usefully, a constraint (`max_stall >= repeat_threshold - 1`) that is now enforced in code.
+- The report builds from durable state and a persisted ledger, so observability does not depend on the process that ran the task.
+
+### What failed
+- The shell tool unescaped `\n` inside two patch scripts and corrupted two modules (I-027), a recurrence of I-010 despite the rule. The rule was not enough; the guard is now mechanical (lint or import immediately after any shell-embedded patch).
+- The real PR committed `__pycache__` files (I-028). Every Fake-provider test counted commits and passed; only the real PR's file list showed it. Tests now assert the tracked file list.
+
+### Actions
+- `docs/adr/0006-escalation-thresholds-from-data.md`; `EscalationConfig.__post_init__` enforces the coupling; `evals/tune.py` skips invalid cells.
+- `prepare_repo` writes `.git/info/exclude`; `test_happy_path_end_to_end` asserts no cache files are tracked.
+- Pre-flight item 6 extended with the mechanical check; ledger I-027, I-028.
+- README acceptance table with evidence links; CHANGELOG cut to 0.1.0; release workflow.
+
+### Carried forward (post-0.1.0)
+- I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates.
+- I-016: Docker and E2B live checks on a machine that has them.
+- I-008, I-009: cosmetic pdoc warning; branch protection needs GitHub Pro or a public repository.
+- Open question 3 (patch sampling): the sampling step is wired but off; measure before enabling.

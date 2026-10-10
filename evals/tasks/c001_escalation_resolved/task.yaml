@@ -1,0 +1,10 @@
+id: c001_escalation_resolved
+suite: capability
+title: Repeated error escalates to the advisor and is resolved
+tier_hint: T1
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+fixture: t002_fix_failing_test
+hidden_tests: hidden/test_paginate_hidden.py
+scenario: { coder_mode: wrong_first }

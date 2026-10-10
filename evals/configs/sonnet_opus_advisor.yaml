@@ -1,0 +1,3 @@
+# A/B config: the default split (Sonnet workers, Opus planner/advisor/gate).
+name: sonnet_opus_advisor
+roles: {}

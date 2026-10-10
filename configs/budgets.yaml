@@ -8,7 +8,8 @@ tiers:
 # 1.0 is fully conservative: a call is refused if it *could* exceed the cap.
 reserve_output_fraction: 1.0
 
-# Escalation thresholds (M5 tunes these from eval data; see ADR 0005).
+# Escalation thresholds: ADR 0005 defines them, ADR 0006 sets them from the tuning sweep
+# (evals/tune.py). Constraint: max_stall >= repeat_threshold - 1.
 escalation:
   repeat_threshold: 3       # same error signature seen this many times (= after 2 fix attempts)
   max_stall: 2              # stall_count above this escalates

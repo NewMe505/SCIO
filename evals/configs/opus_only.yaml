@@ -1,0 +1,11 @@
+# A/B config: every role on Opus, including the workers and the router.
+name: opus_only
+roles:
+  router: claude-opus-5-5
+  compactor: claude-opus-5-5
+  explorer: claude-opus-5-5
+  coder: claude-opus-5-5
+  tester: claude-opus-5-5
+  debugger: claude-opus-5-5
+  reviewer: claude-opus-5-5
+  documenter: claude-opus-5-5

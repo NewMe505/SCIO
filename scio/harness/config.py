@@ -69,6 +69,16 @@ class ModelsConfig(BaseModel):
         data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
         return cls.model_validate(data)
 
+    def with_role_overrides(self, overrides: dict[str, Any]) -> ModelsConfig:
+        """A copy with ``roles`` replaced per the mapping (A/B configs). Keys are roles."""
+        roles = dict(self.roles)
+        for name, spec in overrides.items():
+            base = roles.get(name)
+            data = base.model_dump() if base else {}
+            data.update(spec if isinstance(spec, dict) else {"model": spec})
+            roles[name] = RoleConfig.model_validate(data)
+        return self.model_copy(update={"roles": roles})
+
     def role(self, name: str) -> RoleConfig:
         try:
             return self.roles[name]

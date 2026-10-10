@@ -2,7 +2,7 @@
 
 A model-agnostic, multi-agent framework built on LangGraph. It takes a software task from spec (or a GitHub Issue) to a merged, tested and documented pull request.
 
-> Status: **Milestone 4 (T1/T2 tiers and the escalation policy)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> Status: **Milestone 5 complete (observability, eval tuning, release 0.1.0)**. The build spec is in [docs/PROMPT.md](docs/PROMPT.md); the M0 design is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Design in one paragraph
 A cheap router classifies each task into an effort tier (T0, T1 or T2). **Opus 5.5** plans, advises and checks that the objective was met before finishing. **Sonnet 5** does the work: coding, testing, debugging and documentation. Only one agent writes code. Parallel fan-out is used only for read-only exploration and review. Tests, linters and type checks decide pass/fail, not LLM opinion. Sonnet escalates to Opus only on specific signals (repeated errors, stalls, low confidence, plan drift, high-impact changes), with a cap on how often. Every run produces a GitHub PR, and the docs are updated in that same PR.
@@ -39,6 +39,25 @@ SCIO_PROVIDER_OVERRIDE=fake uv run scio run --spec evals/tasks/t001_add_function
 
 Set `SCIO_GH_REPO=owner/name` to push the branch and open the draft PR; without it the run is
 offline and the PR body is written to `.scio/artifacts/<thread>/pr-body.txt`.
+`SCIO_FAKE_SCRIPT=1` with the Fake provider drives the scripted eval behaviour from the CLI.
+
+After a run, `uv run scio report --thread <id>` writes `.scio/reports/<id>.md` and `.json`:
+tokens and dollars by role, every escalation with its outcome, and the ledger timeline.
+
+Evals: `python -m evals.runner --suite regression|capability --provider fake --config evals/configs/<ab>.yaml`
+runs a suite under an A/B role configuration (`sonnet_only`, `sonnet_opus_advisor`, `opus_only`);
+`python -m evals.tune` sweeps the escalation thresholds (ADR 0006). The nightly workflow runs
+both suites per config and posts the tables to the job summary.
+
+## Acceptance status (PROMPT.md)
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Crash mid-run resumes from checkpoint with zero duplicated side effects | met | `tests/durability/test_crash_resume.py`, `tests/graph/test_t0_fake.py::test_resume_after_crash_does_not_duplicate_commits` |
+| Provider swap is config-only; full suite passes on the Fake provider offline | met | `configs/models.yaml`, CI runs with `SCIO_PROVIDER_OVERRIDE=fake` |
+| Sample task passes with pass^5 ≥ 0.8 within a stated budget | met on the Fake provider | regression suite pass^5 = 1.00 at real-model prices; live run blocked by the placeholder key (ledger I-019) |
+| Advisor calls ≤ cap, each logged with trigger, cost and outcome | met | `EscalationRecord`; `tests/unit/test_escalation.py`, `tests/graph/test_t1_t2_fake.py` |
+| Sample task produces a GitHub PR linked to its issue, template filled, docs in the same PR, CI green | met | [scio-eval-sandbox PR #2](https://github.com/NewMe505/scio-eval-sandbox/pull/2) from issue #1, Fake provider, that repo's CI green |
 
 Calling a model through the harness. Roles, models, effort and prices live only in
 `configs/models.yaml`; code never names a model.
@@ -78,7 +97,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Milestone 0 design (graphs, State, agent contracts, directory tree, milestone plan)
 - [docs/PROMPT.md](docs/PROMPT.md): the build spec / generation prompt
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 
@@ -88,4 +107,4 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - M2 (done): state, checkpointing with idempotent effects, ACI tools, sandbox backends, GitHubClient
 - M3 (done): router, context and loop layers, the T0 graph end to end, graph-driven evals
 - M4 (done): T1/T2 tiers, parallel explorers, planner, six-signal triage, capped Opus advisor, reviewer
-- M5: observability and eval tuning
+- M5 (done): nightly capability suite, A/B configs, threshold tuning (ADR 0006), run reports, release workflow

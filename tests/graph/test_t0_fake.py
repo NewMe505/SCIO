@@ -108,6 +108,8 @@ def test_happy_path_end_to_end(tmp_path: Path) -> None:
         and subjects[1].startswith("feat:")
         and "[scio:" in subjects[1]
     )
+    tracked = subprocess.run(["git", "ls-files"], cwd=work, capture_output=True, text=True).stdout
+    assert "__pycache__" not in tracked and ".pyc" not in tracked  # repo-local excludes (I-028)
     assert s.last_gate is not None and s.last_gate.verdict == "pass"
     assert any("routed to T0" in e.text for e in s.task_ledger)
     assert Path(s.artifacts["pr_body"].path).read_text(encoding="utf-8").startswith("## Summary")

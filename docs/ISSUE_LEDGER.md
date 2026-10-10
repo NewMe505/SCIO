@@ -156,9 +156,9 @@ Template:
 - Found: 2026-10-10 · M3 · first live trial of t001 through the T0 graph
 - Symptom: `FatalError: status 401 ... authentication_error: invalid x-api-key` at the `route` node (first model call); the Fake run of the same task passes
 - Root cause: environment; the key is set but not accepted by the API
-- Fix: pending. Needs a valid key in `ANTHROPIC_API_KEY` (or an `ant auth login` profile; the `ant` CLI is not installed here). The code path up to the first request is exercised; nothing in SCIO changed
-- Sweep: the harness classifies 401 as fatal (no retry, no spend), which is the intended behaviour; the eval runner records it as a failed trial with the error text
-- Resolved: — · Status: open (owner action)
+- Fix: by decision of the owner (2026-10-10, M5): the account is a Claude Max subscription, so the key stays a placeholder. Live runs remain gated (`SCIO_RUN_LIVE_TESTS=1`, nightly workflow switches to the real provider only when a repository secret is set). All accounting, budgets, escalation logs and eval metrics keep working as designed, measured on the Fake provider at real-model prices and labelled as such
+- Sweep: the harness classifies 401 as fatal (no retry, no spend), which is the intended behaviour; the eval runner records it as a failed trial with the error text. README's acceptance table marks the live criteria "Fake-provider evidence only"
+- Resolved: 2026-10-10 · Status: wontfix (placeholder key by design; re-open when an API key exists)
 
 ### I-020 · Project lint and type-check ran over the eval fixture repository
 - Found: 2026-10-10 · M3 · `uv run mypy` and `ruff check` after adding `evals/tasks/t001_add_function/repo`
@@ -214,6 +214,22 @@ Template:
 - Root cause: `ToolBox(role=...)` was added for M4 and set in the new nodes only; the M3 call sites kept the default
 - Fix: every `ToolBox` construction names its role; the assertion is `edit roles ⊆ {coder, debugger, documenter}`
 - Sweep: `grep -n "ToolBox(" scio/` shows five construction sites, all with `role=`; a default of `"agent"` remains for ad-hoc use but no node uses it
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-027 · Recurrence of I-010: escapes in a shell-embedded patch script corrupted two modules
+- Found: 2026-10-10 · M5 · `ruff format` reported `f-string: unterminated string` in `scio/cli.py` and `missing closing quote` in `scio/harness/accounting.py`
+- Symptom: `newline="\n"` and `+ "\n"` landed as a quote, a real line break, and a quote in four places; the package did not import
+- Root cause: the same mechanism as I-010. The rule (pre-flight item 6) existed and was broken anyway, because the patch script was long and the escapes were buried in it
+- Fix: all four sites repaired with the file-edit tool; `grep -rn -A1 'newline="$'` and `grep -rn '"$'` over `scio evals scripts tests` confirmed no other corrupted strings
+- Sweep: every remaining shell-embedded patch in this milestone is escape-free by construction. Guard added: pre-flight item 6 now says to run `python -c "import scio"` (or the lint step) immediately after any shell-embedded patch, before writing anything else, so a corrupted module is caught in the same step that produced it
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-028 · The real end-to-end PR committed `__pycache__` and `.pyc` files
+- Found: 2026-10-10 · M5 · PR #2 on `NewMe505/scio-eval-sandbox` (the first run against a real GitHub repository)
+- Symptom: the PR's file list contained `tests/__pycache__/*.pyc` and `textutils/__pycache__/*.pyc` next to the real changes
+- Root cause: `git_checkpoint` stages with `git add -A`; `run_tests` had produced caches; the target repository has no `.gitignore`, and nothing in SCIO excluded them. The Fake-provider tests never noticed because they only counted commits
+- Fix: `prepare_repo` writes repo-local excludes (`.git/info/exclude`: `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`), which are never committed and do not touch the target's own `.gitignore`. The T0 happy-path test now asserts no cache files are tracked
+- Sweep: the only other staging call is the docs commit in `document`, which goes through the same `git_checkpoint`; `run_tests` already passes `-p no:cacheprovider`, which removes `.pytest_cache` but not Python's own bytecode cache
 - Resolved: 2026-10-10 · Status: resolved
 
 ### I-009 · Branch protection unavailable on a private free-plan repository

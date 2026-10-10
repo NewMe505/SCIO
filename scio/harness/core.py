@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
+import yaml
 from pydantic import BaseModel
 
 from scio.harness.accounting import CostLedger
@@ -62,6 +63,11 @@ class Harness:
         if settings.otel_exporter != "none":
             configure_tracing(settings.otel_exporter)
         config = ModelsConfig.load(settings.models_path)
+        if settings.role_overrides_path is not None:
+            loaded = yaml.safe_load(settings.role_overrides_path.read_text(encoding="utf-8"))
+            data: dict[str, Any] = dict(loaded) if isinstance(loaded, dict) else {}
+            roles = data.get("roles")
+            config = config.with_role_overrides(dict(roles) if isinstance(roles, dict) else data)
         if budget is None and tier is not None:
             budget = BudgetsConfig.load(settings.budgets_path).guard_for(tier)
         return cls(config, ProviderRegistry(config, settings), settings=settings, budget=budget)

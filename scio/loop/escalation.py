@@ -33,6 +33,14 @@ class EscalationConfig:
     explorers_max: int = 4
     test_dirs: tuple[str, ...] = ("tests/", "test/")
 
+    def __post_init__(self) -> None:
+        # ADR 0006: the stall exit must not fire before the repeated-error signal can escalate.
+        if self.max_stall < self.repeat_threshold - 1:
+            raise ValueError(
+                f"max_stall ({self.max_stall}) must be >= repeat_threshold - 1 "
+                f"({self.repeat_threshold - 1}); see ADR 0006"
+            )
+
 
 def _norm(path: str, root: str | None) -> str:
     p = path.replace("\\", "/")
