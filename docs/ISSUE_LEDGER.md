@@ -136,6 +136,14 @@ Template:
 - Sweep: n/a
 - Resolved: — · Status: open
 
+### I-017 · `scio/aci/sandbox/` never committed: swallowed by a broad `.gitignore` pattern
+- Found: 2026-10-10 · M2 · first CI run on PR #4, "Lint" step
+- Symptom: ruff `I001` in the three test files that import `scio.aci.sandbox`; locally everything passed. CI's ruff classified those imports as third-party because the package did not exist in the checkout
+- Root cause: `.gitignore` had an unanchored `sandbox/` (meant for a scratch directory at the repo root), which matches any directory named `sandbox` anywhere, including the new source package. `git add -A` silently skipped it; the local run used the working tree, so nothing noticed
+- Fix: pattern anchored to `/sandbox/`; package staged. New docs check `check_ignored_sources` fails if any `.py`/`.md`/`.yaml` under `scio`, `evals`, `tests`, `scripts` is git-ignored
+- Sweep: `git ls-files --others --ignored --exclude-standard scio evals tests scripts` after the fix lists nothing. Every other `.gitignore` entry reviewed: `evals/results/` and `docs/api/` are intentional; no other unanchored directory names remain
+- Resolved: 2026-10-10 · Status: resolved
+
 ### I-009 · Branch protection unavailable on a private free-plan repository
 - Found: 2026-10-10 · M0 · `gh api repos/.../rulesets`
 - Symptom: `Upgrade to GitHub Pro or make this repository public to enable this feature` (403)
