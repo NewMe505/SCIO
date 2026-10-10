@@ -69,8 +69,8 @@ Template:
 - Symptom: `refusing to allow an OAuth App to create or update workflow .github/workflows/ci.yml without workflow scope`
 - Root cause: the `gh` login token has scopes `gist, read:org, repo`; GitHub requires `workflow` to push workflow files
 - Fix: run `gh auth refresh -h github.com -s workflow` (interactive, needs the browser), then push again
-- Sweep: any future push adding files under `.github/workflows/` needs the scope; noted in LESSONS_LEARNED pre-flight list
-- Resolved: — · Status: open (needs the repo owner to refresh the token)
+- Sweep: any future push adding files under `.github/workflows/` needs the scope; noted in LESSONS_LEARNED pre-flight list. The device-flow refresh must be run by the owner in their own prompt: started from an agent session it times out before the browser step completes
+- Resolved: 2026-10-10 (owner ran `gh auth refresh -s workflow`; branch pushed, PR #2 opened) · Status: resolved
 
 ### I-008 · pdoc cannot resolve PEP 695 type parameters under `from __future__ import annotations`
 - Found: 2026-10-10 · M1 · `python scripts/gen_api_docs.py`
@@ -86,6 +86,14 @@ Template:
 - Root cause: the shell tool wrapper processes `\\n` inside the command text before bash sees the quoted heredoc, so Python received a literal newline instead of the two characters backslash-n. Same class as I-001 (command text transformed before the shell parses it)
 - Fix: both files repaired with the file-edit tool; the patch script avoided writing any escape sequence through the shell
 - Sweep: `grep -rn -A1 'newline=' CONTRIBUTING.md evals/report.py` plus a tree-wide search for lines ending in a dangling quote found exactly these two sites; rule added to LESSONS_LEARNED pre-flight item 6: edit files containing backslash escapes with the file tools, never via a shell-embedded script
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-011 · Docs link checker reads inline code as links; passes on Windows, fails on Linux
+- Found: 2026-10-10 · M1 · first CI run on PR #2, "Docs checks" step
+- Symptom: `docs/ISSUE_LEDGER.md: broken link -> ...`; the same command reported 0 problems locally
+- Root cause: two defects. (1) `LINK_RE` was applied to raw Markdown, so the inline code `` `def f[T: BaseModel](...)` `` in entry I-008 matched as a link with target `...`. (2) The existence test `(md.parent / target).exists()` is platform-dependent: Windows resolves `...` to a parent directory, Linux does not, so the local run hid the bug
+- Fix: `scripts/check_docs.py` strips fenced code blocks and inline code spans before scanning, and rejects targets made only of dots; link scanning moved to `links_in(path)` so it is unit-testable
+- Sweep: every regex in `check_docs.py` reviewed for the same "scan raw text" mistake: `check_model_ids` scans code lines on purpose (model IDs in comments or strings are also leaks). Searched `scio/`, `evals/`, `scripts/` for other `Path.exists()` checks on user-supplied strings: none. Guard: `tests/unit/test_check_docs.py` covers code spans, fenced blocks and the `...` target, and runs the three checks against the real repo
 - Resolved: 2026-10-10 · Status: resolved
 
 ### I-009 · Branch protection unavailable on a private free-plan repository

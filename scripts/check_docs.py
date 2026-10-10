@@ -37,17 +37,38 @@ def _skip(p: Path) -> bool:
     return any(rel == s or rel.startswith(s + "/") for s in SKIP_DIRS)
 
 
+FENCE_RE = re.compile(r"^```.*?^```[ \t]*$", re.MULTILINE | re.DOTALL)
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+
+def _strip_code(text: str) -> str:
+    """Remove fenced blocks and inline code spans; links inside code are not links."""
+    return INLINE_CODE_RE.sub("", FENCE_RE.sub("", text))
+
+
+def links_in(md: Path) -> list[str]:
+    """Broken relative links in one Markdown file, as error strings."""
+    errors: list[str] = []
+    rel = md.relative_to(ROOT) if md.is_relative_to(ROOT) else md.name
+    text = _strip_code(md.read_text(encoding="utf-8", errors="replace"))
+    for m in LINK_RE.finditer(text):
+        target = m.group(1)
+        if re.match(r"^[a-z]+:", target) or target.startswith("mailto:"):
+            continue
+        # Windows resolves '..', '...' etc. to parent directories; only '..' is a real link.
+        if set(target) == {"."} and target != "..":
+            errors.append(f"{rel}: broken link -> {target}")
+            continue
+        if not (md.parent / target).exists():
+            errors.append(f"{rel}: broken link -> {target}")
+    return errors
+
+
 def check_links() -> list[str]:
     errors: list[str] = []
     for md in ROOT.rglob("*.md"):
-        if _skip(md):
-            continue
-        for m in LINK_RE.finditer(md.read_text(encoding="utf-8", errors="replace")):
-            target = m.group(1)
-            if re.match(r"^[a-z]+:", target) or target.startswith("mailto:"):
-                continue
-            if not (md.parent / target).exists():
-                errors.append(f"{md.relative_to(ROOT)}: broken link -> {target}")
+        if not _skip(md):
+            errors.extend(links_in(md))
     return errors
 
 

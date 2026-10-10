@@ -7,7 +7,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 1. Read this file and the open entries in the issue ledger.
 2. Check the API reference before any provider code; the spec was written against an older API surface in three places (see M0).
 3. Confirm the `gh` token scopes cover what the milestone will push (`workflow` for CI files) before creating the branch (I-007).
-4. Run the full local CI-equivalent (command in `CLAUDE.md`) before every push, not just the tests.
+4. Run the full local CI-equivalent (command in `CLAUDE.md`) before every push, not just the tests. A check that passes on Windows can still fail on Linux (I-011): any check touching paths needs a unit test with explicit inputs, not only a run against the repo.
 5. Write files with LF endings; pass `newline="\n"` from Python on Windows (I-006).
 6. One heredoc per shell command when the body contains quotes, and never pass backslash escapes (`\n`, `\t`) through a shell-embedded script; use the file tools for those edits (I-001, I-010).
 
@@ -49,11 +49,11 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - `CONTRIBUTING.md`: "Continuous improvement protocols" and "File hygiene" sections.
 - `.github/pull_request_template.md`: ledger ids, sweep pattern and retrospective checkboxes.
 - `scio/prompt/templates/debugger/v2.md`: the Debugger role performs a codebase sweep after every root cause.
-- `docs/ISSUE_LEDGER.md` (new): entries I-001 to I-010.
+- `docs/ISSUE_LEDGER.md` (new): entries I-001 to I-011.
 - `evals/report.py`: explicit `newline="\n"` on file writes.
 - Pre-flight list above, items 3, 5 and 6.
 
 ### Carried into M2
-- I-007 (token scope) and I-008 (pdoc warning) are open.
+- I-008 (pdoc warning) is open; I-007 (token scope) and I-011 (link checker) were closed after the first CI run.
 - The `WorkerOutput` structured schema (M2 state) must gain a `sweep` field so the Debugger's codebase sweep is recorded in state and the PR body, not only in prose.
 - Open questions 2 and 3 in ARCHITECTURE.md (sandbox in CI, patch sampling N) are due in M2.
