@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -51,9 +52,28 @@ class RoleTotals(BaseModel):
 class CostLedger:
     """Append-only record of every model call in a run. Thread-safe."""
 
-    def __init__(self) -> None:
+    def __init__(self, persist_path: Path | None = None) -> None:
         self._entries: list[CostEntry] = []
         self._lock = threading.Lock()
+        self.persist_path = persist_path
+
+    def persist_to(self, path: Path) -> None:
+        """Append every entry (existing and future) to ``path`` as JSON lines."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.persist_path = path
+        with self._lock, path.open("a", encoding="utf-8", newline="\n") as fh:
+            for e in self._entries:
+                fh.write(e.model_dump_json() + "\n")
+
+    @staticmethod
+    def load_entries(path: Path) -> list[CostEntry]:
+        if not path.exists():
+            return []
+        return [
+            CostEntry.model_validate_json(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def record(
         self,
@@ -82,6 +102,9 @@ class CostLedger:
         )
         with self._lock:
             self._entries.append(entry)
+            if self.persist_path is not None:
+                with self.persist_path.open("a", encoding="utf-8", newline="\n") as fh:
+                    fh.write(entry.model_dump_json() + "\n")
         return entry
 
     @property

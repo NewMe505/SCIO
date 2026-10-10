@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     provider_override: str | None = None
     """Route every role to this provider (``fake`` in CI) regardless of models.yaml."""
 
+    role_overrides_path: Path | None = None
+    """YAML mapping role -> model (or role config) applied over models.yaml (A/B configs)."""
+
     request_timeout_s: float = 600.0
     max_attempts: int = 4
     """Total attempts per call including the first; retries use exponential backoff."""

@@ -4,7 +4,16 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-10
 ### Added
+- Observability: per-run report (`scio report`), persisted cost ledger per thread, `RunReport` with cost by role, escalations and timeline.
+- A/B role configurations (`evals/configs/*.yaml`, `SCIO_ROLE_OVERRIDES_PATH`); eval runner `--config`; capability suite with scenario tasks (`fixture`, `scenario`, `expect_pass`); nightly evals workflow posting per-config tables.
+- `evals/tune.py` escalation threshold sweep; `EscalationConfig` enforces `max_stall >= repeat_threshold - 1`; ADR 0006.
+- Release workflow and `scripts/release_notes.py`; `SCIO_FAKE_SCRIPT=1` offline demo mode for the CLI; the CLI runs the unified graph (router picks the tier).
+- README acceptance-status table; first real GitHub end-to-end run recorded.
+### Fixed
+- `prepare_repo` writes repo-local git excludes so test caches are never committed (I-028).
 - T1 and T2 tiers in one graph builder (`scio/graph/build.py`): `scope`, parallel `explore` (LangGraph `Send`, read-only), `localize`, `plan` (plan-owned test filters), `post_plan` (issue checklist), `implement` (one step per cycle), `debug`, `advise`, `review`; generated `t1`/`t2` diagrams.
 - Escalation policy (`scio/loop/escalation.py`, `scio/loop/impact.py`): six signals, never-escalate list, per-step and per-run caps, `advisor_cap` exit with human interrupt; `TriageDecision` in state; `EscalationRecord` with trigger, brief, verdict, tokens, $ and outcome; advisor guidance injected into the next worker turn; ADR generation in the target repository.
 - `ToolBox(role=...)` on spans; `WorkerOutput.sweep` surfaced in the ledger; PR body carries the escalation log and reviewer notes.

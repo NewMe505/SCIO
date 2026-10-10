@@ -1,0 +1,10 @@
+id: c002_plan_drift
+suite: capability
+title: Plan drift is caught and corrected
+tier_hint: T1
+trials: 5
+budget: { tokens: 400000, usd: 4.0 }
+grader: tests
+fixture: t004_two_features
+hidden_tests: hidden/test_shapes_hidden.py
+scenario: { coder_mode: drift }

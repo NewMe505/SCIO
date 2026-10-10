@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scio.aci.tools import RunTestsInput, ToolError, run_tests
 from scio.graph.nodes.common import acceptance_from_issue_body
@@ -54,6 +54,8 @@ class EvalTaskLike(BaseModel):
     tokens: int = 100_000
     usd: float = 1.0
     tier: str = "T0"
+    scenario: dict[str, Any] = Field(default_factory=dict)
+    expect_pass: bool = True
 
 
 class PlaceholderSolver:
@@ -123,13 +125,15 @@ class GraphSolver:
         if settings.provider_override == "fake":
             from evals.fake_scripts import ScriptedResponder
 
-            factory = self.responder_factory or ScriptedResponder
+            switches = {k: v for k, v in task.scenario.items() if k != "advisor_calls_max"}
+            factory = self.responder_factory or (lambda: ScriptedResponder(**switches))
             harness.providers.register("fake", FakeProvider(responder=factory()))
         tier_defaults = BudgetsConfig.load(settings.budgets_path).tiers.get(task.tier)
+        default_cap = tier_defaults.advisor_calls_max if tier_defaults else 0
         limits = BudgetLimits(
             tokens_max=task.tokens,
             usd_max=task.usd,
-            advisor_calls_max=tier_defaults.advisor_calls_max if tier_defaults else 0,
+            advisor_calls_max=int(task.scenario.get("advisor_calls_max", default_cap)),
             max_iters=tier_defaults.max_iters if tier_defaults else 30,
             max_stall=tier_defaults.max_stall if tier_defaults else 2,
         )
@@ -147,7 +151,8 @@ class GraphSolver:
             outcome = resume_graph(ctx, "approved (eval)")
         state = outcome.state
         graded = self._grade(ctx, task)
-        passed = state.exit_reason is ExitReason.SUCCESS and graded[0]
+        succeeded = state.exit_reason is ExitReason.SUCCESS and graded[0]
+        passed = succeeded if task.expect_pass else (not succeeded and outcome.paused)
         exit_name = state.exit_reason.value if state.exit_reason else None
         tier = state.routing.tier.value if state.routing else "?"
         notes = (

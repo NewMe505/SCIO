@@ -18,7 +18,7 @@ import time
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import yaml
 from pydantic import BaseModel, Field
@@ -48,7 +48,17 @@ class EvalTask(BaseModel):
     budget: TaskBudget = Field(default_factory=TaskBudget)
     grader: Literal["placeholder", "tests"] = "placeholder"
     hidden_tests: str | None = None
+    fixture: str | None = None
+    """Another task's id whose ``repo/`` and ``hidden/`` this task reuses (scenario tasks)."""
+    scenario: dict[str, Any] = Field(default_factory=dict)
+    """Fake-provider switches (``coder_mode``, ``advisor_verdict``, ``advisor_calls_max``)."""
+    expect_pass: bool = True
+    """False for scenarios whose correct outcome is a halt (e.g. the advisor cap)."""
     path: Path
+
+    @property
+    def fixture_path(self) -> Path:
+        return self.path.parent / self.fixture if self.fixture else self.path
 
     @property
     def spec(self) -> str:
@@ -76,11 +86,13 @@ def to_task_like(task: EvalTask) -> EvalTaskLike:
     return EvalTaskLike(
         id=task.id,
         spec=task.spec,
-        path=task.path,
+        path=task.fixture_path,
         hidden_tests=task.hidden_tests,
         tokens=task.budget.tokens,
         usd=task.budget.usd,
         tier=task.tier_hint or "T0",
+        scenario=task.scenario,
+        expect_pass=task.expect_pass,
     )
 
 
@@ -130,8 +142,14 @@ def run_suite(
     trials: int | None,
     solver: Solver | None = None,
     tasks_dir: Path = TASKS_DIR,
+    config: Path | None = None,
 ) -> SuiteReport:
-    settings = Settings(provider_override=provider) if provider else Settings()
+    kwargs: dict[str, Any] = {}
+    if provider:
+        kwargs["provider_override"] = provider
+    if config is not None:
+        kwargs["role_overrides_path"] = config
+    settings = Settings(**kwargs)
     started = datetime.now(UTC)
     tasks = load_tasks(tasks_dir, suite)
     results: list[TrialResult] = []
@@ -143,9 +161,10 @@ def run_suite(
         task_results = [run_trial(task, i + 1, chosen, settings) for i in range(n)]
         results.extend(task_results)
         metrics.append(summarize(task.id, task_results))
+    label = f"{provider or 'config'}" + (f"+{config.stem}" if config else "")
     return SuiteReport(
         suite=suite,
-        provider=provider or "config",
+        provider=label,
         started_at=started,
         finished_at=datetime.now(UTC),
         k=k,
@@ -161,11 +180,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trials", type=int, default=None, help="override per-task trial count")
     ap.add_argument("--solver", default="auto", help="module:Class, or auto (by task grader)")
     ap.add_argument("--out", type=Path, default=RESULTS_DIR)
+    ap.add_argument(
+        "--config", type=Path, default=None, help="A/B role-override YAML (evals/configs/*.yaml)"
+    )
     ap.add_argument("--min-pass-pow-k", type=float, default=None, help="exit 1 below this")
     args = ap.parse_args(argv)
 
     report = run_suite(
-        args.suite, provider=args.provider, trials=args.trials, solver=load_solver(args.solver)
+        args.suite,
+        provider=args.provider,
+        trials=args.trials,
+        solver=load_solver(args.solver),
+        config=args.config,
     )
     json_path, md_path = report.write(args.out)
     sys.stdout.write(report.to_markdown())

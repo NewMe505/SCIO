@@ -251,6 +251,12 @@ def test_exit_reason_wins_over_everything() -> None:
     assert d.route == "halt" and exit_for(d) is None
 
 
+def test_config_rejects_stall_limit_below_repeat_threshold() -> None:
+    EscalationConfig(repeat_threshold=3, max_stall=2)
+    with pytest.raises(ValueError, match="ADR 0006"):
+        EscalationConfig(repeat_threshold=3, max_stall=1)
+
+
 @pytest.mark.parametrize("trigger", list(EscalationTrigger))
 def test_every_trigger_has_a_flip_test(trigger: EscalationTrigger) -> None:
     covered = {

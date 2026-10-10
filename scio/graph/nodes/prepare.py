@@ -15,6 +15,8 @@ from scio.state.models import Role, SCIOState
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
+LOCAL_EXCLUDES = "__pycache__/\n*.pyc\n.pytest_cache/\n.ruff_cache/\n.mypy_cache/\n"
+
 
 def branch_name(state: SCIOState) -> str:
     n = state.task.issue_number
@@ -40,6 +42,8 @@ def prepare_repo(ctx: RunContext) -> Node:
                 r = sb.exec(["git", "clone", "-q", state.task.repo_url, "."], timeout_s=300)
                 if not r.ok:
                     raise RuntimeError(f"git clone failed: {r.stderr.strip()[:300]}")
+            # Repo-local excludes (not committed): never let test caches into a checkpoint.
+            sb.write_text(f"{sb.root}/.git/info/exclude", LOCAL_EXCLUDES)
             sb.exec(["git", "config", "user.name", "scio"], timeout_s=30)
             sb.exec(["git", "config", "user.email", "scio@users.noreply.github.com"], timeout_s=30)
             sb.exec(["git", "checkout", "-q", state.task.base_branch], timeout_s=60)

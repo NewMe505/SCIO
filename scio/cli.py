@@ -2,6 +2,7 @@
 
     scio run --spec task.md --repo <url-or-path> [--issue N] [--sandbox DIR] [--thread ID]
     scio resume --thread ID [--sandbox DIR] [--decision "approved"]
+    scio report --thread ID [--out DIR]
 
 The spec file is Markdown: the first ``#`` heading is the title, checkbox lines are the
 acceptance criteria, everything else is the description.
@@ -11,13 +12,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
 
 from scio.graph.nodes.common import acceptance_from_issue_body
-from scio.graph.run import RunOutcome, resume_t0, run_t0
+from scio.graph.run import RunOutcome, resume_graph, run_graph
 from scio.graph.run_context import RunContext
+from scio.harness.core import Harness
 from scio.settings import get_settings
 from scio.state.models import TaskSpec
 
@@ -63,21 +66,49 @@ def main(argv: list[str] | None = None) -> int:
     res.add_argument("--sandbox", type=Path, default=None)
     res.add_argument("--decision", default=None)
     res.add_argument("--tier", default="T0")
+    rep = sub.add_parser("report", help="write the observability report for a run")
+    rep.add_argument("--thread", required=True)
+    rep.add_argument("--sandbox", type=Path, default=None)
+    rep.add_argument("--out", type=Path, default=Path(".scio") / "reports")
     args = ap.parse_args(argv)
 
     settings = get_settings()
+    harness = None
+    if settings.provider_override == "fake" and os.environ.get("SCIO_FAKE_SCRIPT") == "1":
+        # Offline demo: drive the Fake provider with the scripted eval behaviour.
+        from evals.fake_scripts import ScriptedResponder
+        from scio.harness.providers.fake import FakeProvider
+
+        harness = Harness.from_settings(settings)
+        harness.providers.register("fake", FakeProvider(responder=ScriptedResponder()))
     thread = args.thread or f"run-{uuid.uuid4().hex[:8]}"
     sandbox = args.sandbox or Path(".scio") / "sandbox" / thread
     ctx = RunContext.create(
-        thread_id=thread, sandbox_root=sandbox, tier=args.tier, settings=settings
+        thread_id=thread,
+        sandbox_root=sandbox,
+        tier=getattr(args, "tier", "T0"),
+        settings=settings,
+        harness=harness,
     )
+    if args.cmd == "report":
+        from scio.graph.report import build_report, load_state, write_report
+        from scio.harness.accounting import CostLedger
+
+        state = load_state(ctx)
+        entries = CostLedger.load_entries(Path(".scio") / "ledger" / f"{thread}.jsonl")
+        report = build_report(state, entries)
+        json_path, md_path = write_report(report, args.out)
+        print(report.to_markdown())
+        print(f"wrote {json_path}")
+        print(f"wrote {md_path}")
+        return 0
     if args.cmd == "run":
         task = parse_spec(
             args.spec.read_text(encoding="utf-8"), repo_url=args.repo, issue=args.issue
         )
-        outcome = run_t0(ctx, task)
+        outcome = run_graph(ctx, task)
     else:
-        outcome = resume_t0(ctx, args.decision)
+        outcome = resume_graph(ctx, args.decision)
     _print(outcome)
     return (
         0

@@ -1,0 +1,11 @@
+id: c003_advisor_cap
+suite: capability
+title: Advisor cap halts for a human (expected to not pass)
+tier_hint: T1
+trials: 3
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+fixture: t002_fix_failing_test
+hidden_tests: hidden/test_paginate_hidden.py
+scenario: { coder_mode: wrong_first, advisor_calls_max: 0 }
+expect_pass: false

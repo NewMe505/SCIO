@@ -1,6 +1,6 @@
 # SCIO architecture (Milestone 0)
 
-Status: **M0 approved; M1 to M4 implemented.** All five layers exist and all three tiers run end to end through one graph (`scio run`); the signal-driven, capped escalation to the Opus advisor is live. M5 (observability and eval tuning) remains. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
+Status: **All milestones (M0 to M5) implemented; release 0.1.0.** All five layers exist, all three tiers run end to end through one graph (`scio run`), the capped escalation policy is live and tuned from a recorded sweep, and the first real GitHub run produced an issue-linked PR with green CI. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
 
 From M2 on, the Mermaid diagrams in section (a) are regenerated from the compiled graph by `scripts/gen_mermaid.py`, and CI fails if this file and the compiled graph disagree.
 
@@ -868,3 +868,11 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 - `verify` stores a `TriageDecision` after a failing check; the `triage` edge reads it: `debug` (the default and the never-escalate path), `advise` (any of the six signals while the caps allow), or `halt` with exit `advisor_cap`. `advise` records an `EscalationRecord` (trigger, brief artifact, verdict, tokens, $, outcome) and routes on the verdict; the next verify resolves the record.
 - `review` is a fresh-context Reviewer over task + diff + test output; its findings go into the PR body. The Documenter writes an ADR in the target repository when the advisor replanned or changed approach, or the diff is high impact.
 - `evals/` carries five real tasks across the tiers (t001 T0, t002 T1, t003 T0, t004 T1 two steps, t005 T2); `evals/fake_scripts.TaskScript` drives them deterministically on the Fake provider, including the escalation scenarios.
+
+### M5: observability, eval tuning, release
+- Per-run report (`scio report --thread <id>`, `scio/graph/report.py`): built from the durable checkpoint and the persisted cost ledger (`.scio/ledger/<thread>.jsonl`), so it works after the process is gone. Tokens and dollars by role, escalations with outcomes, timeline, artifacts.
+- A/B configurations are role→model overrides (`evals/configs/*.yaml`, `SCIO_ROLE_OVERRIDES_PATH`) applied over `models.yaml` by `Harness.from_settings`; no code changes between configs.
+- Capability suite: scenario tasks (`fixture:` reuse, `scenario:` switches, `expect_pass`) exercise the escalation paths; the nightly workflow runs capability and regression per config and posts the tables. The Anthropic key is a placeholder on this project (I-019), so the nightly uses the Fake provider unless a repository secret is set.
+- `evals/tune.py` sweeps `repeat_threshold` × `max_stall`; ADR 0006 records the data and the chosen values (spec defaults confirmed by control-flow data) and the coupling `max_stall >= repeat_threshold - 1`, now enforced in `EscalationConfig`.
+- Release: `scripts/release_notes.py` cuts `[Unreleased]` into a version and extracts its notes; `.github/workflows/release.yml` creates the GitHub Release on a `v*` tag.
+- The real end-to-end run (`NewMe505/scio-eval-sandbox`, issue #1 → PR #2) found that `git add -A` committed bytecode caches; `prepare_repo` now writes repo-local excludes (I-028).

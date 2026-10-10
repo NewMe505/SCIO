@@ -82,6 +82,7 @@ class RunContext:
         )
         if github is None and settings.gh_repo:
             github = GitHubClient(settings.gh_repo)
+        harness.ledger.persist_to(work / "ledger" / f"{thread_id}.jsonl")
         return cls(
             settings=settings,
             thread_id=thread_id,
