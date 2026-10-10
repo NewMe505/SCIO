@@ -1,0 +1,7 @@
+id: t001_add_function
+suite: regression
+title: Add a function with tests to a small repo
+tier_hint: T0
+trials: 5
+budget: { tokens: 100000, usd: 1.0 }
+grader: placeholder   # M3: tests

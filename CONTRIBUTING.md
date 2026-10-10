@@ -25,3 +25,14 @@ CI checks docs: links, runnable examples, architecture diagram vs. the compiled 
 - tests (Fake provider, offline)
 - docs checks
 - regression eval suite
+
+## Continuous improvement protocols
+These three protocols are mandatory for humans and agents. `CLAUDE.md` restates them for AI sessions.
+
+1. **Issue ledger** ([docs/ISSUE_LEDGER.md](docs/ISSUE_LEDGER.md)). Every problem found while working (failing check, wrong assumption, tooling failure, environment quirk) gets an entry *when it is found*, and the entry is completed *when it is resolved*: symptom, root cause, fix, the sweep performed, status. A PR that fixed a problem links its ledger ids.
+2. **Milestone retrospectives** ([docs/LESSONS_LEARNED.md](docs/LESSONS_LEARNED.md)). At the end of every milestone, record what succeeded, what failed, and the concrete actions taken. Read the whole document before starting the next milestone and cite the lessons that shaped the plan.
+3. **Systemic bug sweeps.** A bug is never fixed in isolation. After the root cause is known, search the entire codebase for the same construct (state the grep or pattern in the ledger entry), fix every instance, and add a guard that prevents recurrence (a test, a lint rule, a docs check, or a CONTRIBUTING rule). "Patched the symptom" is not a valid resolution.
+
+## File hygiene
+- Line endings are LF everywhere (`.gitattributes` enforces it). When writing files from Python on Windows, pass `newline="\n"`; ledger entry I-006 explains why.
+- Model IDs live only in `configs/models.yaml`; `scripts/check_docs.py` fails on any other occurrence.

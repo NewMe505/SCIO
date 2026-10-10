@@ -22,6 +22,11 @@ Closes #
 - [ ] Docstrings for changed public APIs
 - [ ] N/A: no user-facing or architectural change
 
+## Continuous improvement
+- [ ] Issue ledger updated for every problem hit (ids: )
+- [ ] Each bug fix was swept across the codebase (pattern searched: )
+- [ ] Milestone retrospective written (milestone-closing PRs only)
+
 ## Risk notes
 <!-- Public API, schema, dependency, or data changes; rollback plan. -->
 

@@ -1,0 +1,7 @@
+id: t003_update_docs
+suite: regression
+title: Document a public API in README and docstrings
+tier_hint: T0
+trials: 5
+budget: { tokens: 80000, usd: 0.8 }
+grader: placeholder   # M3: docs checks

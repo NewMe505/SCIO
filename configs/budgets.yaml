@@ -1,0 +1,9 @@
+# Per-tier run budgets (assumption F-7). M5 tunes these from eval data.
+tiers:
+  T0: { tokens_max: 100000,  usd_max: 0.50, advisor_calls_max: 0, max_iters: 10, max_stall: 2 }
+  T1: { tokens_max: 300000,  usd_max: 2.00, advisor_calls_max: 3, max_iters: 30, max_stall: 2 }
+  T2: { tokens_max: 1000000, usd_max: 8.00, advisor_calls_max: 6, max_iters: 60, max_stall: 2 }
+
+# Fraction of max_tokens the budget pre-check assumes an output will use.
+# 1.0 is fully conservative: a call is refused if it *could* exceed the cap.
+reserve_output_fraction: 1.0
