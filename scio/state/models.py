@@ -303,6 +303,8 @@ class WorkerOutput(BaseModel):
     needs_design_decision: bool = False
     design_question: str | None = None
     next_action: Literal["verify", "continue", "done"]
+    tests_added: list[str] = Field(default_factory=list)
+    """pytest ``-k`` expressions (or test file paths) that cover the features worked on."""
     sweep: SweepRecord | None = None
     """Set by the Debugger after a root-cause fix; None for other roles."""
 

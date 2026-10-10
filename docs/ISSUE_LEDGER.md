@@ -152,6 +152,46 @@ Template:
 - Sweep: every chained check command in this session used the `| tail -1 &&` shape; the CI workflow runs each check as its own step and was never affected. Rule added to LESSONS_LEARNED pre-flight item 10 and to CLAUDE.md
 - Resolved: 2026-10-10 · Status: resolved
 
+### I-019 · Live Anthropic run blocked: `ANTHROPIC_API_KEY` in the environment is invalid
+- Found: 2026-10-10 · M3 · first live trial of t001 through the T0 graph
+- Symptom: `FatalError: status 401 ... authentication_error: invalid x-api-key` at the `route` node (first model call); the Fake run of the same task passes
+- Root cause: environment; the key is set but not accepted by the API
+- Fix: pending. Needs a valid key in `ANTHROPIC_API_KEY` (or an `ant auth login` profile; the `ant` CLI is not installed here). The code path up to the first request is exercised; nothing in SCIO changed
+- Sweep: the harness classifies 401 as fatal (no retry, no spend), which is the intended behaviour; the eval runner records it as a failed trial with the error text
+- Resolved: — · Status: open (owner action)
+
+### I-020 · Project lint and type-check ran over the eval fixture repository
+- Found: 2026-10-10 · M3 · `uv run mypy` and `ruff check` after adding `evals/tasks/t001_add_function/repo`
+- Symptom: mypy `import-not-found` for `textutils` and `no-untyped-def` in the fixture's tests; ruff E501 in the hidden test
+- Root cause: `packages = ["scio", "evals"]` and ruff's default discovery include everything under `evals/`, but a fixture repository is the *agent's* code and has its own conventions
+- Fix: `[tool.mypy] exclude = ["evals/tasks/"]`, `[tool.ruff] extend-exclude = ["evals/tasks/*/repo"]`; the hidden test (ours) stays linted
+- Sweep: `scripts/check_docs.py` link check already skips nothing under `evals/tasks`; its model-ID check scans fixtures too, which is fine (no IDs there). Future fixtures go under `evals/tasks/<id>/repo` so the exclusions apply automatically
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-021 · LangGraph warns about unregistered state types in checkpoints
+- Found: 2026-10-10 · M3 · first graph smoke run
+- Symptom: `Deserializing unregistered type scio.state.models.TaskSpec from checkpoint. This will be blocked in a future version` for every Pydantic model and enum in the state
+- Root cause: LangGraph's msgpack serializer requires an allow-list of (module, name) pairs for custom types
+- Fix: `scio.graph.checkpointer.serializer()` builds the allow-list from every model and enum in `scio.state.models`; the SQLite and in-memory savers are constructed with it (the `from_conn_string` helper does not accept a serializer)
+- Sweep: the Postgres path still uses `from_conn_string`; it needs the same construction when it is first exercised (noted in `checkpointer.py`)
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-022 · Scripted Fake replies mis-counted in two loop tests
+- Found: 2026-10-10 · M3 · `tests/unit/test_context_loop.py` cap tests
+- Symptom: `StructuredOutputError` because the summary call consumed a scripted *tool* reply
+- Root cause: the number of enqueued tool replies must equal the number of tool turns the loop will actually make (allowed + one refused at the cap) with the JSON summary last; I enqueued "plenty"
+- Fix: scripts sized exactly; comment in the test states the rule
+- Sweep: `evals/fake_scripts.ScriptedResponder` keys on `request.output_schema` instead of position, so graph-level runs are immune; only queue-based tests need exact sizing
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-023 · Commit chain broke on a doubled `-q`, and the lines after the heredoc ran anyway
+- Found: 2026-10-10 · M3 · the commit-push-PR chain for M3
+- Symptom: `gh pr create` failed with `No commits between main and feat/5-router-t0-loop`; the push had sent an empty branch
+- Root cause: two defects. (1) `pyproject.toml` already sets `addopts = "-q"`, so `pytest -q` became `-qq` and printed no summary line; the `grep "passed|failed"` step matched nothing and the `&&` chain stopped before `git commit`. (2) `git push` and `gh pr create` were written on new lines after the heredoc, so they were separate commands, not part of the chain, and ran regardless
+- Fix: pytest invoked without the extra `-q`; the whole chain is one logical command (`git commit -F - <<'EOF' && git push ... && gh pr create ...` with the heredoc body following)
+- Sweep: CLAUDE.md's pre-push command does not pass `-q`; CI runs `pytest` without it. Pre-flight item 11 added: anything that must not run after a failed check belongs on the same `&&` line, and a heredoc's continuation `&&` goes on the opener line
+- Resolved: 2026-10-10 · Status: resolved
+
 ### I-009 · Branch protection unavailable on a private free-plan repository
 - Found: 2026-10-10 · M0 · `gh api repos/.../rulesets`
 - Symptom: `Upgrade to GitHub Pro or make this repository public to enable this feature` (403)

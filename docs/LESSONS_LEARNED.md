@@ -14,6 +14,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 8. Introspect an installed SDK (`inspect.signature`, `dir`) before writing an adapter against it; write the adapter's tests with an injected client or runner so they run without the service (M2).
 9. Before pushing, compare what git will send with what the working tree has: `git status --short` must show every new package, and `git ls-files --others --ignored --exclude-standard scio evals tests scripts` must be empty (I-017). The docs check enforces the second. Note that ruff skips git-ignored files, so an ignored package is also an unlinted package.
 10. When chaining checks in one shell command, start with `set -o pipefail` and never pipe a check whose exit code matters through `tail`/`grep` without it (I-018). A chain that reaches `git commit` must have been able to fail.
+11. Commands that must not run after a failed check go on the same `&&` line; a heredoc's `&&` continuation goes on the opener line, because the line after `EOF` is a new command. Do not pass `-q` to pytest: `addopts` already does, and `-qq` hides the summary (I-023).
 
 ---
 
@@ -98,3 +99,37 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - Register the `t0` graph in `scio.graph.registry` and replace the hand-drawn T0 diagram in ARCHITECTURE.md with a generated section.
 - Open question 3 (patch sampling N) is deferred to M4 where sampling is built.
 - Every side-effecting node must name an `intent` and a `probe`; make that the node template shape from the first M3 node.
+
+---
+
+## M3: router and T0 loop end to end (closed 2026-10-10)
+
+### Lessons applied from M2
+- Pre-flight 9 and 10: `git status` reviewed before the push; every check chain started with `set -o pipefail`. No ignored packages, no masked failures.
+- Carried items: `t0` is registered and its generated diagram sits next to the M0 sketch; every side-effecting node names an intent and a probe.
+- Pre-flight 8: LangGraph's `interrupt`/`Command` and the serializer constructor were introspected before use.
+
+### What succeeded
+- The whole T0 graph ran end to end on the first smoke attempt: route, clone, implement, verify (real pytest, real ruff), commit, document, gate, interrupt, resume, hidden tests green. The layered design from M1/M2 meant the graph was mostly wiring.
+- A schema-keyed `ScriptedResponder` (decide by the requested output schema, then by role and turn count) made one fake drive the entire run and every exit-reason variant with small flags.
+- Verify's fixed order (changes → feature tests → suite → lint) caught the "trivially passing" hole during design: a whole-suite check alone would have passed an agent that wrote nothing.
+
+### What failed
+- The recorded live run is blocked by an invalid API key in the environment (I-019). The code path is exercised to the first request only.
+- Project tooling linted and type-checked the agent's fixture repository (I-020).
+- LangGraph's serializer allow-list was unknown until the first checkpoint warning (I-021).
+- Two queue-based loop tests enqueued the wrong number of scripted replies (I-022).
+
+### Actions
+- `docs/adr/0004-loop-and-verification.md`.
+- `scio.graph.checkpointer.serializer()` allow-lists every state type; the Postgres path is flagged for the same treatment.
+- `pyproject.toml` excludes `evals/tasks/*/repo` from ruff and `evals/tasks/` from mypy.
+- `tests/graph/test_t0_fake.py` is the executable acceptance for the happy path and all five reachable exit reasons; `tests/graph/test_t0_fake.py::test_every_exit_reason_is_covered` fails if a new `ExitReason` is added without a test.
+- Ledger I-019 to I-023.
+
+### Carried into M4
+- I-019: run `python -m evals.runner --suite regression --provider anthropic --trials 5` once a valid key is present; record pass^5, tokens and cost here and in the PR.
+- T1/T2: `after_route` currently halts non-T0 tiers; M4 replaces that with the plan/explore subgraphs and the six-signal `triage` edge. `check_exit` already returns `ADVISOR_CAP`'s neighbours; the advisor cap exit is added with the `advise` node.
+- Move test ownership from `tests_added` to the plan (`PlanStep.feature_ids` → `FeatureItem.test_filter`).
+- Postgres checkpointer: construct with the serializer allow-list (I-021 sweep).
+- The gate should receive docs-check output directly, not only through the PR body (ADR 0004 consequence).

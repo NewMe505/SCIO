@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Added
+- Context layer (`scio/context`): artifact store, per-role prompt projections, size-triggered transcript trimming.
+- Loop layer (`scio/loop`): `AgentLoop` (tools until done, tool/model caps, typed `WorkerOutput` summary) and exit conditions.
+- T0 graph (`scio/graph/tiers/t0.py`): intake, route, prepare_repo, t0_loop, verify, git_checkpoint, document (docs commit, push, draft PR), gate with ground-truth override, pr_ready, merge_wait interrupt, halt. `scio run` / `scio resume` CLI.
+- `WorkerOutput.tests_added`; verify requires changes, feature tests, a passing suite and clean lint.
+- Eval runner drives the real graph for `grader: tests` tasks and grades with hidden tests; t001 fixture repository; `ScriptedResponder` for deterministic Fake runs.
+- Generated `t0` Mermaid section in `docs/ARCHITECTURE.md`; LangGraph serializer allow-list for state types.
+- ADR 0004: loop and verification design.
 - State backbone (`scio/state`): the M0 schema as Pydantic models with reducers, `WorkerOutput.sweep`, error signatures stable across line numbers and paths, progress fingerprints and stall counting.
 - Graph runtime (`scio/graph`): checkpointer selection by DSN (memory, SQLite, Postgres), idempotent side effects keyed by `hash(thread_id, node, intent)` with a durable effect log and world probes, Mermaid rendering with doc sections checked in CI, graph registry.
 - Agent-computer interface (`scio/aci`): `Sandbox` protocol with local, Docker and E2B backends; `repo_search`, `view_file`, `edit_file` (parse- and lint-gated), `run_tests` (failures only), `git_checkpoint`; output truncation with hints; capability tags and the compile-time trifecta check; `ToolBox` dispatcher with tracing and a call cap.

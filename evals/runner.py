@@ -4,9 +4,9 @@ Usage::
 
     python -m evals.runner --suite regression --provider fake --trials 5
 
-The solver is pluggable (``--solver module:Class``). M1 ships :class:`PlaceholderSolver`,
-which exercises the harness end to end (budget, retry, structured output) without a
-sandbox. M3 replaces it with the real graph; the runner and metrics do not change.
+Solvers live in :mod:`evals.solvers` and are chosen per task by ``grader``:
+``placeholder`` → one structured call; ``tests`` → the T0 graph on the task's fixture
+repository, graded by hidden tests. ``--solver module:Class`` overrides for every task.
 """
 
 from __future__ import annotations
@@ -24,10 +24,9 @@ import yaml
 from pydantic import BaseModel, Field
 
 from evals.report import SuiteReport, TrialResult, summarize
+from evals.solvers import EvalTaskLike, GraphSolver, PlaceholderSolver, TrialOutcome
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.core import Harness
-from scio.harness.types import Message
-from scio.prompt.registry import PromptRegistry
 from scio.settings import REPO_ROOT, Settings
 
 TASKS_DIR = REPO_ROOT / "evals" / "tasks"
@@ -48,6 +47,7 @@ class EvalTask(BaseModel):
     trials: int = 5
     budget: TaskBudget = Field(default_factory=TaskBudget)
     grader: Literal["placeholder", "tests"] = "placeholder"
+    hidden_tests: str | None = None
     path: Path
 
     @property
@@ -68,45 +68,30 @@ def load_tasks(root: Path = TASKS_DIR, suite: str | None = None) -> list[EvalTas
     return tasks
 
 
-class TrialOutcome(BaseModel):
-    passed: bool
-    advisor_calls: int = 0
-    advisor_resolved: int = 0
-    notes: str = ""
-
-
 class Solver(Protocol):
-    def solve(self, task: EvalTask, harness: Harness) -> TrialOutcome: ...
+    def solve(self, task: EvalTaskLike, harness: Harness) -> TrialOutcome: ...
 
 
-class PlaceholderAnswer(BaseModel):
-    step_id: str
-    summary: str
-    confidence: Literal["high", "medium", "low"]
+def to_task_like(task: EvalTask) -> EvalTaskLike:
+    return EvalTaskLike(
+        id=task.id,
+        spec=task.spec,
+        path=task.path,
+        hidden_tests=task.hidden_tests,
+        tokens=task.budget.tokens,
+        usd=task.budget.usd,
+    )
 
 
-class PlaceholderSolver:
-    """One structured call through the harness. Passes if the output validates."""
-
-    def __init__(self) -> None:
-        self._prompts = PromptRegistry()
-
-    def solve(self, task: EvalTask, harness: Harness) -> TrialOutcome:
-        system = self._prompts.get("coder").render()
-        request = harness.build_request(
-            "coder",
-            system=system,
-            messages=[
-                Message.user(f"Task:\n{task.spec}\n\nReply with a JSON summary for step S1.")
-            ],
-            max_tokens=512,
-            tags={"task_id": task.id},
-        )
-        result = harness.structured(request, PlaceholderAnswer)
-        return TrialOutcome(passed=result.value.step_id != "", notes=f"attempts={result.attempts}")
+def select_solver(task: EvalTask, override: Solver | None) -> Solver:
+    if override is not None:
+        return override
+    return GraphSolver() if task.grader == "tests" else PlaceholderSolver()
 
 
-def load_solver(spec: str) -> Solver:
+def load_solver(spec: str | None) -> Solver | None:
+    if not spec or spec == "auto":
+        return None
     module_name, _, cls_name = spec.partition(":")
     cls = getattr(importlib.import_module(module_name), cls_name)
     solver: Solver = cls()
@@ -118,7 +103,7 @@ def run_trial(task: EvalTask, trial: int, solver: Solver, settings: Settings) ->
     harness = Harness.from_settings(settings, budget=budget)
     t0 = time.perf_counter()
     try:
-        outcome = solver.solve(task, harness)
+        outcome = solver.solve(to_task_like(task), harness)
         error = None
     except Exception as exc:
         outcome = TrialOutcome(passed=False)
@@ -142,7 +127,7 @@ def run_suite(
     *,
     provider: str | None,
     trials: int | None,
-    solver: Solver,
+    solver: Solver | None = None,
     tasks_dir: Path = TASKS_DIR,
 ) -> SuiteReport:
     settings = Settings(provider_override=provider) if provider else Settings()
@@ -153,7 +138,8 @@ def run_suite(
     k = trials or (max(t.trials for t in tasks) if tasks else 0)
     for task in tasks:
         n = trials or task.trials
-        task_results = [run_trial(task, i + 1, solver, settings) for i in range(n)]
+        chosen = select_solver(task, solver)
+        task_results = [run_trial(task, i + 1, chosen, settings) for i in range(n)]
         results.extend(task_results)
         metrics.append(summarize(task.id, task_results))
     return SuiteReport(
@@ -172,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--suite", choices=["regression", "capability"], default="regression")
     ap.add_argument("--provider", default=None, help="provider override (e.g. fake)")
     ap.add_argument("--trials", type=int, default=None, help="override per-task trial count")
-    ap.add_argument("--solver", default="evals.runner:PlaceholderSolver")
+    ap.add_argument("--solver", default="auto", help="module:Class, or auto (by task grader)")
     ap.add_argument("--out", type=Path, default=RESULTS_DIR)
     ap.add_argument("--min-pass-pow-k", type=float, default=None, help="exit 1 below this")
     args = ap.parse_args(argv)

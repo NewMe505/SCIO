@@ -1,6 +1,6 @@
 # SCIO architecture (Milestone 0)
 
-Status: **M0 approved; M1 and M2 implemented.** Layers 1 and 3 live in `scio/prompt` and `scio/harness`; the State backbone, durable checkpointing with idempotent effects, the ACI tools, the sandbox backends and the GitHub client live in `scio/state`, `scio/graph`, `scio/aci` and `scio/harness/github`. The loop and the tier graphs follow in M3 and M4. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
+Status: **M0 approved; M1, M2 and M3 implemented.** All five layers exist: `scio/prompt`, `scio/context`, `scio/harness`, `scio/loop`, `scio/graph`, plus `scio/aci` and `scio/state`. The T0 tier runs end to end (`scio run`); T1/T2 and the escalation policy follow in M4. This document is the output of the build prompt in [PROMPT.md](PROMPT.md), section "How to respond". Sections: (a) graphs per tier, (b) State, (c) agent contracts, (d) directory tree, (e) milestone plan, (f) assumptions and open questions.
 
 From M2 on, the Mermaid diagrams in section (a) are regenerated from the compiled graph by `scripts/gen_mermaid.py`, and CI fails if this file and the compiled graph disagree.
 
@@ -51,6 +51,55 @@ flowchart TD
   M --> E([END])
   promote --> T1[T1 graph: plan]
 ```
+
+#### T0 as compiled (generated; do not edit by hand)
+
+The section below is produced by `scripts/gen_mermaid.py` from `scio.graph.tiers.t0` and checked in CI. The sketch above is the M0 design; the compiled graph is the truth.
+
+<!-- scio:graph:t0:begin -->
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	intake(intake)
+	route(route)
+	prepare_repo(prepare_repo)
+	t0_loop(t0_loop)
+	verify(verify)
+	git_checkpoint(git_checkpoint)
+	document(document)
+	gate(gate)
+	pr_ready(pr_ready)
+	merge_wait(merge_wait)
+	halt(halt)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> intake;
+	document -.-> gate;
+	document -.-> halt;
+	gate -.-> halt;
+	gate -.-> pr_ready;
+	git_checkpoint --> document;
+	intake --> route;
+	pr_ready --> merge_wait;
+	prepare_repo --> t0_loop;
+	route -.-> halt;
+	route -. &nbsp;prepare&nbsp; .-> prepare_repo;
+	t0_loop -.-> halt;
+	t0_loop -.-> verify;
+	verify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
+	verify -.-> halt;
+	verify -.-> t0_loop;
+	halt --> __end__;
+	merge_wait --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+<!-- scio:graph:t0:end -->
 
 ### T1: standard
 
@@ -657,3 +706,11 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 
 ### M2: GitHub client
 - `GitHubClient` (`scio/harness/github/client.py`) wraps the `gh` CLI through an injectable runner. Every write looks up existing state first (`ensure_branch`, `upsert_issue_comment` by marker, `ensure_draft_pr` by head branch, `mark_ready`), refuses the default branch, and is appended to `client.writes`.
+
+### M3: the T0 run
+- `scio/loop/agent_loop.py` is one worker turn: static system prompt → task projection → tool calls until the model stops, the tool cap (10 in T0) or the model-call cap is hit → one structured call for the typed `WorkerOutput`. The message list is append-only; old tool results are shortened by size (`scio/context/trim.py`), never deleted.
+- `verify` is the only place that decides a feature's status, in this order: the tree differs from the base commit; feature tests exist (from `test_filter` or the worker's `tests_added`) and pass; the whole suite passes; lint is clean. The gate is called afterwards and is overridden in code if any check is failing (ADR 0004).
+- Exits: `success` only via `merge_wait`; `max_iters`, `stall`, `budget` from `check_exit` after a failing verify (or a `BudgetExceeded` inside a worker node); `escalate_human` from a gate rejection, a worker's `needs_design_decision`, or a non-T0 routing in M3. `halt` interrupts only for `escalate_human`.
+- Every side-effecting node (`prepare_repo`, `git_checkpoint`, `document`'s docs commit / push / draft PR, `pr_ready`) goes through `run_effect` with an intent and, where visible in the world, a probe. Commit subjects carry `[scio:<key>]`.
+- `tests/graph/test_t0_fake.py` runs the whole graph on the Fake provider with `evals/fake_scripts.ScriptedResponder`: the happy path (resume through the merge interrupt, three commits, hidden tests green) and one test per exit reason.
+- Offline mode: without `SCIO_GH_REPO` the run never pushes or opens a PR; the PR body is written to the artifact store and `pr_ready` is a no-op.
