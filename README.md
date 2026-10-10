@@ -57,7 +57,7 @@ both suites per config and posts the tables to the job summary.
 | Provider swap is config-only; full suite passes on the Fake provider offline | met | `configs/models.yaml`, CI runs with `SCIO_PROVIDER_OVERRIDE=fake` |
 | Sample task passes with pass^5 ≥ 0.8 within a stated budget | met on the Fake provider | regression suite pass^5 = 1.00 at real-model prices; live run blocked by the placeholder key (ledger I-019) |
 | Advisor calls ≤ cap, each logged with trigger, cost and outcome | met | `EscalationRecord`; `tests/unit/test_escalation.py`, `tests/graph/test_t1_t2_fake.py` |
-| Sample task produces a GitHub PR linked to its issue, template filled, docs in the same PR, CI green | met | [scio-eval-sandbox PR #2](https://github.com/NewMe505/scio-eval-sandbox/pull/2) from issue #1, Fake provider, that repo's CI green |
+| Sample task produces a GitHub PR linked to its issue, template filled, docs in the same PR, CI green | met | Recorded 2026-10-10 on the throwaway repository `NewMe505/scio-eval-sandbox` (issue #1 → PR #2, Fake provider, template filled, docs in the PR, that repo's CI green); the repository was deleted afterwards. Ledger I-028 and the M5 retrospective describe the run |
 
 Calling a model through the harness. Roles, models, effort and prices live only in
 `configs/models.yaml`; code never names a model.
