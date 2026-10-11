@@ -162,6 +162,11 @@ def view_file(sandbox: Sandbox, inp: ViewFileInput) -> str:
         lines = sandbox.read_text(path).splitlines()
     except UnicodeDecodeError as exc:
         raise ToolError(f"not a text file: {path}") from exc
+    except OSError as exc:  # directories raise IsADirectoryError or PermissionError (I-032)
+        raise ToolError(
+            f"not a readable file: {path} ({type(exc).__name__}); "
+            "pass a file path, or use repo_search to list matches in a directory"
+        ) from exc
     total = len(lines)
     if total == 0:
         return f"{path}: empty file"

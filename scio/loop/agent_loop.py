@@ -62,7 +62,7 @@ class AgentLoop:
         prompts: PromptRegistry,
         role: str,
         *,
-        max_model_calls: int = 16,
+        max_model_calls: int = 12,
         max_repairs: int = 2,
     ) -> None:
         self.harness = harness

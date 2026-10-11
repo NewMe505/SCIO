@@ -132,7 +132,12 @@ def step_message(
         parts += ["", tag_context("advisor", guidance)]
     if last_verify:
         parts += ["", tag_context("verify", f"Last verification result:\n{last_verify}")]
-    parts += ["", "Implement this step and its tests, run them, then stop."]
+    parts += [
+        "",
+        "Implement this step and its tests, run them, then stop. In your summary, tests_added "
+        "must list the tests that prove this step's features (pytest node ids or -k keywords), "
+        "existing tests included; verification runs exactly those.",
+    ]
     return "\n".join(parts)
 
 

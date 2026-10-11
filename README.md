@@ -46,7 +46,7 @@ tokens and dollars by role, every escalation with its outcome, and the ledger ti
 
 Evals: `python -m evals.runner --suite regression|capability --provider fake --config evals/configs/<ab>.yaml`
 runs a suite under an A/B role configuration (`sonnet_only`, `sonnet_opus_advisor`, `opus_only`);
-`python -m evals.tune` sweeps the escalation thresholds (ADR 0006). The nightly workflow runs
+`--parallel N` runs a task's trials concurrently. `python -m evals.tune` sweeps the escalation thresholds (ADR 0006). The nightly workflow runs
 both suites per config and posts the tables to the job summary.
 
 ## Acceptance status (PROMPT.md)
@@ -55,7 +55,7 @@ both suites per config and posts the tables to the job summary.
 |---|---|---|
 | Crash mid-run resumes from checkpoint with zero duplicated side effects | met | `tests/durability/test_crash_resume.py`, `tests/graph/test_t0_fake.py::test_resume_after_crash_does_not_duplicate_commits` |
 | Provider swap is config-only; full suite passes on the Fake provider offline | met | `configs/models.yaml`, CI runs with `SCIO_PROVIDER_OVERRIDE=fake` |
-| Sample task passes with pass^5 ≥ 0.8 within a stated budget | met on the Fake provider | regression suite pass^5 = 1.00 at real-model prices; live run blocked by the placeholder key (ledger I-019) |
+| Sample task passes with pass^5 ≥ 0.8 within a stated budget | met, live | t001 on Anthropic (Sonnet 5 worker, Opus 5.5 gate, Haiku router): 5/5 trials, one iteration each, ≈55k tokens and $0.13 per trial against a 150k / $1.50 cap (2026-10-11); Fake-provider regression pass^5 = 1.00 as well |
 | Advisor calls ≤ cap, each logged with trigger, cost and outcome | met | `EscalationRecord`; `tests/unit/test_escalation.py`, `tests/graph/test_t1_t2_fake.py` |
 | Sample task produces a GitHub PR linked to its issue, template filled, docs in the same PR, CI green | met | Recorded 2026-10-10 on the throwaway repository `NewMe505/scio-eval-sandbox` (issue #1 → PR #2, Fake provider, template filled, docs in the PR, that repo's CI green); the repository was deleted afterwards. Ledger I-028 and the M5 retrospective describe the run |
 
@@ -79,6 +79,10 @@ request = harness.build_request("advisor", system=system, messages=[Message.user
 result = harness.structured(request, Verdict)  # validate locally, repair ≤2 times
 print(result.value, result.attempts, harness.summary())
 ```
+
+Credentials: either `ANTHROPIC_API_KEY`, or a Claude login profile created with `ant auth login`
+(the SDK picks it up automatically). A set `ANTHROPIC_API_KEY` always wins over the profile, so unset
+a stale one. Install the CLI from https://github.com/anthropics/anthropic-cli/releases.
 
 Environment (`SCIO_*`, see `scio/settings.py`): `SCIO_PROVIDER_OVERRIDE=fake` routes every
 role to the offline Fake provider (CI does this); `SCIO_OTEL_EXPORTER=console|otlp` turns on

@@ -3,6 +3,6 @@ suite: regression
 title: Document a public API in README and docstrings
 tier_hint: T0
 trials: 5
-budget: { tokens: 80000, usd: 0.8 }
+budget: { tokens: 300000, usd: 3.0 }   # the live router picks T1 for this task; T1 tier budget
 grader: tests
 hidden_tests: hidden/test_docs_hidden.py

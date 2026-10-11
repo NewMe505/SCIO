@@ -8,6 +8,7 @@ reduce into ``explorer_summaries`` as artifact references of at most ~1.5k token
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -33,6 +34,7 @@ from scio.state.models import (
     FeatureItem,
     Plan,
     PlannerOutput,
+    PlanStep,
     Role,
     SCIOState,
     ScopeOutput,
@@ -106,8 +108,9 @@ def fan_out_explore(state: SCIOState) -> list[Send] | str:
 
 
 def _explore_once(ctx: RunContext, question: str, *, tag: str) -> Any:
-    toolbox = ToolBox(ctx.sandbox, EXPLORER_TOOLS, human_gate=False, max_calls=12, role="explorer")
-    loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "explorer", max_model_calls=10)
+    # Read-only context gathering must stay cheap: every turn resends the transcript (I-033).
+    toolbox = ToolBox(ctx.sandbox, EXPLORER_TOOLS, human_gate=False, max_calls=8, role="explorer")
+    loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "explorer", max_model_calls=6)
     result = loop.run_typed(
         explore_message(question, repo_root=ctx.sandbox.root),
         ExplorerSummary,
@@ -151,6 +154,57 @@ def localize(ctx: RunContext) -> Node:
         }
 
     return node
+
+
+_NOOP_STEP_RE = re.compile(
+    r"\b(explore|exploration|investigate|inspect|read-only|no code changes|no changes|"
+    r"verify the current state|locate)\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_steps(
+    steps: list[PlanStep], feature_ids: list[str]
+) -> tuple[list[PlanStep], list[str]]:
+    """Make a plan executable (ledger I-039).
+
+    Drops steps that carry no feature or describe exploration / no-op work (verify can never
+    pass a step that changes nothing), and appends a final step for every feature the plan
+    left uncovered. Returns the steps and human-readable notes of what changed.
+    """
+    notes: list[str] = []
+    kept: list[PlanStep] = []
+    for s in steps:
+        if not s.feature_ids:
+            notes.append(f"plan step {s.id} dropped: no feature ids ({s.description[:60]})")
+            continue
+        if _NOOP_STEP_RE.search(s.description) and not re.search(
+            r"\b(add|implement|write|fix|change|create|update|refactor|remove)\b",
+            s.description,
+            re.IGNORECASE,
+        ):
+            notes.append(
+                f"plan step {s.id} dropped: exploration is not a plan step ({s.description[:60]})"
+            )
+            continue
+        kept.append(s)
+    covered = {fid for s in kept for fid in s.feature_ids}
+    missing = [fid for fid in feature_ids if fid not in covered]
+    if missing:
+        files = sorted({f for s in kept for f in s.files_expected})
+        next_id = f"S{len(kept) + 1}"
+        while any(s.id == next_id for s in kept):
+            next_id = f"S{int(next_id[1:]) + 1}"
+        kept.append(
+            PlanStep(
+                id=next_id,
+                description=f"Implement and test the remaining features {', '.join(missing)}",
+                feature_ids=missing,
+                files_expected=files,
+            )
+        )
+        notes.append(f"plan step {next_id} added for uncovered features {', '.join(missing)}")
+    return kept, notes
 
 
 def summaries_text(ctx: RunContext, state: SCIOState) -> list[str]:
@@ -214,6 +268,7 @@ def plan(ctx: RunContext) -> Node:
                     }
                 )
             )
+        steps, plan_notes = normalize_steps(steps, [f.id for f in features])
         new_plan = Plan(
             version=(previous.version + 1) if previous else 1,
             author=Role.PLANNER,
@@ -230,16 +285,19 @@ def plan(ctx: RunContext) -> Node:
                 "last_error_signature": None,
             }
         )
-        entry = fact(
-            f"plan v{new_plan.version}: {len(steps)} step(s); risks: {'; '.join(out.risks)[:200]}",
-            source=Role.PLANNER,
-        )
+        entries = [
+            fact(
+                f"plan v{new_plan.version}: {len(steps)} step(s); "
+                f"risks: {'; '.join(out.risks)[:200]}",
+                source=Role.PLANNER,
+            )
+        ] + [fact(n, source=Role.SYSTEM) for n in plan_notes]
         return {
             "plan": new_plan,
             "feature_list": features,
             "progress": progress,
             "advisor_guidance": None,
-            "task_ledger": [entry],
+            "task_ledger": entries,
             "phase": "post_plan",
             **ctx.budget_update(),
         }

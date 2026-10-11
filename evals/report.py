@@ -25,6 +25,7 @@ class TrialResult(BaseModel):
     advisor_calls: int = 0
     advisor_resolved: int = 0
     error: str | None = None
+    notes: str = ""
 
 
 class TaskMetrics(BaseModel):

@@ -16,6 +16,7 @@ import importlib
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -132,6 +133,7 @@ def run_trial(task: EvalTask, trial: int, solver: Solver, settings: Settings) ->
         advisor_calls=outcome.advisor_calls,
         advisor_resolved=outcome.advisor_resolved,
         error=error,
+        notes=outcome.notes,
     )
 
 
@@ -143,6 +145,7 @@ def run_suite(
     solver: Solver | None = None,
     tasks_dir: Path = TASKS_DIR,
     config: Path | None = None,
+    parallel: int = 1,
 ) -> SuiteReport:
     kwargs: dict[str, Any] = {}
     if provider:
@@ -158,7 +161,15 @@ def run_suite(
     for task in tasks:
         n = trials or task.trials
         chosen = select_solver(task, solver)
-        task_results = [run_trial(task, i + 1, chosen, settings) for i in range(n)]
+        if parallel > 1:
+            # Trials are independent (own sandbox, checkpoint, budget); only the provider's
+            # rate limit is shared, and the harness retries 429s with backoff.
+            with ThreadPoolExecutor(max_workers=parallel) as pool:
+                task_results = list(
+                    pool.map(lambda i, t=task, c=chosen: run_trial(t, i + 1, c, settings), range(n))
+                )
+        else:
+            task_results = [run_trial(task, i + 1, chosen, settings) for i in range(n)]
         results.extend(task_results)
         metrics.append(summarize(task.id, task_results))
     label = f"{provider or 'config'}" + (f"+{config.stem}" if config else "")
@@ -184,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         "--config", type=Path, default=None, help="A/B role-override YAML (evals/configs/*.yaml)"
     )
     ap.add_argument("--min-pass-pow-k", type=float, default=None, help="exit 1 below this")
+    ap.add_argument("--parallel", type=int, default=1, help="trials to run concurrently per task")
     args = ap.parse_args(argv)
 
     report = run_suite(
@@ -192,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         trials=args.trials,
         solver=load_solver(args.solver),
         config=args.config,
+        parallel=max(1, args.parallel),
     )
     json_path, md_path = report.write(args.out)
     sys.stdout.write(report.to_markdown())

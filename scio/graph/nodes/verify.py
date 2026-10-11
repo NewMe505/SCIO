@@ -37,12 +37,58 @@ def lint(ctx: RunContext) -> str:
     return r.stdout.strip()[:3000] if r.exit_code == 1 else ""
 
 
+SELECTOR_SEP = " ; "
+
+
+def is_path_selector(selector: str) -> bool:
+    """``path::name`` node ids and ``*.py`` paths are positional targets; else ``-k``."""
+    s = selector.strip()
+    return "::" in s or s.endswith(".py") or "/" in s or "\\" in s
+
+
+def selector_input(root: str, selector: str) -> RunTestsInput:
+    """Turn one reported test selector into a ``run_tests`` call (ledger I-031)."""
+    s = selector.strip()
+    if is_path_selector(s):
+        path = s if s.startswith(root) or s[1:3] == ":\\" or s.startswith("/") else f"{root}/{s}"
+        return RunTestsInput(path=path)
+    return RunTestsInput(filter=s)
+
+
+def join_selectors(selectors: list[str]) -> str:
+    return SELECTOR_SEP.join(dict.fromkeys(s.strip() for s in selectors if s.strip()))
+
+
+def split_selectors(test_filter: str) -> list[str]:
+    return [s for s in (x.strip() for x in test_filter.split(SELECTOR_SEP)) if s]
+
+
 def _run(ctx: RunContext, flt: str | None) -> tuple[str, bool]:
     try:
         out = run_tests(ctx.sandbox, RunTestsInput(filter=flt))
     except ToolError as exc:
         return str(exc), False
     return out, out.startswith("all tests passed")
+
+
+def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
+    """Run every selector in a feature's ``test_filter``; all must pass and collect tests."""
+    chunks: list[str] = []
+    ok_all = True
+    for sel in split_selectors(test_filter):
+        inp = selector_input(ctx.sandbox.root, sel)
+        try:
+            out = run_tests(ctx.sandbox, inp)
+            ok = out.startswith("all tests passed")
+        except ToolError as exc:
+            out, ok = str(exc), False
+        if out.startswith("no tests collected"):
+            ok = False
+            out += " (selector matched nothing: use 'path::test_name' or a -k keyword)"
+        label = f"path={inp.path!r}" if inp.path else f"filter={inp.filter!r}"
+        chunks.append(f"[run_tests {label}]\n{out}")
+        ok_all &= ok
+    return "\n\n".join(chunks), ok_all
 
 
 def verify(ctx: RunContext) -> Node:
@@ -58,11 +104,14 @@ def verify(ctx: RunContext) -> Node:
         if changed.startswith("(no changes"):
             tests_ok = False
             no_changes = True
-            outputs.append("[diff] no changes since the base commit; nothing to verify")
+            outputs.append(
+                "[diff] no changes since the base commit; nothing to verify. A step must "
+                "change code or tests; do not treat a step as exploration"
+            )
 
         # 1. Feature tests for the features in scope (the current step, or all in T0).
         reported = state.last_worker_output.tests_added if state.last_worker_output else []
-        fallback = " or ".join(f"({t})" for t in reported) if reported else None
+        fallback = join_selectors(reported) or None
         step = state.current_step()
         scope_ids = (
             set(step.feature_ids) if step is not None else {f.id for f in state.feature_list}
@@ -76,16 +125,30 @@ def verify(ctx: RunContext) -> Node:
         in_scope = [f for f in features if f.id in scope_ids]
         per_filter_ok: dict[str | None, bool] = {}
         for flt in sorted({f.test_filter for f in in_scope if f.test_filter}):
-            out, ok = _run(ctx, flt)
-            if out.startswith("no tests collected"):
-                ok = False
+            out, ok = _run_selectors(ctx, flt)
+            if not ok and fallback and fallback != flt and "matched nothing" in out:
+                # The plan guessed test names before the tests existed (I-037). The tests the
+                # worker actually reports are the ground truth; adopt them if they pass.
+                out2, ok2 = _run_selectors(ctx, fallback)
+                out += f"\n\n[plan filter matched nothing; trying worker-reported tests]\n{out2}"
+                if ok2:
+                    ok = True
+                    features = [
+                        f.model_copy(update={"test_filter": fallback})
+                        if f.id in scope_ids and f.test_filter == flt
+                        else f
+                        for f in features
+                    ]
+                    per_filter_ok[fallback] = True
             per_filter_ok[flt] = ok
             tests_ok &= ok
-            outputs.append(f"[run_tests filter={flt!r}]\n{out}")
+            outputs.append(out)
         if not any(f.test_filter for f in in_scope):
             tests_ok = False
             outputs.append(
-                "[tests] no feature tests reported; add tests and list them in tests_added"
+                "[tests] no feature tests reported. In tests_added, list the pytest node ids "
+                "(tests/test_x.py::test_name) or -k keywords of the tests that prove each "
+                "feature; existing tests count, you do not have to write new ones"
             )
 
         # 2. Whole suite (regressions) and 3. lint.

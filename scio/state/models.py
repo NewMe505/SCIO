@@ -305,8 +305,14 @@ class WorkerOutput(BaseModel):
     needs_design_decision: bool = False
     design_question: str | None = None
     next_action: Literal["verify", "continue", "done"]
-    tests_added: list[str] = Field(default_factory=list)
-    """pytest ``-k`` expressions (or test file paths) that cover the features worked on."""
+    tests_added: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The tests that prove the features worked on, existing or newly written: pytest "
+            "node ids (tests/test_x.py::test_name) or -k keywords. Never empty when a feature "
+            "is claimed done."
+        ),
+    )
     sweep: SweepRecord | None = None
     """Set by the Debugger after a root-cause fix; None for other roles."""
 

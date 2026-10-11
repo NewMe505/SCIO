@@ -42,6 +42,8 @@ class Step:
     """Edits that leave the step failing (same error every time), for escalation tests."""
     fix_edit: Edit | None = None
     """Turns the wrong implementation into the right one (applied once guided by the advisor)."""
+    tests_added: list[str] | None = None
+    """What the worker reports in ``tests_added``; defaults to ``[test_filter]``."""
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,7 @@ SCRIPTS: list[TaskScript] = [
                     Edit("tests/test_slugify.py", "", SLUGIFY_TESTS),
                 ],
                 fix_edit=Edit("textutils/__init__.py", SLUGIFY_WRONG, SLUGIFY_NEW),
+                tests_added=["tests/test_slugify.py::test_slugify_basic", "slugify"],
             )
         ],
         docs=[changelog("`slugify(text)` in `textutils`.")],
@@ -478,7 +481,7 @@ class ScriptedResponder:
         ):
             edits = self._edits_for(role, step, text)
             touched = sorted({f"{self.root}/{e.path}" for e in edits})
-            tests = [step.test_filter]
+            tests = step.tests_added or [step.test_filter]
         return _json(
             {
                 "step_id": step.id if step else "S1",
