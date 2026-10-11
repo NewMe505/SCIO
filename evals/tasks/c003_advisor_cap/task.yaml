@@ -7,5 +7,6 @@ budget: { tokens: 300000, usd: 3.0 }
 grader: tests
 fixture: t002_fix_failing_test
 hidden_tests: hidden/test_paginate_hidden.py
+providers: [fake]   # the scenario switches only exist on the Fake provider (I-042)
 scenario: { coder_mode: wrong_first, advisor_calls_max: 0 }
 expect_pass: false

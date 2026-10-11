@@ -51,6 +51,8 @@ class SuiteReport(BaseModel):
     usd_cap: float | None = None
     """Suite-level spend ceiling; tasks not started because of it are in ``skipped_tasks``."""
     skipped_tasks: list[str] = Field(default_factory=list)
+    not_applicable: list[str] = Field(default_factory=list)
+    """Tasks whose ``providers`` list excludes this provider (not run, not counted)."""
 
     @property
     def usd_total(self) -> float:
@@ -87,7 +89,12 @@ class SuiteReport(BaseModel):
             f"advisor resolution {self.advisor_resolution_rate:.2f}",
             f"spend ${self.usd_total:.4f}"
             + (f" of cap ${self.usd_cap:.2f}" if self.usd_cap is not None else "")
-            + (f" · CAPPED, skipped: {', '.join(self.skipped_tasks)}" if self.capped else ""),
+            + (f" · CAPPED, skipped: {', '.join(self.skipped_tasks)}" if self.capped else "")
+            + (
+                f" · not applicable here: {', '.join(self.not_applicable)}"
+                if self.not_applicable
+                else ""
+            ),
             "",
             "| task | pass@1 | all pass | tokens | $ | latency s | advisor |",
             "|---|---:|:---:|---:|---:|---:|---:|",

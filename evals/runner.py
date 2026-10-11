@@ -55,6 +55,9 @@ class EvalTask(BaseModel):
     """Fake-provider switches (``coder_mode``, ``advisor_verdict``, ``advisor_calls_max``)."""
     expect_pass: bool = True
     """False for scenarios whose correct outcome is a halt (e.g. the advisor cap)."""
+    providers: list[str] = Field(default_factory=list)
+    """Providers this task is meaningful on (empty = all). Scenario tasks inject failure modes
+    into the Fake provider and are listed as ``[fake]`` (ledger I-042)."""
     path: Path
 
     @property
@@ -160,7 +163,11 @@ def run_suite(
     metrics = []
     k = trials or (max(t.trials for t in tasks) if tasks else 0)
     skipped: list[str] = []
+    not_applicable: list[str] = []
     for task in tasks:
+        if task.providers and (provider or "config") not in task.providers:
+            not_applicable.append(task.id)
+            continue
         spent = sum(r.usd for r in results)
         if max_usd is not None and spent >= max_usd:
             skipped.append(task.id)  # the cap is checked before each task starts
@@ -189,6 +196,7 @@ def run_suite(
         results=results,
         usd_cap=max_usd,
         skipped_tasks=skipped,
+        not_applicable=not_applicable,
     )
 
 

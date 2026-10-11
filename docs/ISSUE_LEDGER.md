@@ -232,6 +232,22 @@ Template:
 - Sweep: `evals/report.py` and `scio report` read the guard's snapshot, so they follow. `Usage.total` stays for raw accounting in the ledger and spans. `tests/unit/test_billable_tokens.py`
 - Resolved: 2026-10-11 · Status: resolved
 
+### I-042 · Scenario tasks ran live, where their failure modes do not exist
+- Found: 2026-10-11 · first nightly live run: capability pass@1 0.67 because c003 ("advisor cap, expected not to pass") was solved by the real model three times out of three
+- Symptom: a capability number that measures nothing: the `scenario` switches configure the Fake responder only, so on Anthropic c001–c003 are just the underlying tasks, and c003's `expect_pass: false` turns every success into a failure
+- Root cause: tasks carried no statement of which providers they are meaningful on
+- Fix: `providers: [fake]` on the three scenario tasks; the runner skips tasks whose list excludes the current provider and the report lists them as "not applicable here"
+- Sweep: every other task has an empty list (meaningful everywhere). Future live-only scenarios (e.g. a real failing CI) will carry `providers: [anthropic]`
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-043 · Live t003 trial ended `escalate_human` with every check green
+- Found: 2026-10-11 · first nightly live run: regression t003 trial 1 of 3, `exit=escalate_human`, 3 iterations, hidden tests passing on the final tree (the other two trials passed; pass^3 0.80)
+- Symptom: a correct run stopped for a human instead of merging; the per-run artifacts were not kept
+- Root cause: unknown; candidates are the gate returning `replan`/`escalate_human` on a passing tree, or a worker setting `needs_design_decision`. The run report (`.scio/reports`) would show which
+- Fix: pending. Next occurrence: re-run t003 with `GraphSolver(keep_dirs=True)` and read `last_gate` and the ledger; if it is the gate, feed it the docs-check and diff more precisely
+- Sweep: n/a until diagnosed
+- Resolved: — · Status: open
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
