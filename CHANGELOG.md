@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-10-11
 ### Fixed
 - Token budgets count billable-equivalent tokens (cache reads at 0.1x, writes at 1.25x) so prompt caching lowers the count it enforces (I-041).
 - Prompt caching now covers the conversation: a third breakpoint on the last message block makes each worker turn re-read its transcript at cache price (I-040, `docs/IDEAS_TRIAGE.md`).
