@@ -11,7 +11,7 @@ from scio.graph.nodes.common import diff_stat, fact
 from scio.graph.run_context import RunContext
 from scio.loop.escalation import decide, exit_for
 from scio.loop.exits import check_exit
-from scio.state.models import FeatureStatus, Role, SCIOState
+from scio.state.models import ExitReason, FeatureStatus, Role, SCIOState
 from scio.state.signatures import advance
 
 Node = Callable[[SCIOState], dict[str, Any]]
@@ -205,6 +205,10 @@ def verify(ctx: RunContext) -> Node:
         triage_decision = None
         if not all_ok and exit_reason is None:
             exit_reason = check_exit(progress, ctx.budget, ctx.limits)
+        if all_ok and exit_reason is None and progress.stall_count > ctx.limits.max_stall:
+            # Passing verifies that change nothing (no new commit, same step) are a loop,
+            # not progress; the stall cap applies to them too (I-046).
+            exit_reason = ExitReason.STALL
         if not all_ok and exit_reason is None and plan is not None:
             probe = state.model_copy(update={"progress": progress, "feature_list": features})
             triage_decision = decide(probe, ctx.escalation, root=ctx.sandbox.root)

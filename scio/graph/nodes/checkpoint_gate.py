@@ -118,27 +118,44 @@ def gate(ctx: RunContext) -> Node:
                     "reasoning": "overridden: feature checks are not all passing. " + out.reasoning,
                 }
             )
-        exit_reason = None if out.verdict == "pass" else ExitReason.ESCALATE_HUMAN
         entry = decision(
             f"gate verdict {out.verdict}: {out.reasoning[:300]}"
             + (f" unmet: {out.unmet_acceptance}" if out.unmet_acceptance else ""),
             source=Role.GATE,
         )
-        return {
-            "last_gate": out,
-            "exit_reason": exit_reason,
-            "task_ledger": [entry],
-            "phase": "pr_ready" if out.verdict == "pass" else "halted",
-            **ctx.budget_update(),
-        }
+        patch: dict[str, Any] = {"last_gate": out, "task_ledger": [entry], **ctx.budget_update()}
+        if out.verdict == "pass":
+            patch.update({"exit_reason": None, "phase": "pr_ready"})
+        elif out.verdict == "replan" and state.plan is not None and state.progress.gate_replans < 1:
+            # ARCHITECTURE: gate --replan--> plan. Once per run; a second replan is a human's
+            # call. The planner reads the gate's reasons as the revision reason (I-043).
+            unmet = "; ".join(out.unmet_acceptance) or "(none listed)"
+            patch.update(
+                {
+                    "exit_reason": None,
+                    "phase": "plan",
+                    "advisor_guidance": f"gate replan. Unmet acceptance: {unmet}. {out.reasoning}",
+                    "progress": state.progress.model_copy(
+                        update={"gate_replans": state.progress.gate_replans + 1}
+                    ),
+                }
+            )
+            patch["task_ledger"].append(
+                fact("gate replan: returning to plan (1 of 1 allowed)", source=Role.SYSTEM)
+            )
+        else:
+            patch.update({"exit_reason": ExitReason.ESCALATE_HUMAN, "phase": "halted"})
+        return patch
 
     return node
 
 
-def after_gate(state: SCIOState) -> Literal["pr_ready", "halt"]:
-    return (
-        "pr_ready" if state.last_gate is not None and state.last_gate.verdict == "pass" else "halt"
-    )
+def after_gate(state: SCIOState) -> Literal["pr_ready", "plan", "halt"]:
+    if state.last_gate is None or state.exit_reason is not None:
+        return "halt"
+    if state.last_gate.verdict == "pass":
+        return "pr_ready"
+    return "plan" if state.phase == "plan" else "halt"
 
 
 def pr_ready(ctx: RunContext) -> Node:

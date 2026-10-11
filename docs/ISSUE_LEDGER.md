@@ -244,9 +244,18 @@ Template:
 - Found: 2026-10-11 · first nightly live run: regression t003 trial 1 of 3, `exit=escalate_human`, 3 iterations, hidden tests passing on the final tree (the other two trials passed; pass^3 0.80)
 - Symptom: a correct run stopped for a human instead of merging; the per-run artifacts were not kept
 - Root cause: unknown; candidates are the gate returning `replan`/`escalate_human` on a passing tree, or a worker setting `needs_design_decision`. The run report (`.scio/reports`) would show which
-- Fix: pending. Diagnosis attempt 2026-10-11 15:30: three t003 trials with state capture (scratch script wrapping `run_graph`/`resume_graph`) all died in `route` on I-044 before any model call ($0 spent); the profile must be re-logged (`ant auth login`) before the next attempt. Candidate noted while reading the gate: `gate` maps a `replan` verdict to `ExitReason.ESCALATE_HUMAN` as well (`checkpoint_gate.py`), so a gate that merely asks for another pass also halts for a human
-- Sweep: n/a until diagnosed
-- Resolved: — · Status: open (blocked on a fresh profile)
+- Root cause (inferred, not reproduced): six further live t003 trials with state capture all passed ($2.33; first attempt died on I-044 at $0). Every passing gate verdict carried the same caveats: "no separate docs-check output" (the fixture has no docs check, so `gate_message` omitted the section) and "the docstring's wording cannot be inspected from the diff summary alone". A verdict that acts on those caveats is `replan`, and `gate` mapped `replan` to `ExitReason.ESCALATE_HUMAN`, although ARCHITECTURE draws `gate --replan--> plan`. So one draw in seven turned a pass-worthy run into a human escalation
+- Fix: (1) `gate_message` always carries a docs-check line (`clean: no docs-check failures reported` when there is nothing to run); (2) gate prompt v2 says the diff is a stat, a criterion is evidenced by passing feature tests, and `replan` means more work would meet it; (3) `gate` returns to `plan` on the first `replan` of a planned run (`progress.gate_replans`, cap 1), passing its reasons as the plan revision reason; the planner appends a step when every step is already done; T0 and a second replan still halt for a human. `tests/graph/test_gate_replan.py`
+- Sweep: every verdict-to-edge mapping checked against the ARCHITECTURE diagrams: advisor (`continue`/`change_approach`/`replan`/`escalate_human`) matched; gate did not. Exposed I-046 in the process
+- Resolved: 2026-10-11 · Status: resolved (nightly rows will show a `replan` instead of an escalation if the draw recurs)
+
+### I-046 · A worker's reported `step_id` moved the run onto a finished step; passing verifies looped without limit
+- Found: 2026-10-11 · `tests/graph/test_gate_replan.py` hung (first run of the gate-replan path); checkpoint dump showed 24 iterations, stall 22, `current_step_id=S1` (done) while `S2` stayed open
+- Symptom: coder → verify (all checks passed) → checkpoint (nothing pending) → implement → … forever; no exit reason, because `check_exit` ran only after a failing verify
+- Root cause: two defects. `implement.py` wrote `output.step_id or current_step_id`, so a model naming the wrong step (the scripted coder names `S1` for unknown steps; a live model can do the same) changed the plan's current step; and the stall counter was advanced on passing verifies but never compared to `max_stall`, so a pass that changed nothing was not an exit
+- Fix: the plan owns the current step (`current_step_id or output.step_id`); a passing verify with `stall_count > max_stall` exits `STALL`. `test_worker_cannot_move_the_run_onto_a_finished_step` (t004, three steps, iterations ≤ 4)
+- Sweep: `grep -rn "current_step_id" scio`: the other writer from model output is `worker.py` (T0, no plan, informational only; left as is). `grep -n "check_exit"`: the only call was in the failing branch of verify. Guard: every pass through verify now has a cap, so no graph edge can loop unbounded on green checks
+- Resolved: 2026-10-11 · Status: resolved
 
 ### I-044 · Parallel live trials raced on OAuth refresh-token rotation; the profile's refresh token died
 - Found: 2026-10-11 · I-043 diagnosis run, `evals.runner` with `--parallel 3` on the Anthropic profile, access token expired 13h earlier

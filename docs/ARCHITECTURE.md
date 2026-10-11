@@ -174,6 +174,7 @@ graph TD;
 	document -.-> gate;
 	document -.-> halt;
 	gate -.-> halt;
+	gate -.-> plan;
 	gate -.-> pr_ready;
 	git_checkpoint -.-> document;
 	git_checkpoint -.-> implement;
@@ -285,6 +286,7 @@ graph TD;
 	document -.-> halt;
 	explore --> plan;
 	gate -.-> halt;
+	gate -.-> plan;
 	gate -.-> pr_ready;
 	git_checkpoint -.-> document;
 	git_checkpoint -.-> implement;
@@ -856,7 +858,7 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 ### M3: the T0 run
 - `scio/loop/agent_loop.py` is one worker turn: static system prompt → task projection → tool calls until the model stops, the tool cap (10 in T0) or the model-call cap is hit → one structured call for the typed `WorkerOutput`. The message list is append-only; old tool results are shortened by size (`scio/context/trim.py`), never deleted.
 - `verify` is the only place that decides a feature's status, in this order: the tree differs from the base commit; feature tests exist (from `test_filter` or the worker's `tests_added`) and pass; the whole suite passes; lint is clean. The gate is called afterwards and is overridden in code if any check is failing (ADR 0004).
-- Exits: `success` only via `merge_wait`; `max_iters`, `stall`, `budget` from `check_exit` after a failing verify (or a `BudgetExceeded` inside a worker node); `escalate_human` from a gate rejection, a worker's `needs_design_decision`, or a non-T0 routing in M3. `halt` interrupts only for `escalate_human`.
+- Exits: `success` only via `merge_wait`; `max_iters`, `stall`, `budget` from `check_exit` after a failing verify (or a `BudgetExceeded` inside a worker node); `escalate_human` from a gate `escalate_human` verdict, a gate `replan` on T0 or a second gate `replan` on T1/T2 (the first returns to `plan` with the gate's reasons as the revision reason, I-043), a worker's `needs_design_decision`, or a non-T0 routing in M3. `halt` interrupts only for `escalate_human`.
 - Every side-effecting node (`prepare_repo`, `git_checkpoint`, `document`'s docs commit / push / draft PR, `pr_ready`) goes through `run_effect` with an intent and, where visible in the world, a probe. Commit subjects carry `[scio:<key>]`.
 - `tests/graph/test_t0_fake.py` runs the whole graph on the Fake provider with `evals/fake_scripts.ScriptedResponder`: the happy path (resume through the merge interrupt, three commits, hidden tests green) and one test per exit reason.
 - Offline mode: without `SCIO_GH_REPO` the run never pushes or opens a PR; the PR body is written to the artifact store and `pr_ready` is a no-op.

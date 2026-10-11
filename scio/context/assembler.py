@@ -135,7 +135,7 @@ def gate_message(
         "",
         tag_context("verify", f"Tests:\n{test_output}\n\nLint:\n{lint_output or 'clean'}"),
     ]
-    if docs_check:
-        parts += ["", tag_context("docs-check", docs_check)]
+    # Always present, so the gate never reads silence as a missing check (I-043).
+    parts += ["", tag_context("docs-check", docs_check or "clean: no docs-check failures reported")]
     parts += ["", "Is the objective actually met? Reply as JSON matching the schema."]
     return "\n".join(parts)
