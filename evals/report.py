@@ -48,6 +48,17 @@ class SuiteReport(BaseModel):
     k: int
     tasks: list[TaskMetrics]
     results: list[TrialResult] = Field(default_factory=list)
+    usd_cap: float | None = None
+    """Suite-level spend ceiling; tasks not started because of it are in ``skipped_tasks``."""
+    skipped_tasks: list[str] = Field(default_factory=list)
+
+    @property
+    def usd_total(self) -> float:
+        return sum(r.usd for r in self.results)
+
+    @property
+    def capped(self) -> bool:
+        return bool(self.skipped_tasks)
 
     @property
     def pass_at_1(self) -> float:
@@ -74,6 +85,9 @@ class SuiteReport(BaseModel):
             f"pass@1 **{self.pass_at_1:.2f}** · pass^{self.k} **{self.pass_pow_k:.2f}** · "
             f"advisor call rate {self.advisor_call_rate:.2f} · "
             f"advisor resolution {self.advisor_resolution_rate:.2f}",
+            f"spend ${self.usd_total:.4f}"
+            + (f" of cap ${self.usd_cap:.2f}" if self.usd_cap is not None else "")
+            + (f" · CAPPED, skipped: {', '.join(self.skipped_tasks)}" if self.capped else ""),
             "",
             "| task | pass@1 | all pass | tokens | $ | latency s | advisor |",
             "|---|---:|:---:|---:|---:|---:|---:|",

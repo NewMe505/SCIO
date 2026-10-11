@@ -30,29 +30,34 @@ jobs:
       - name: Install
         run: uv sync --all-extras --group dev
 
-      # The Anthropic key is a placeholder on this project (ledger I-019): the Fake provider
-      # measures control-flow cost at real-model prices. Set ANTHROPIC_API_KEY as a repository
-      # secret to run live; the step below switches automatically.
+      # Live runs need an ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN repository secret; a Claude
+      # login profile cannot run here (interactive, machine-bound), so the local scheduled task
+      # (scripts/nightly_live.py) is the live path until a secret exists. Without one the Fake
+      # provider measures control-flow cost at real-model prices. Each suite has a cost cap
+      # (--max-usd) that applies on either provider; on the Fake it is never reached.
       - name: Choose provider
         id: provider
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
         run: |
-          if [ -n "${ANTHROPIC_API_KEY}" ]; then echo "name=anthropic" >> "$GITHUB_OUTPUT"; else echo "name=fake" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "${ANTHROPIC_API_KEY}${ANTHROPIC_AUTH_TOKEN}" ]; then echo "name=anthropic" >> "$GITHUB_OUTPUT"; else echo "name=fake" >> "$GITHUB_OUTPUT"; fi
 
       - name: Capability suite (${{ matrix.config }})
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
         run: |
           uv run python -m evals.runner --suite capability --provider ${{ steps.provider.outputs.name }} \
-            --config evals/configs/${{ matrix.config }}.yaml --trials 5 --out evals/results
+            --config evals/configs/${{ matrix.config }}.yaml --trials 3 --parallel 3 --max-usd 6 --out evals/results
 
       - name: Regression suite (${{ matrix.config }})
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
         run: |
           uv run python -m evals.runner --suite regression --provider ${{ steps.provider.outputs.name }} \
-            --config evals/configs/${{ matrix.config }}.yaml --trials 5 --out evals/results
+            --config evals/configs/${{ matrix.config }}.yaml --trials 3 --parallel 3 --max-usd 8 --out evals/results
 
       - name: Post results to the job summary
         if: always()
