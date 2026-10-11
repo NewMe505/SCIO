@@ -10,8 +10,6 @@ Shape of a turn (append-only message history, static prefix first for caching):
 The loop never decides success. ``verify`` (tests, lint) does.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any, Literal
 

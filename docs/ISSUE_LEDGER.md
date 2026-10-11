@@ -76,9 +76,9 @@ Template:
 - Found: 2026-10-10 · M1 · `python scripts/gen_api_docs.py`
 - Symptom: `Error parsing type annotation StructuredResult[T] ... name 'T' is not defined` (warnings; docs still built)
 - Root cause: ruff's `UP047` rewrote generics to `def f[T: BaseModel](...)`; pdoc evaluates the stringified annotations and cannot see the scoped type parameter
-- Fix: none yet (cosmetic)
-- Sweep: only `scio/prompt/repair.py` uses PEP 695 generics; if the warning matters, drop the `__future__` import in that module
-- Resolved: — · Status: open (low)
+- Fix: `scio/prompt/repair.py` and `scio/loop/agent_loop.py` no longer import `annotations` from `__future__`; their generics evaluate at definition time and pdoc resolves them. `python scripts/gen_api_docs.py` prints zero warnings
+- Sweep: four modules mix PEP 695 generics with the future import (`repair.py`, `agent_loop.py`, `graph/effects.py`, `harness/retry.py`); only the first two produced warnings because only they expose the type parameter in a public signature. Rule: a module that defines a PEP 695 generic in a public signature must not use the future import
+- Resolved: 2026-10-10 · Status: resolved
 
 ### I-010 · Backslash escapes unescaped when Python patch scripts are passed through the shell tool
 - Found: 2026-10-10 · M1 · patching `evals/report.py` and `CONTRIBUTING.md` from a Python heredoc; found by the file-change notice and `grep -n 'newline='`
@@ -132,9 +132,25 @@ Template:
 - Found: 2026-10-10 · M2 · `docker --version` → command not found on the dev machine; no E2B key
 - Symptom: `DockerSandbox` and `E2BSandbox` are verified only through injected runners and fake clients
 - Root cause: environment
-- Fix: pending. Needs one run of a gated live test on a machine with Docker, and one with `E2B_API_KEY`
+- Fix: `tests/live/test_docker_live.py` runs the real `DockerSandbox` (exec, files through the mount, network off, timeout kill, non-zero exit) wherever a Docker daemon is reachable and skips elsewhere. GitHub's ubuntu runners have Docker, so the project's own CI exercises it on every PR from this change on. The E2B half is split out as I-029
+- Sweep: the Docker live test also checks that a timed-out container is actually gone (`docker ps` empty), which the unit test could only assert by command construction
+- Resolved: 2026-10-10 (Docker) · Status: resolved
+
+### I-030 · `import scio.prompt` alone was a circular import since M1
+- Found: 2026-10-10 · I-008 fix · the post-patch import guard from pre-flight item 6 (`python -c "import scio.prompt.repair ..."`)
+- Symptom: `ImportError: cannot import name 'StructuredResult' from partially initialized module 'scio.prompt.repair'`
+- Root cause: `scio.harness.core` imported `scio.prompt.repair` at module level, and `repair` imports `scio.harness.failures`, which runs `scio/harness/__init__.py`, which imports `core`. Entering through the harness first (what every test and the CLI do) happens to work; entering through `scio.prompt` does not. Present since M1 and never exercised
+- Fix: `core` imports `structured_call` inside `Harness.structured` and keeps `StructuredResult` under `TYPE_CHECKING`
+- Sweep: `tests/unit/test_imports.py` imports sixteen modules one at a time in a fresh `python -I` subprocess, so any future cycle fails CI regardless of test import order
+- Resolved: 2026-10-10 · Status: resolved
+
+### I-029 · E2B backend not exercised live (no API key)
+- Found: 2026-10-10 · M5 follow-up, split from I-016
+- Symptom: `E2BSandbox` is verified with a fake client only
+- Root cause: no `E2B_API_KEY` on this project
+- Fix: pending. `tests/live/test_e2b_live.py` runs exec, files and the network-off check when the key is set
 - Sweep: n/a
-- Resolved: — · Status: open
+- Resolved: — · Status: open (needs a key)
 
 ### I-017 · `scio/aci/sandbox/` never committed: swallowed by a broad `.gitignore` pattern
 - Found: 2026-10-10 · M2 · first CI run on PR #4, "Lint" step
