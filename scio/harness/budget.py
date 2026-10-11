@@ -80,8 +80,9 @@ class BudgetGuard:
                 )
 
     def record(self, usage: Usage, usd: float) -> None:
+        """Account actual usage. Tokens are *billable* tokens (cache reads at 0.1x, I-041)."""
         with self._lock:
-            self._tokens_used += usage.total
+            self._tokens_used += usage.billable
             self._usd_used += usd
             self._calls += 1
 

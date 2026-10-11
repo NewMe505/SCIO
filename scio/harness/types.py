@@ -135,6 +135,20 @@ class Usage(BaseModel):
             + self.cache_write_tokens
         )
 
+    @property
+    def billable(self) -> int:
+        """Tokens weighted by what they cost relative to fresh input (ledger I-041).
+
+        Cache reads bill at about 0.1x and cache writes at 1.25x on Anthropic, so a budget
+        that counted raw tokens would punish prompt caching for lowering the bill.
+        """
+        return int(
+            self.input_tokens
+            + self.output_tokens
+            + 0.1 * self.cache_read_tokens
+            + 1.25 * self.cache_write_tokens
+        )
+
     def __add__(self, other: Usage) -> Usage:
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,

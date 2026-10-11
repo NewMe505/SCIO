@@ -131,7 +131,14 @@ def test_anthropic_kwargs_shape_and_cache_breakpoints() -> None:
         "tool_use_id": "t1",
         "content": "contents",
         "is_error": True,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},  # conversation breakpoint (I-040)
     }
+    assert "cache_control" not in m[0]["content"][0] and "cache_control" not in m[1]["content"][-1]
+
+
+def test_anthropic_conversation_breakpoint_can_be_disabled() -> None:
+    kw = A.build_kwargs(_req(), cache=CachePolicy(messages=False), cache_min_tokens=0)
+    assert all("cache_control" not in b for msg in kw["messages"] for b in msg["content"])
 
 
 def test_anthropic_skips_cache_marker_below_model_minimum() -> None:
