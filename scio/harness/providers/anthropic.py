@@ -71,10 +71,16 @@ def build_kwargs(
     schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Translate a :class:`CompletionRequest` into ``messages.create`` keyword arguments."""
+    messages = _to_anthropic_messages(request.messages)
+    if cache.messages and messages and messages[-1]["content"]:
+        # Third breakpoint (after system and tools): the whole conversation so far. Each
+        # worker turn appends to an append-only transcript, so the previous prefix is a
+        # cache hit at 0.1x instead of a full-price re-read (ledger I-040).
+        messages[-1]["content"][-1]["cache_control"] = cache.control()
     kw: dict[str, Any] = {
         "model": request.model,
         "max_tokens": request.max_tokens,
-        "messages": _to_anthropic_messages(request.messages),
+        "messages": messages,
     }
     if request.system:
         prefix_tokens = estimate_tokens(len(request.system))

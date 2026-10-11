@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Fixed
+- Token budgets count billable-equivalent tokens (cache reads at 0.1x, writes at 1.25x) so prompt caching lowers the count it enforces (I-041).
+- Prompt caching now covers the conversation: a third breakpoint on the last message block makes each worker turn re-read its transcript at cache price (I-040, `docs/IDEAS_TRIAGE.md`).
 - A tool crash (e.g. `view_file` on a directory) is returned to the model as an error result instead of ending the run (I-032).
 - Budget pre-check reserves half of `max_tokens` instead of all of it; explorer loops capped at 6 model calls / 8 tool calls; small task budgets raised to the tier the live router picks (I-033, I-035).
 - `tests_added` wording: the tests that *prove* the features, existing or new; bug-fix tasks no longer loop on "add tests" (I-034).

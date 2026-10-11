@@ -15,6 +15,8 @@ from typing import Any, Literal
 class CachePolicy:
     system: bool = True
     tools: bool = True
+    messages: bool = True
+    """Breakpoint on the last message block so a growing transcript is re-read at cache price."""
     ttl: Literal["5m", "1h"] | None = None
     """None means the provider default (5 minutes on Anthropic)."""
 

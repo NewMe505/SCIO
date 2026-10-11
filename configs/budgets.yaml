@@ -1,4 +1,6 @@
 # Per-tier run budgets (assumption F-7). M5 tunes these from eval data.
+# tokens_max counts billable-equivalent tokens: fresh input + output + 0.1 x cache reads
+# + 1.25 x cache writes (ledger I-041). usd_max is the hard limit.
 tiers:
   T0: { tokens_max: 100000,  usd_max: 0.50, advisor_calls_max: 0, max_iters: 10, max_stall: 2 }
   T1: { tokens_max: 300000,  usd_max: 2.00, advisor_calls_max: 3, max_iters: 30, max_stall: 2 }

@@ -101,6 +101,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Milestone 0 design (graphs, State, agent contracts, directory tree, milestone plan)
 - [docs/PROMPT.md](docs/PROMPT.md): the build spec / generation prompt
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
+- [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
 - [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)

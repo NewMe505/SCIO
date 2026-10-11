@@ -216,6 +216,22 @@ Template:
 - Sweep: the advisor's `revised_steps` go through the same normalisation. Verify's "no changes" message now says a step must change code or tests. `tests/unit/test_plan_normalization.py` covers the drop, the cover, the untouched and the empty cases
 - Resolved: 2026-10-11 · Status: resolved (pending live confirmation)
 
+### I-040 · The conversation was never cached: every worker call re-billed its whole transcript
+- Found: 2026-10-11 · per-role ledger of the live t005 run: coder 6 calls, 21,485 fresh input tokens, 5,865 cache-read, 0 cache writes on the conversation; t003 spent 202k of 283k tokens in 31 coder calls the same way
+- Symptom: worker turns cost roughly the square of their length (`docs/IDEAS_TRIAGE.md` item 2)
+- Root cause: the Anthropic adapter placed cache breakpoints on the system prompt and the tool list only. The append-only transcript is the ideal cache prefix and had no breakpoint, so each call re-read it at full price
+- Fix: a third breakpoint on the last content block of the last message (`CachePolicy.messages`, default on); the previous transcript is then a cache read at 0.1× (0.05× on Opus 5.5)
+- Sweep: four breakpoints are allowed per request; SCIO now uses three. The OpenAI adapter relies on the provider's automatic prefix caching and needs no change. Measured on a live t003 run in the same PR
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-041 · The token budget counted cache reads at full weight, so caching could not help it
+- Found: 2026-10-11 · live t003 right after I-040: coder fresh input 64 tokens, 184k cache-read, 52k cache-write; `exit=budget` at 284k "tokens" with the work done and $0.46 spent against a $3 cap
+- Symptom: caching cut the bill by about a quarter on a chatty run but the token guard still saw the raw sum and halted the run
+- Root cause: `BudgetGuard.record` added `Usage.total` (every token kind at weight 1). The spec's token budget is a cost proxy; after I-040 most tokens are cache reads billed at 0.1×
+- Fix: `Usage.billable` (fresh + output + 0.1 × cache reads + 1.25 × cache writes) is what the guard, the state budget and the eval `tokens` column count. The dollar cap is unchanged and remains the hard limit
+- Sweep: `evals/report.py` and `scio report` read the guard's snapshot, so they follow. `Usage.total` stays for raw accounting in the ledger and spans. `tests/unit/test_billable_tokens.py`
+- Resolved: 2026-10-11 · Status: resolved
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
