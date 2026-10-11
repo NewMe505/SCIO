@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- Suite cost cap: `evals/runner --max-usd`; the report records spend, cap and skipped tasks.
+- Nightly live suite: `scripts/nightly_live.py` (profile auth, cost cap, rows in `docs/EVAL_HISTORY.md`) registered as a Windows scheduled task on the dev machine; the GitHub nightly workflow gained the cap, parallel trials and auth-token secret support.
 
 ## [0.2.0] - 2026-10-11
 ### Fixed

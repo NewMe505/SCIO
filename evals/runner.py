@@ -55,6 +55,9 @@ class EvalTask(BaseModel):
     """Fake-provider switches (``coder_mode``, ``advisor_verdict``, ``advisor_calls_max``)."""
     expect_pass: bool = True
     """False for scenarios whose correct outcome is a halt (e.g. the advisor cap)."""
+    providers: list[str] = Field(default_factory=list)
+    """Providers this task is meaningful on (empty = all). Scenario tasks inject failure modes
+    into the Fake provider and are listed as ``[fake]`` (ledger I-042)."""
     path: Path
 
     @property
@@ -146,6 +149,7 @@ def run_suite(
     tasks_dir: Path = TASKS_DIR,
     config: Path | None = None,
     parallel: int = 1,
+    max_usd: float | None = None,
 ) -> SuiteReport:
     kwargs: dict[str, Any] = {}
     if provider:
@@ -158,7 +162,16 @@ def run_suite(
     results: list[TrialResult] = []
     metrics = []
     k = trials or (max(t.trials for t in tasks) if tasks else 0)
+    skipped: list[str] = []
+    not_applicable: list[str] = []
     for task in tasks:
+        if task.providers and (provider or "config") not in task.providers:
+            not_applicable.append(task.id)
+            continue
+        spent = sum(r.usd for r in results)
+        if max_usd is not None and spent >= max_usd:
+            skipped.append(task.id)  # the cap is checked before each task starts
+            continue
         n = trials or task.trials
         chosen = select_solver(task, solver)
         if parallel > 1:
@@ -181,6 +194,9 @@ def run_suite(
         k=k,
         tasks=metrics,
         results=results,
+        usd_cap=max_usd,
+        skipped_tasks=skipped,
+        not_applicable=not_applicable,
     )
 
 
@@ -196,6 +212,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--min-pass-pow-k", type=float, default=None, help="exit 1 below this")
     ap.add_argument("--parallel", type=int, default=1, help="trials to run concurrently per task")
+    ap.add_argument(
+        "--max-usd", type=float, default=None, help="stop starting tasks once spend reaches this"
+    )
     args = ap.parse_args(argv)
 
     report = run_suite(
@@ -205,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         solver=load_solver(args.solver),
         config=args.config,
         parallel=max(1, args.parallel),
+        max_usd=args.max_usd,
     )
     json_path, md_path = report.write(args.out)
     sys.stdout.write(report.to_markdown())

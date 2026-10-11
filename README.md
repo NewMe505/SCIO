@@ -46,7 +46,17 @@ tokens and dollars by role, every escalation with its outcome, and the ledger ti
 
 Evals: `python -m evals.runner --suite regression|capability --provider fake --config evals/configs/<ab>.yaml`
 runs a suite under an A/B role configuration (`sonnet_only`, `sonnet_opus_advisor`, `opus_only`);
-`--parallel N` runs a task's trials concurrently. `python -m evals.tune` sweeps the escalation thresholds (ADR 0006). The nightly workflow runs
+`--parallel N` runs a task's trials concurrently; `--max-usd X` stops starting tasks once the suite's
+spend reaches X (the report says what was skipped). `python -m evals.tune` sweeps the escalation
+thresholds (ADR 0006).
+
+Nightly live suite: `python scripts/nightly_live.py` runs regression and capability on Anthropic
+under a total cost cap (default $10), using the `ant auth login` profile, and appends one row per
+suite to [docs/EVAL_HISTORY.md](docs/EVAL_HISTORY.md). On the dev machine it is registered as the
+Windows scheduled task `SCIO nightly live evals` (03:17 daily); remove it with
+`schtasks /delete /tn "SCIO nightly live evals" /f`. The GitHub nightly workflow runs the same
+capped commands and switches to the live provider only when an `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` repository secret exists. The nightly workflow runs
 both suites per config and posts the tables to the job summary.
 
 ## Acceptance status (PROMPT.md)

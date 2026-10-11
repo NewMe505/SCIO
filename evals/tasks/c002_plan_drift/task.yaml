@@ -7,4 +7,5 @@ budget: { tokens: 400000, usd: 4.0 }
 grader: tests
 fixture: t004_two_features
 hidden_tests: hidden/test_shapes_hidden.py
+providers: [fake]   # the scenario switches only exist on the Fake provider (I-042)
 scenario: { coder_mode: drift }
