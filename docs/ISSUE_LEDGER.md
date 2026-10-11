@@ -236,6 +236,6 @@ Template:
 - Found: 2026-10-10 · M0 · `gh api repos/.../rulesets`
 - Symptom: `Upgrade to GitHub Pro or make this repository public to enable this feature` (403)
 - Root cause: rulesets and branch protection on private repos require GitHub Pro
-- Fix: none; the no-direct-push and no-force-push rules are convention (CONTRIBUTING) until the repo is public or the plan changes
-- Sweep: n/a
-- Resolved: — · Status: open (owner decision)
+- Fix: the owner made the repository public on 2026-10-10; ruleset `protect-main` (active) now requires a pull request and the `checks` status for the default branch and blocks force-pushes and deletion
+- Sweep: the only other repository SCIO wrote to (the throwaway evaluation repository) has been deleted; `GitHubClient` already refuses default-branch writes on its side
+- Resolved: 2026-10-10 · Status: resolved

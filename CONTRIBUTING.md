@@ -4,7 +4,7 @@ These rules apply to human contributors and to SCIO's own agents.
 
 ## Workflow
 1. **Start from an issue.** Use one of the issue templates (feature, bug, chore).
-2. **Branch:** `agent/<issue#>-<slug>` for agent work, `<type>/<issue#>-<slug>` for humans. Never push to `main` directly; never force-push.
+2. **Branch:** `agent/<issue#>-<slug>` for agent work, `<type>/<issue#>-<slug>` for humans. Never push to `main` directly; never force-push. A ruleset on `main` enforces this: pull request required, the `checks` workflow must pass, no force-pushes, no deletion.
 3. **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`). One commit per passing feature.
 4. **Pull request:** open it as a draft using the PR template. Link the issue with `Closes #N`. It becomes ready for review only after all checks pass (and, for agent runs, after the Opus gate passes).
 5. **Merge:** always approved by a human.
