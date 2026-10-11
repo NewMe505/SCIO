@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import yaml
 from pydantic import BaseModel
@@ -23,8 +23,10 @@ from scio.harness.provider import ModelProvider
 from scio.harness.retry import RetryPolicy, with_retry
 from scio.harness.telemetry import configure_tracing, invoke_agent_span, record_response
 from scio.harness.types import CompletionRequest, CompletionResponse, Message, StopReason, ToolSpec
-from scio.prompt.repair import StructuredResult, structured_call
 from scio.settings import Settings, get_settings
+
+if TYPE_CHECKING:
+    from scio.prompt.repair import StructuredResult
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -115,6 +117,10 @@ class Harness:
             assert req.output_schema is not None
             schema = req.output_schema
             return self._call(req, lambda p, r: p.structured(r, schema))
+
+        # Imported here, not at module level: scio.prompt.repair imports the harness
+        # package, so a top-level import makes `import scio.prompt` circular (I-030).
+        from scio.prompt.repair import structured_call
 
         return structured_call(call, request, model_cls, max_repairs=max_repairs)
 

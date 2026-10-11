@@ -5,8 +5,6 @@ On failure, re-ask with the error appended (assistant turn = the bad output, use
 = the error), at most ``max_repairs`` times. Then raise :class:`StructuredOutputError`.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from collections.abc import Callable

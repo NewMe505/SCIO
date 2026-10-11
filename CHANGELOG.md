@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- pdoc no longer warns on PEP 695 generics: `scio/prompt/repair.py` and `scio/loop/agent_loop.py` drop the `__future__` annotations import (I-008).
+### Added
+- Live sandbox checks: `tests/live/test_docker_live.py` runs wherever Docker is available (CI runners included) and `tests/live/test_e2b_live.py` runs when `E2B_API_KEY` is set (I-016).
 
 ## [0.1.0] - 2026-10-10
 ### Added
