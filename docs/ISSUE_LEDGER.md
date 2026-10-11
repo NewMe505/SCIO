@@ -244,9 +244,25 @@ Template:
 - Found: 2026-10-11 · first nightly live run: regression t003 trial 1 of 3, `exit=escalate_human`, 3 iterations, hidden tests passing on the final tree (the other two trials passed; pass^3 0.80)
 - Symptom: a correct run stopped for a human instead of merging; the per-run artifacts were not kept
 - Root cause: unknown; candidates are the gate returning `replan`/`escalate_human` on a passing tree, or a worker setting `needs_design_decision`. The run report (`.scio/reports`) would show which
-- Fix: pending. Next occurrence: re-run t003 with `GraphSolver(keep_dirs=True)` and read `last_gate` and the ledger; if it is the gate, feed it the docs-check and diff more precisely
+- Fix: pending. Diagnosis attempt 2026-10-11 15:30: three t003 trials with state capture (scratch script wrapping `run_graph`/`resume_graph`) all died in `route` on I-044 before any model call ($0 spent); the profile must be re-logged (`ant auth login`) before the next attempt. Candidate noted while reading the gate: `gate` maps a `replan` verdict to `ExitReason.ESCALATE_HUMAN` as well (`checkpoint_gate.py`), so a gate that merely asks for another pass also halts for a human
 - Sweep: n/a until diagnosed
-- Resolved: — · Status: open
+- Resolved: — · Status: open (blocked on a fresh profile)
+
+### I-044 · Parallel live trials raced on OAuth refresh-token rotation; the profile's refresh token died
+- Found: 2026-10-11 · I-043 diagnosis run, `evals.runner` with `--parallel 3` on the Anthropic profile, access token expired 13h earlier
+- Symptom: all three trials: `WorkloadIdentityError: user_oauth refresh failed (HTTP 400): {'error': 'invalid_grant', 'error_description': 'Refresh token not found or invalid'}`; afterwards `ant auth status` still shows the profile but every refresh fails
+- Root cause: `AnthropicProvider` built one `anthropic.Anthropic()` per instance and the registry builds one per `Harness`, so `--parallel N` made N clients. The SDK's `CredentialsFile` runs the `refresh_token` grant and rotates the token in the file, serialised only inside one client's `TokenCache`. N clients read the same refresh token and refreshed at once; the token endpoint accepts one grant and rejects the rest, and the rotated token was not the one the losers held. The first nightly run worked only because the access token was still fresh
+- Fix: `scio/harness/providers/anthropic.py` `shared_client(timeout_s)`: one process-wide client per timeout behind a lock; injected clients unchanged. `tests/unit/test_anthropic_shared_client.py` (same timeout shares, different timeout does not, injected is not shared, 32 concurrent constructions build one). The profile itself needs `ant auth login` again
+- Sweep: `grep -rn "Anthropic(\|OpenAI(" scio evals scripts tests`: the only other SDK client is `OpenAIProvider` (static key, no rotation, not affected). No other code refreshes credentials
+- Resolved: 2026-10-11 · Status: resolved (code); profile re-login pending
+
+### I-045 · The 03:17 scheduled nightly task was refused by the Task Scheduler
+- Found: 2026-10-11 · checking why `.scio/nightly.log` did not exist the morning after PR #17
+- Symptom: `Get-ScheduledTaskInfo`: LastRunTime 11:38, LastTaskResult 2147946720 (0x800710E0, "the operator or administrator has refused the request"); no log, no results directory, no history rows
+- Root cause: the task was registered with `schtasks`, which cannot set conditions: `StartWhenAvailable`, `AllowStartIfOnBatteries`, `DontStopIfGoingOnBatteries`, `WakeToRun` were all off, so a laptop asleep or on battery at 03:17 skips the run and refuses the catch-up
+- Fix: `Set-ScheduledTask` with those four settings and a 6 h execution limit; the registration recipe in `scripts/nightly_live.py` is now the PowerShell form that sets them
+- Sweep: only one scheduled task exists for this project. `.github/workflows/nightly-evals.yml` is unaffected (GitHub cron). Guard: the history table in `docs/EVAL_HISTORY.md` is the signal; a missing row for a date means the task did not run
+- Resolved: 2026-10-11 · Status: resolved (verify with tomorrow's row)
 
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
