@@ -8,6 +8,7 @@ into the model loop.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -20,6 +21,8 @@ from scio.aci.tools import ToolError
 from scio.harness.telemetry import execute_tool_span
 from scio.harness.types import ToolResultPart, ToolSpec
 from scio.prompt.wire_schema import wire_schema
+
+log = logging.getLogger(__name__)
 
 ToolFn = Callable[[Sandbox, BaseModel], str]
 
@@ -138,3 +141,10 @@ class ToolBox:
                 return ToolResultPart(tool_use_id=tool_use_id, content=d.fn(self.sandbox, inp))
             except ToolError as exc:
                 return ToolResultPart(tool_use_id=tool_use_id, content=str(exc), is_error=True)
+            except Exception as exc:
+                log.exception("tool %s crashed", name)
+                return ToolResultPart(
+                    tool_use_id=tool_use_id,
+                    content=f"{name} failed: {type(exc).__name__}: {str(exc)[:300]}",
+                    is_error=True,
+                )

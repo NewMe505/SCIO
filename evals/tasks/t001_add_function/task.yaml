@@ -3,6 +3,6 @@ suite: regression
 title: Add a function with tests to a small repo
 tier_hint: T0
 trials: 5
-budget: { tokens: 100000, usd: 1.0 }
+budget: { tokens: 150000, usd: 1.5 }
 grader: tests
 hidden_tests: hidden/test_slugify_hidden.py

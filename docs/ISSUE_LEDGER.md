@@ -144,6 +144,78 @@ Template:
 - Sweep: `tests/unit/test_imports.py` imports sixteen modules one at a time in a fresh `python -I` subprocess, so any future cycle fails CI regardless of test import order
 - Resolved: 2026-10-10 · Status: resolved
 
+### I-031 · verify turned pytest node ids into a `-k` expression; live runs failed with the work done
+- Found: 2026-10-11 · first live Anthropic regression run (4 of 5 tasks failed; `evals/results/regression-anthropic-20261011T013459Z.md`)
+- Symptom: `no tests collected for filter '(tests/test_slugify.py::test_slugify_lowercases) or (...)'` while `[run_tests all] all tests passed: 5 passed`; the coder retried four times against a complaint it could not fix; $0.18 per task spent on nothing
+- Root cause: `WorkerOutput.tests_added` was documented as "pytest -k expressions (or test file paths)" but verify joined every entry into one `-k` expression. Real models report node ids (`path::name`) or file paths; `-k` matches substrings of test *names* and a path or `::` never matches. The Fake script reports a bare keyword, so no test covered the path form
+- Fix: verify normalises every selector: a `path::name` or `*.py` entry runs as a positional pytest target, a bare word runs as `-k`; each selector is run on its own. The Fake t001 script now reports one node id and one keyword so both branches are exercised offline
+- Sweep: the same `test_filter` string from the planner (T1/T2) flows through the same helper; `RunTestsInput` already accepted `path` so no tool change was needed. Searched for other places that build `-k` expressions: only verify did
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-032 · A tool crash ended the run: `view_file` on a directory raised out of the toolbox
+- Found: 2026-10-11 · live run of t005 (T2); `PermissionError: [Errno 13] Permission denied: '...\work'` during `localize`
+- Symptom: the whole graph run failed with a Python exception after one explorer call; $0.06 spent, nothing recorded in the ledger
+- Root cause: two defects. `view_file` only handled `UnicodeDecodeError`, so reading a directory (a `PermissionError` on Windows, `IsADirectoryError` on Linux) escaped; and `ToolBox.call` only converted `ToolError` into an error result, so any other exception from any tool propagated through the loop and the node and killed the run
+- Fix: `view_file` reports "not a readable file ... use repo_search"; `ToolBox.call` turns every exception into an error tool result (logged), so the model sees the failure and the run continues
+- Sweep: the other four tools raise `ToolError` for their known failure modes; the generic guard now covers the unknown ones in all of them. `tests/unit/test_tool_crash_guard.py` covers both the directory case and an arbitrary exception
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-033 · Budget pre-check too conservative for small T1 budgets; explorers too expensive
+- Found: 2026-10-11 · live run of t003 (routed T1, 80k-token budget): `exit=budget` with zero tool calls after plan + localize
+- Symptom: 64k of 80k tokens spent before the first coder call; the pre-check then refused the coder (16k `max_tokens` reserved in full)
+- Root cause: `reserve_output_fraction: 1.0` assumes every call uses its whole `max_tokens`; live output is a small fraction of that. The localize explorer also resends its transcript on each of up to 10 model calls
+- Fix: `reserve_output_fraction: 0.5`; explorer loops capped at 6 model calls and 8 tool calls; the two smallest task budgets raised to the T1 level (t001 150k/$1.5, t003 160k/$1.6)
+- Sweep: every loop's `max_model_calls` reviewed: coder/debugger 16 (unchanged, they do the work), documenter 12, explorer 6. ADR 0002's consequence about early refusals is now measured, not predicted
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-034 · Bug-fix tasks: the coder reported no tests, verify demanded "tests added", two iterations wasted
+- Found: 2026-10-11 · live re-run of t002 with the working directory kept: iteration 1 fixed the bug and ran the suite green, `tests_added: []`; verify answered "no feature tests reported; add tests"; the coder guessed the right node ids only on iteration 3
+- Symptom: three iterations and 20 tool calls for a one-line fix; under the earlier budget this was a `budget` exit with the work done
+- Root cause: the field was named and described as tests *added*. For a bug fix the proving tests already exist, so an honest model reports none; the verify message then asked for new tests instead of for the names of the existing ones
+- Fix: the field keeps its name but its schema description, the coder and step projections, and the verify complaint all say the same thing: list the tests that prove the features, existing or new, as node ids or `-k` keywords; verification runs exactly those
+- Sweep: every place that explains `tests_added` (`WorkerOutput`, `coder_message`, `step_message`, verify's message) now carries the same wording; the Fake script already reports node ids for t001 (I-031) and keywords elsewhere
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-035 · Task budgets sized for the hinted tier, not the routed tier
+- Found: 2026-10-11 · live t003: the router chose T1 (hint T0); plan + localize + a multi-step coder loop spent 147k tokens with every check green, then `exit=budget` at the task cap
+- Symptom: a correct run halted mid-plan; per-role ledger: coder 17 calls / 114k input tokens, explorer 5 calls / 18k, planner 1 call
+- Root cause: `evals/tasks/*/task.yaml` budgets were set from the tier hint (T0 ≈ 100k) while the real router may escalate; a T1 run needs the T1 tier budget (300k)
+- Fix: t003's budget set to the T1 tier; t001's raised to 150k for headroom. The budgets stay per-trial caps; the tier budgets in `configs/budgets.yaml` are unchanged
+- Sweep: every task's budget reviewed against the tier the live router actually chose (t001 T0, t002 T0, t003 T1, t004 T0, t005 T1); all now at or above that tier's budget. `evals/runner --parallel N` added so a 5-trial suite takes one trial's wall-clock
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-036 · Third recurrence of I-010, in Markdown this time: a Windows path lost `\a`
+- Found: 2026-10-11 · `grep -n Programs CLAUDE.md` after a shell-embedded docs patch showed `%LOCALAPPDATA%\Programsnt`
+- Symptom: the backslash-a in `\ant` became a bell character; Python also printed `SyntaxWarning: invalid escape sequence '\P'`
+- Root cause: as I-010 and I-027: the shell tool processes backslash escapes before the heredoc reaches Python. The I-027 guard (lint or import after a patch) only covers Python modules; Markdown has no such check
+- Fix: line repaired with the file-edit tool
+- Sweep: `grep -rn` for the other Windows paths written this session (`%LOCALAPPDATA%`, `AppData`) in docs: only this one. Rule hardened in pre-flight item 6: any text containing a backslash (Windows paths, regexes, escape sequences) is written with the file tools, never through a shell-embedded script, and the `SyntaxWarning: invalid escape sequence` line in a patch's output is treated as a failure
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-037 · T1 verify preferred the planner's guessed test names over the tests that exist
+- Found: 2026-10-11 · live t005 (routed T1): `exit=stall` after 4 iterations and one unresolved advisor call, while the hidden tests passed on the final tree
+- Symptom: a correct implementation rejected four times; the escalation machinery engaged for a harness defect
+- Root cause: the planner fills `FeatureItem.test_filter` before any test exists (a guess at names); verify ran that guess, got "no tests collected", and ignored the selectors the worker reported in `tests_added` because a plan-provided filter took precedence
+- Fix: when a plan filter matches nothing and the worker reported selectors that pass, verify adopts the worker's selectors as the feature's `test_filter` and records both runs in the artifact
+- Sweep: the only other producer of `test_filter` is the T0 fallback, which already comes from the worker. The planner prompt still asks for filters (useful as intent), but they are no longer load-bearing
+- Resolved: 2026-10-11 · Status: resolved (pending live confirmation)
+
+### I-038 · T1 runs resend a growing transcript on every model call; a docs task cost 283k tokens
+- Found: 2026-10-11 · live t003 (routed T1): `exit=budget` at 283k tokens after 2 iterations and 28 tool calls
+- Symptom: coder calls of 4k → 9.5k input tokens each, 12 to 17 calls per turn; the transcript trim only kicked in above 60k characters
+- Root cause: the worker loop allowed 16 model calls per turn and trimmed old tool results only beyond 60k characters, so a chatty turn resent most of its history a dozen times
+- Fix: `max_model_calls` 16 → 12 for worker loops; transcript trimming starts at 30k characters (the last three tool results stay intact)
+- Sweep: explorer loops were already capped at 6 (I-033); documenter at 12. The per-role ledger in the run report makes this visible per run
+- Resolved: 2026-10-11 · Status: resolved (pending live confirmation)
+
+### I-039 · The planner emitted an "explore only, no code changes" step; verify can never pass it
+- Found: 2026-10-11 · live t005 re-run with the directory kept: plan v1 step S1 "Explore only, no code changes. Locate tool/cli.py ..."; the coder obeyed, changed nothing, and verify answered "no changes since the base commit" four times until the stall exit ($0.49, one unresolved advisor call)
+- Symptom: a correct model following a plan that cannot be verified
+- Root cause: the planner template did not forbid exploration steps, and the `plan` node accepted steps with no feature ids or no verifiable change. Exploration is the explorers' job (scope/localize already ran); verify's first rule (the tree must change) makes a no-op step unpassable by design
+- Fix: planner template v2 (no exploration steps; every step changes code or tests and is provable by tests; each feature in exactly one step). `normalize_steps` in the `plan` node drops steps that are featureless or described as explore/investigate/no-change, appends a final step for any uncovered feature, and records what it did in the ledger
+- Sweep: the advisor's `revised_steps` go through the same normalisation. Verify's "no changes" message now says a step must change code or tests. `tests/unit/test_plan_normalization.py` covers the drop, the cover, the untouched and the empty cases
+- Resolved: 2026-10-11 · Status: resolved (pending live confirmation)
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
@@ -175,6 +247,7 @@ Template:
 - Fix: by decision of the owner (2026-10-10, M5): the account is a Claude Max subscription, so the key stays a placeholder. Live runs remain gated (`SCIO_RUN_LIVE_TESTS=1`, nightly workflow switches to the real provider only when a repository secret is set). All accounting, budgets, escalation logs and eval metrics keep working as designed, measured on the Fake provider at real-model prices and labelled as such
 - Sweep: the harness classifies 401 as fatal (no retry, no spend), which is the intended behaviour; the eval runner records it as a failed trial with the error text. README's acceptance table marks the live criteria "Fake-provider evidence only"
 - Resolved: 2026-10-10 · Status: wontfix (placeholder key by design; re-open when an API key exists)
+- Re-opened and resolved 2026-10-11: the owner logged in with `ant auth login` (Claude account, individual org, `user:inference` scope); the SDK picks the profile up with no code change, and the placeholder key is bypassed with `env -u ANTHROPIC_API_KEY`. First live acceptance run: t001 pass^5 = 1.00. The live runs then exposed I-031 to I-035 · Status: resolved
 
 ### I-020 · Project lint and type-check ran over the eval fixture repository
 - Found: 2026-10-10 · M3 · `uv run mypy` and `ruff check` after adding `evals/tasks/t001_add_function/repo`

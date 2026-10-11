@@ -10,7 +10,7 @@ from typing import Any, Literal
 from scio.aci.toolbox import ToolBox
 from scio.context.projections import advisor_brief, debug_message, review_message, step_message
 from scio.graph.nodes.common import decision, diff_stat, fact, git_out
-from scio.graph.nodes.planning import summaries_text
+from scio.graph.nodes.planning import normalize_steps, summaries_text
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
@@ -261,6 +261,10 @@ def advise(ctx: RunContext) -> Node:
         if out.verdict is Verdict.REPLAN and out.revised_steps and state.plan is not None:
             done_ids = {s.id for s in state.plan.steps if s.done}
             steps = [s.model_copy(update={"done": s.id in done_ids}) for s in out.revised_steps]
+            steps, plan_notes = normalize_steps(steps, [f.id for f in state.feature_list])
+            patch["task_ledger"] = patch["task_ledger"] + [
+                fact(n, source=Role.SYSTEM) for n in plan_notes
+            ]
             patch["plan"] = Plan(
                 version=state.plan.version + 1,
                 author=Role.ADVISOR,

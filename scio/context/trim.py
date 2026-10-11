@@ -29,7 +29,7 @@ def total_chars(messages: list[Message]) -> int:
 
 
 def trim_messages(
-    messages: list[Message], *, max_chars: int = 60_000, keep_last: int = 3
+    messages: list[Message], *, max_chars: int = 30_000, keep_last: int = 3
 ) -> list[Message]:
     """Return a copy with old tool results shortened when the transcript is too large."""
     if total_chars(messages) <= max_chars:

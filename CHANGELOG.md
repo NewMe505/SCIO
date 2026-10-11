@@ -5,8 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Fixed
+- A tool crash (e.g. `view_file` on a directory) is returned to the model as an error result instead of ending the run (I-032).
+- Budget pre-check reserves half of `max_tokens` instead of all of it; explorer loops capped at 6 model calls / 8 tool calls; small task budgets raised to the tier the live router picks (I-033, I-035).
+- `tests_added` wording: the tests that *prove* the features, existing or new; bug-fix tasks no longer loop on "add tests" (I-034).
+- T1 verify adopts the worker's reported tests when the plan's guessed test names match nothing (I-037); worker turns capped at 12 model calls and transcripts trimmed from 30k characters (I-038); the planner no longer emits exploration steps and `normalize_steps` drops no-op steps and covers missing features (I-039).
+- verify runs each reported test selector correctly: `path::name` node ids and file paths as positional pytest targets, bare words as `-k`; found by the first live Anthropic run (I-031).
 - pdoc no longer warns on PEP 695 generics: `scio/prompt/repair.py` and `scio/loop/agent_loop.py` drop the `__future__` annotations import (I-008).
 ### Added
+- `evals/runner --parallel N`: a task's trials run concurrently (independent sandboxes, checkpoints and budgets).
+- Live Anthropic acceptance recorded: t001 pass^5 = 1.00 (5 trials) via an `ant auth login` profile.
 - Live sandbox checks: `tests/live/test_docker_live.py` runs wherever Docker is available (CI runners included) and `tests/live/test_e2b_live.py` runs when `E2B_API_KEY` is set (I-016).
 
 ## [0.1.0] - 2026-10-10

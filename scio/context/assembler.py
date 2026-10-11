@@ -56,7 +56,13 @@ def coder_message(
     ]
     if last_verify:
         parts += ["", tag_context("verify", f"Last verification result:\n{last_verify}")]
-    parts += ["", "Work until the tests for the failing features pass, then stop."]
+    parts += [
+        "",
+        "Work until the tests for the failing features pass, then stop. In your summary, "
+        "tests_added must list the tests that prove each feature (pytest node ids like "
+        "tests/test_x.py::test_name, or -k keywords), including existing tests you did not "
+        "write; verification runs exactly those.",
+    ]
     return "\n".join(parts)
 
 

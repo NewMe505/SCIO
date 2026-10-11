@@ -9,7 +9,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 3. Confirm the `gh` token scopes cover what the milestone will push (`workflow` for CI files) before creating the branch (I-007).
 4. Run the full local CI-equivalent (command in `CLAUDE.md`) before every push, not just the tests. A check that passes on Windows can still fail on Linux (I-011): any check touching paths needs a unit test with explicit inputs, not only a run against the repo.
 5. Write files with LF endings; pass `newline="\n"` from Python on Windows (I-006).
-6. One heredoc per shell command when the body contains quotes, and never pass backslash escapes (`\n`, `\t`) through a shell-embedded script; use the file tools for those edits (I-001, I-010, I-027). After any shell-embedded patch, run the lint step or `python -c "import scio"` in the same command before doing anything else.
+6. One heredoc per shell command when the body contains quotes, and never pass any backslash through a shell-embedded script: escapes (`\n`, `\t`), Windows paths, regexes; use the file tools for those edits (I-001, I-010, I-027, I-036). After any shell-embedded patch, run the lint step or `python -c "import scio"` in the same command, and treat a `SyntaxWarning: invalid escape sequence` in the patch output as a failure, because Markdown has no lint to catch it.
 7. Add dependencies to `pyproject.toml` and run `uv sync`; never `uv pip install` ad hoc. Export `UV_SYSTEM_CERTS=1` once per session (I-012).
 8. Introspect an installed SDK (`inspect.signature`, `dir`) before writing an adapter against it; write the adapter's tests with an injected client or runner so they run without the service (M2).
 9. Before pushing, compare what git will send with what the working tree has: `git status --short` must show every new package, and `git ls-files --others --ignored --exclude-standard scio evals tests scripts` must be empty (I-017). The docs check enforces the second. Note that ruff skips git-ignored files, so an ignored package is also an unlinted package.
@@ -188,6 +188,17 @@ One section per milestone, written when the milestone closes. **Read this whole 
 - `prepare_repo` writes `.git/info/exclude`; `test_happy_path_end_to_end` asserts no cache files are tracked.
 - Pre-flight item 6 extended with the mechanical check; ledger I-027, I-028.
 - README acceptance table with evidence links; CHANGELOG cut to 0.1.0; release workflow.
+
+### Live validation (2026-10-11, after 0.1.0)
+The first runs with a real model found five problems the Fake provider structurally could not (I-031 to I-035): verify built a `-k` expression out of pytest node ids; a `view_file` on a directory crashed the run; the budget pre-check refused calls with 20% left; bug-fix tasks reported no "added" tests and were told to add some; task budgets were sized for the hinted tier, not the routed one. All five were in the harness, none in the model: the live coder fixed every task in one iteration once verify stopped getting in its way.
+
+Lessons:
+- A scripted fake reproduces the *shapes* you imagined. Before trusting a fake, write down the shapes a real model is likely to produce (node ids, empty lists, directories as paths, extra JSON fields) and script those too. The t001 script now reports a node id and a keyword for this reason.
+- Keep the working directory of the first live run of every task (`GraphSolver(keep_dirs=True)`) and read the artifacts and the per-role ledger before changing anything. Each diagnosis above took one kept run.
+- Run one live trial, read the cost by role, then scale. The whole validation cost about $6.
+- Fan trials out (`--parallel`), not tasks: tasks share nothing but the rate limit, and the per-trial ledger stays readable.
+- The planner is a model too. Given a task that says "the entry point is not documented", Opus planned an exploration step, which a verify built on "the tree must change" can never pass (I-039). Every structured output that drives control flow (plans, routings, verdicts) needs a normaliser that enforces the invariants the graph assumes, and the prompt should state those invariants in the model's terms ("every step changes code or tests and is provable by tests").
+- Live T1 runs are three to five times the cost of T0 runs on the same task (t003: $0.64 vs $0.13 for a T0 docs task of similar size), almost all of it in coder turns that resend their transcript. Context growth per turn, not the number of model roles, is the cost driver to work on next (I-038).
 
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates.

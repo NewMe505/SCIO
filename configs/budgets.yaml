@@ -5,8 +5,10 @@ tiers:
   T2: { tokens_max: 1000000, usd_max: 8.00, advisor_calls_max: 6, max_iters: 60, max_stall: 2 }
 
 # Fraction of max_tokens the budget pre-check assumes an output will use.
-# 1.0 is fully conservative: a call is refused if it *could* exceed the cap.
-reserve_output_fraction: 1.0
+# 1.0 is fully conservative: a call is refused if it *could* exceed the cap. Live runs
+# showed 1.0 refusing calls with 20% of the budget left (ledger I-033); 0.5 matches the
+# observed ratio of actual to maximum output on worker calls with margin.
+reserve_output_fraction: 0.5
 
 # Escalation thresholds: ADR 0005 defines them, ADR 0006 sets them from the tuning sweep
 # (evals/tune.py). Constraint: max_stall >= repeat_threshold - 1.
