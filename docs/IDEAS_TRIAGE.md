@@ -151,6 +151,14 @@ usage and role; a collector (`SCIO_OTEL_EXPORTER=otlp`) renders the trace graph.
 is deliberately subordinate to ground truth. There is no production behaviour to judge
 yet; when there is, start with the capability suite's hidden tests, not a judge.
 
+## 14. Credential pre-flight for live product commands
+**Verdict: small and justified.** Twice now (I-060, I-064) a live product run failed at its
+first model call because the `ant auth login` profile's refresh token had died, surfacing as
+a traceback from inside the graph and, once, leaving an empty checkpoint on the thread
+(I-061). One cheap call before `scio new` or `scio build` touches a thread (the router role
+on a one-line request, under a cent) would turn that into a one-line message with the
+re-login command. Do it with M9's runtime work; measure nothing, it is a guard.
+
 ---
 
 ## Recommended order

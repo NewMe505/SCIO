@@ -521,3 +521,11 @@ Template:
 - Fix: `scio/graph/nodes/common.py::diff_stat` appends ` new file: <path>` for every untracked file (`git ls-files --others --exclude-standard`); `implement._diff_text` runs `git add -N` on untracked files before `git diff` so the full diff (impact detection, ADR 0008 review, the final diff artifact) includes them
 - Sweep: `grep -rn '"diff"' scio` finds the two call sites above plus the product build's `git diff --stat main milestone/n` (committed branches, no untracked files involved). `git_checkpoint` already stages with `git add -A`, so commits were never affected. Guard: `tests/unit/test_cli_and_nodes.py::test_diff_stat_counts_untracked_files_as_changes`, and the M8 Fake product's P1 script is a new-files-only task that runs in every CI
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-064 · The `ant auth login` profile died again before the M8 live milestone (recurrence of I-060)
+- Found: 2026-10-12 · M8 · `env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --prompt ... --thread new-live2`, first model call (interviewer)
+- Symptom: `FatalError: WorkloadIdentityError("user_oauth refresh failed (HTTP 400): {'error': 'invalid_grant', 'error_description': 'Refresh token not found or invalid'}")`; nothing spent, thread `new-live2` holds an empty checkpoint
+- Root cause: the profile's refresh token rotates and expires between sessions (I-060); SCIO cannot refresh it, and `scio new` has no pre-flight check, so the failure surfaces as a traceback from inside the graph
+- Fix: the owner runs `ant auth login`, then the live milestone runs on a fresh thread (`new-live3`; an empty checkpoint on `new-live2` would otherwise be resumed, I-061). Code change: none in M8; a pre-flight credential probe before the first product call is a candidate (`docs/IDEAS_TRIAGE.md`)
+- Sweep: every live command in CLAUDE.md and the nightly script already strips the placeholder key; the gap is the missing probe, not a wrong command. Guard: this entry and the M8 runbook in LESSONS_LEARNED
+- Resolved: · Status: open (waits for the owner's re-login; the M8 PR stays draft until the live milestone is recorded)

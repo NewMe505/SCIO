@@ -347,3 +347,29 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - The first Fake build stalled on P1: its only edit creates a new test file, and verify's "something changed" check read `git diff --stat`, which ignores untracked files (I-063). Ten eval tasks and every live run had edited an existing file, so the hole was invisible. The P1 script is now a new-files-only task in CI.
 - `uv.lock` had been stale since 0.3.0 (I-062): the release chore never relocks. `test_version.py` now checks the lock.
 - A crash test counted commits on the feature branch and forgot that the branch includes the milestone's earlier commits; the assertion, not the code, was wrong (`milestone/1..agent/...` ranges fix it).
+
+### Live milestone (pending, I-064)
+The live acceptance (`scio new` from an empty directory, then `scio build` for one milestone on `sonnet_opus_advisor`) could not run: the `ant auth login` profile had died again (`invalid_grant`) before the first call, as in M6 (I-060). Nothing was spent. Runbook once the owner has logged in again (one trial, cost read by role before anything is scaled):
+
+```
+ant auth login
+env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --prompt "A CLI todo app with tags and JSON export" --dir <empty dir> --thread new-live3
+env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --thread new-live3 --dir <dir> --decision "<answers>"
+env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --thread new-live3 --dir <dir> --decision approve
+env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio build --product <dir>          # pauses at the M1 PR
+uv run scio report --thread build-<product>                                                   # cost by feature and role
+env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio build --product <dir> --decision merge
+```
+
+Expected spend for one milestone: P1 at T0 (about $0.15 from the t001 rows) plus up to three T1 features at $0.35 to $0.65 each (t006 to t010 rows), so $1 to $2.5 before the merge. This section is completed with the cost by role, the features' tiers and iterations, and whatever the live planner and gate did that the Fake could not reproduce (the M5 lesson).
+
+### Actions
+- `scio/product/build.py` (the loop), `scio/product/progress.py` (PRODUCT.md parser, `ProgressFile`, `normalise_milestone`), `scio/product/report.py`, `evals/product_scripts.py` (three scripted features), roles `milestone_planner` and `milestone_gate`, `Harness.child`, `GitHubClient.ensure_milestone` / `ensure_issue` / `find_issue` / `pr_merged`, `run_graph(..., saver=)` and `thread_started`, `scio build` / `scio status` / `scio report` for build threads, registered `product_new` and `product_build` diagrams.
+- `tests/graph/test_product_build_fake.py` (ten tests: the two-milestone loop, crash between features, GitHub mode crash after the PR against a bare origin, gate override, integration ground truth, escalations across features, feature decisions, gate escalation, the CLI), `tests/unit/test_product_progress.py`, GitHub client idempotency tests, `test_diff_stat_counts_untracked_files_as_changes`, the lock-version test.
+- ADR 0011; README; PRODUCT_MODE status; ARCHITECTURE product graphs section and tree; CHANGELOG; ledger I-062, I-063, I-064 (open), I-053 and I-054 completed.
+
+### Carried into M9
+- I-064: run the live milestone and complete the section above before the PR leaves draft.
+- `integrate` runs tests and lint only; the build, smoke against a running app, dependency audit and the coverage floor arrive with M9's runtime commands (`install_deps`, `run_app`) and the Docker default.
+- A pre-flight credential probe for live product commands (one cheap call before the interview) would turn I-060/I-064 into a one-line message instead of a traceback.
+- Repositories bootstrapped by 0.5.0 carry the old `progress.json` shape (P1 `done`, one milestone); `ProgressFile.sync_features` adds missing records but does not reset P1. Re-bootstrap or edit by hand until a migration is worth writing.
