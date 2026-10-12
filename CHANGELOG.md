@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
 - Suite cost cap: `evals/runner --max-usd`; the report records spend, cap and skipped tasks.
 - Nightly live suite: `scripts/nightly_live.py` (profile auth, cost cap, rows in `docs/EVAL_HISTORY.md`) registered as a Windows scheduled task on the dev machine; the GitHub nightly workflow gained the cap, parallel trials and auth-token secret support.

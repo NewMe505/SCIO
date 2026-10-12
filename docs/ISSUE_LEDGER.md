@@ -285,9 +285,9 @@ Template:
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
 - Root cause: no `E2B_API_KEY` on this project
-- Fix: pending. `tests/live/test_e2b_live.py` runs exec, files and the network-off check when the key is set
-- Sweep: n/a
-- Resolved: — · Status: open (needs a key)
+- Fix: none; decision 2026-10-12 (issue #23): no E2B account. The local subprocess backend stays the default for the project's own fixtures (every live and nightly run so far used it); `DockerSandbox` is the isolated tier and its live test runs in CI on every PR (I-016). The E2B backend and `tests/live/test_e2b_live.py` stay in the tree, skipped without the key. The dev machine has neither Docker nor WSL; running Docker there needs `wsl --install`, a reboot, and Docker Desktop or Docker Engine in the distro
+- Sweep: `grep -n "E2B" docs/*.md docs/adr/*.md` — ADR 0003 consequence updated to say which tiers are live-verified
+- Resolved: 2026-10-12 · Status: wontfix
 
 ### I-017 · `scio/aci/sandbox/` never committed: swallowed by a broad `.gitignore` pattern
 - Found: 2026-10-10 · M2 · first CI run on PR #4, "Lint" step
