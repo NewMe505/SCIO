@@ -81,3 +81,6 @@ roles:
   # Product mode (ADR 0010): the interview and the product spec are Opus decisions.
   interviewer:     { model: claude-opus-5-5, effort: high, max_tokens: 1200 }
   product_planner: { model: claude-opus-5-5, effort: high, max_tokens: 6000 }
+  # Product mode (ADR 0011): the milestone plan and the milestone gate are Opus decisions.
+  milestone_planner: { model: claude-opus-5-5, effort: high, max_tokens: 1500 }
+  milestone_gate:    { model: claude-opus-5-5, effort: high, max_tokens: 1200 }

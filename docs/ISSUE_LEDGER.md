@@ -437,18 +437,18 @@ Template:
 ### I-053 · `scio run --tier` sets the budget but not the route
 - Found: 2026-10-11 · Product Mode survey (#34) · `scio/cli.py` passes `tier` to `RunContext.create`, which uses it only for the budget row; `tier_pin` is set only by the eval runner
 - Symptom: a CLI run with `--tier T0` can be routed to T2 by the router and then work under T0's $0.50 budget (same failure class as I-035 and I-050)
-- Root cause: open; to be fixed in M6
-- Fix: open
-- Sweep: open
-- Resolved: · Status: open
+- Root cause: `tier` only selected the budget row; the route came from the classifier, which prefers the cheaper tier (I-050)
+- Fix: M6 (PR #41): `scio run --tier` passes `tier_pin` to `RunContext.create` and `route` skips the classifier; without `--tier` a default budget is resized for the routed tier (`apply_tier_budgets`)
+- Sweep: every `RunContext.create` call site (`cli.py`, `evals/solvers.py`, tests) reviewed for the same hint-versus-pin confusion; guard `tests/unit/test_m6_foundations.py` (default budget follows the routed tier, explicit budgets untouched). Entry completed late, in M8 (the M6 retrospective recorded the fix but this entry was left open)
+- Resolved: 2026-10-12 · Status: resolved
 
 ### I-054 · `SCIO_SANDBOX_BACKEND` is never read
 - Found: 2026-10-11 · Product Mode survey (#34) · `grep -rn sandbox_backend scio` finds only the field in `scio/settings.py`
 - Symptom: setting `SCIO_SANDBOX_BACKEND=docker` has no effect; `RunContext.create` always builds a `LocalSandbox`
-- Root cause: open; to be fixed in M6
-- Fix: open
-- Sweep: open
-- Resolved: · Status: open
+- Root cause: the field was declared with the other M2 settings and no reader was ever written
+- Fix: M6 (PR #41): `make_sandbox` in `scio/graph/run_context.py` selects local, docker or e2b from `settings.sandbox_backend`
+- Sweep: every `Settings` field grepped for a reader; four more declared-but-unread fields found and wired (I-059); guard `tests/unit/test_m6_foundations.py` (backend selection). Entry completed late, in M8
+- Resolved: 2026-10-12 · Status: resolved
 
 ### I-058 · A commit landed on local `main` because another session switched the shared checkout
 - Found: 2026-10-11 · Product Mode docs (#34) · `git push` rejected (non-fast-forward); `git status -sb` showed `main` instead of `docs/34-product-mode`
@@ -504,4 +504,20 @@ Template:
 - Root cause: `_new` treated `--thread` as the resume signal. The Fake end-to-end tests call the library (`run_product` / `resume_product`) and never went through the CLI, so the contract was untested (pre-flight: a fake reproduces the shapes you thought of)
 - Fix: the absence of `--prompt` means resume; `--thread` only names the thread. `test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt` drives the three CLI calls on the Fake and the two usage errors
 - Sweep: `scio run` / `scio resume` are separate subcommands and have no such ambiguity. Guard: the CLI test above; README documents the two forms
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-062 · `uv.lock` recorded the project at 0.3.0 after two releases
+- Found: 2026-10-12 · M8 · `git status` on `main` showed `uv.lock` modified before any work; `uv run` rebuilt and reinstalled `scio` on every invocation
+- Symptom: the lock said `version = "0.3.0"` for the `scio` package while `pyproject.toml` said 0.5.0; every `uv run` printed "Uninstalled 1 package / Installed 1 package"
+- Root cause: the release chore bumps `pyproject.toml` and `CHANGELOG.md` but never ran `uv lock`, so the lock drifted at 0.4.0 and again at 0.5.0; `uv run` re-syncs the editable package each time it notices the mismatch
+- Fix: `uv lock` on the M8 branch; the lock now says 0.5.0
+- Sweep: `git log -p --follow uv.lock` shows the version line was last updated at 0.3.0; the two release PRs (#38 area, #45) touched only `pyproject.toml` and `CHANGELOG.md`. Guard: `tests/unit/test_version.py` gains an assertion that the lock's `scio` version equals the project version, so a release cut without relocking fails CI
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-063 · A feature delivered only by new files was invisible to verify ("no changes since base")
+- Found: 2026-10-12 · M8 · first Fake product build: P1 (a T0 task whose only edit creates `tests/test_entry.py`) stalled after four coder turns with `verify: no_changes` while `git status` showed the new file as `??`
+- Symptom: verify's step 0 (`diff_stat`, "something must have changed since the base commit") read `git diff --stat <base>`, which lists tracked files only; an untracked new file is not a change to it, so every iteration was a stall and the run exited `stall`. Every earlier eval script also edited an existing file, so the hole never showed on the Fake, and live coders happened to touch existing files too
+- Root cause: `git diff` compares the index and tree to the base; files git has never seen are outside both. The harness equated "diff is empty" with "nothing changed"
+- Fix: `scio/graph/nodes/common.py::diff_stat` appends ` new file: <path>` for every untracked file (`git ls-files --others --exclude-standard`); `implement._diff_text` runs `git add -N` on untracked files before `git diff` so the full diff (impact detection, ADR 0008 review, the final diff artifact) includes them
+- Sweep: `grep -rn '"diff"' scio` finds the two call sites above plus the product build's `git diff --stat main milestone/n` (committed branches, no untracked files involved). `git_checkpoint` already stages with `git add -A`, so commits were never affected. Guard: `tests/unit/test_cli_and_nodes.py::test_diff_stat_counts_untracked_files_as_changes`, and the M8 Fake product's P1 script is a new-files-only task that runs in every CI
 - Resolved: 2026-10-12 · Status: resolved

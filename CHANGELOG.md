@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `scio build --product DIR [--gh owner/name] [--decision "<text>"]` and `scio status --product DIR` (Product Mode M8, ADR 0011): the milestone loop. The orchestrator takes the first open feature of `PRODUCT.md`; an Opus `milestone_planner` groups up to four into a milestone with a tier each (normalised to a consecutive prefix); a GitHub milestone and one issue per feature are created idempotently by title (offline: files under `.scio/product/issues/`); each feature runs through the task graph as a subgraph on its own checkpoint thread (`build-<product>-<pk>-a<attempt>`) on branch `milestone/<n>` with the tier pinned and its own budget; the profile's full suite and lint run on the branch; an Opus `milestone_gate` verdict that any failing check overrides; one milestone PR (cost, escalations, plan versus done, `Closes #n`) stops for the human merge; `progress.json` and `NOTES.md` are updated on `main` and the loop continues. A crash between features or after the PR resumes with no duplicated issue, commit or PR; a feature that halts stops for one decision (`retry`, `skip`, stop). New state `ProductBuildState`, `FeatureRun`, `MilestonePlan`; `GitHubClient.ensure_milestone`, `ensure_issue`, `find_issue`, `pr_merged`; `Harness.child`; `scio report` renders a product view for `build-*` threads; the product graphs are registered diagrams in ARCHITECTURE.md.
+### Changed
+- After `scio new` every feature in `progress.json` is `todo`, the walking skeleton included: the scaffold proves the toolchain and P1 is verified by its own feature run (ADR 0011 decision 1, the M7 open question).
+### Fixed
+- Verify's "something changed since the base commit" check read `git diff --stat`, which ignores untracked files, so a feature delivered only by new files stalled as "no changes" (I-063); `diff_stat` lists untracked files and the full diff stages them with `git add -N`.
+- `uv.lock` recorded the project at 0.3.0 after two releases (I-062); relocked, and `test_version.py` now checks the lock.
 
 ## [0.5.0] - 2026-10-12
 ### Added

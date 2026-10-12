@@ -345,13 +345,25 @@ def _fact(text: str) -> dict[str, Any]:
 # ---------- graph ----------
 
 
-def build_product_graph(ctx: RunContext) -> Any:
+def _unbound(name: str) -> Any:
+    def node(_state: Any) -> dict[str, Any]:
+        raise RuntimeError(f"node {name!r} compiled without a RunContext")
+
+    return node
+
+
+def build_product_graph(ctx: RunContext | None) -> Any:
+    """``ctx=None`` compiles a structural graph for the docs diagram (ADR 0011)."""
     g: Any = StateGraph(ProductState)  # Any: node callables are closures, as in build.py
-    g.add_node("interview", interview(ctx))
-    g.add_node("specify", specify(ctx))
-    g.add_node("bootstrap", bootstrap(ctx))
-    g.add_node("publish", publish(ctx))
-    g.add_node("done", done(ctx))
+
+    def n(name: str, factory: Callable[[RunContext], Node]) -> None:
+        g.add_node(name, factory(ctx) if ctx is not None else _unbound(name))
+
+    n("interview", interview)
+    n("specify", specify)
+    n("bootstrap", bootstrap)
+    n("publish", publish)
+    n("done", done)
     g.add_edge(START, "interview")
     g.add_edge("interview", "specify")
     g.add_conditional_edges(

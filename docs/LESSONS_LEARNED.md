@@ -326,3 +326,24 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - I-016: Docker and E2B live checks on a machine that has them.
 - I-008, I-009: cosmetic pdoc warning; branch protection needs GitHub Pro or a public repository.
 - Open question 3 (patch sampling): the sampling step is wired but off; measure before enabling.
+
+## M8: Decompose + milestone loop (2026-10-12, issue #44, ADR 0011)
+
+### Lessons applied
+- Pre-flight 1: the whole file and the open ledger entries were read first. Two entries (I-053, I-054) were still `open` although M6 had fixed them; they were completed before any M8 code (an entry is finished when the fix lands, not when the retrospective mentions it).
+- Pre-flight 8: a six-line probe script confirmed, before the design was fixed, that a graph invoked inside another graph's node with its own `thread_id` gets an independent checkpoint thread (namespace `""`, resumable from a fresh graph object). The nested-subgraph design rests on that measurement, not on the LangGraph docs.
+- I-046 (the model reports, the plan decides): the milestone planner proposes a grouping and tiers; `normalise_milestone` enforces PRODUCT.md order, a consecutive prefix from the first open feature and the cap, and the orchestrator alone picks the next feature.
+- I-050 and I-053 (a hint is not a pin): every feature's `RunContext` carries `tier_pin`, so the router is never consulted inside a product build.
+- ADR 0003: every side effect in the loop (milestone branch, issue files and their commit, GitHub milestone, issues, the fast-forward after a feature, push, PR, ready, merge or pull, the progress commit) is a `run_effect` with a world probe, and the crash tests kill the process at the second feature's gate and after the PR.
+- The M7 carry-over (P1 ownership) was decided first, as option (b): every feature starts `todo` and P1 is a feature run. The M7 test that asserted P1 `done` was changed with the ADR, not worked around.
+
+### What succeeded
+- The whole loop ran on the Fake at the first attempt once lint and types were clean, except for one real harness defect it exposed (below): planner, issues, P1 at T0, P2 at T1, fast-forwards, integration checks, gate, PR file, merge, progress commit, second milestone, done, and the product's own CI green on `main`.
+- Sharing the orchestrator's open checkpointer with each feature subgraph (`run_graph(..., saver=...)`) avoided a second SQLite connection inside a running node; the deterministic thread id per attempt made crash resume a probe (`thread_started`) instead of state bookkeeping.
+- `Harness.child` gave each feature its own budget guard and cost ledger while keeping one provider registry (and so one SDK client per process, I-044); the product's `FeatureRun` records cost, iterations and escalations straight from the subgraph's final `SCIOState`, and the typed-handoff test compares the two.
+- The GitHub path was tested end to end without GitHub: a canned `gh` runner for milestones, issues, PR and merge state, plus a bare local `origin` for the real push and pull.
+
+### What failed
+- The first Fake build stalled on P1: its only edit creates a new test file, and verify's "something changed" check read `git diff --stat`, which ignores untracked files (I-063). Ten eval tasks and every live run had edited an existing file, so the hole was invisible. The P1 script is now a new-files-only task in CI.
+- `uv.lock` had been stale since 0.3.0 (I-062): the release chore never relocks. `test_version.py` now checks the lock.
+- A crash test counted commits on the feature branch and forgot that the branch includes the milestone's earlier commits; the assertion, not the code, was wrong (`milestone/1..agent/...` ranges fix it).

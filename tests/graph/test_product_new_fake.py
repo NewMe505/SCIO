@@ -106,7 +106,9 @@ def test_empty_directory_becomes_a_repository_with_green_ci(tmp_path: Path) -> N
         assert (repo / rel).is_file(), rel
     progress = json.loads((repo / ".scio/product/progress.json").read_text(encoding="utf-8"))
     assert progress["product"] == "todo_cli" and progress["bootstrap_commit"] == s.bootstrap_commit
-    assert progress["features"][0]["status"] == "done"
+    # ADR 0011 decision 1: the scaffold proves the toolchain; P1 is verified by its own run.
+    assert [f["status"] for f in progress["features"]] == ["todo"] * 3
+    assert progress["milestones"] == []
     subjects = _git(repo, "log", "--format=%s").splitlines()
     assert len(subjects) == 2 and BOOTSTRAP_MARKER in subjects[-1]
     assert _git(repo, "status", "--porcelain") == ""  # nothing left uncommitted

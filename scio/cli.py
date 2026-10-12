@@ -1,8 +1,12 @@
-"""Command line: ``scio run`` and ``scio resume``.
+"""Command line: ``scio run`` and ``scio resume`` (one task), ``scio new``, ``scio build``
+and ``scio status`` (product mode), ``scio report``.
 
     scio run --spec task.md --repo <url-or-path> [--issue N] [--sandbox DIR] [--thread ID]
     scio resume --thread ID [--sandbox DIR] [--decision "approved"]
-    scio report --thread ID [--out DIR]
+    scio report --thread ID [--out DIR]           # a task thread, or a build-* thread
+    scio new --prompt "<idea>" --dir DIR [--gh owner/name]   (resume: --thread ID --decision)
+    scio build --product DIR [--gh owner/name] [--thread ID] [--decision "<text>"]
+    scio status --product DIR
 
 The spec file is Markdown: the first ``#`` heading is the title, checkbox lines are the
 acceptance criteria, everything else is the description.
@@ -68,18 +72,97 @@ def _print_product(outcome: Any) -> None:
         print(f'resume with: scio new --thread {s.thread_id} --decision "<text>"')
 
 
-def _new(args: argparse.Namespace) -> int:
-    """``scio new``: start or resume a product thread (ADR 0010)."""
-    from scio.product import resume_product, run_product
-
-    settings = get_settings()
-    harness = None
+def _scripted_harness(settings: Any) -> Harness | None:
+    """Offline demo: drive the Fake provider with the scripted eval behaviour."""
     if settings.provider_override == "fake" and os.environ.get("SCIO_FAKE_SCRIPT") == "1":
         from evals.fake_scripts import ScriptedResponder
         from scio.harness.providers.fake import FakeProvider
 
         harness = Harness.from_settings(settings)
         harness.providers.register("fake", FakeProvider(responder=ScriptedResponder()))
+        return harness
+    return None
+
+
+def _print_build(outcome: Any) -> None:
+    s = outcome.state
+    print(f"build thread {s.thread_id} phase={s.phase} exit={s.exit_reason} dir {s.product_dir}")
+    print(
+        f"milestones done {', '.join(s.milestones_done) or '-'} · current "
+        f"{s.milestone.id + ' ' + s.milestone.title if s.milestone else '-'}"
+    )
+    for r in s.feature_runs:
+        print(
+            f"  {r.feature_id} a{r.attempt} {r.tier.value} {r.status} exit={r.exit_reason} "
+            f"${r.usd:.4f} escalations={r.escalations_resolved}/{r.escalations}"
+        )
+    from scio.product.build import total_usd
+
+    print(f"usd {total_usd(s):.4f} (orchestrator {s.budgets.usd_used:.4f})")
+    if outcome.interrupt:
+        print("PAUSED for a human:")
+        print(json.dumps(outcome.interrupt, indent=2, default=str))
+        print(f'resume with: scio build --product {s.product_dir} --decision "<text>"')
+
+
+def _build(args: argparse.Namespace) -> int:
+    """``scio build``: start or resume the milestone loop of a bootstrapped product
+    (ADR 0011). The thread is ``build-<product>`` unless ``--thread`` names another."""
+    from scio.harness.github.client import GitHubClient
+    from scio.product.build import (
+        build_started,
+        build_thread_id,
+        resume_build,
+        run_build,
+    )
+    from scio.product.progress import PROGRESS_PATH, ProgressFile
+
+    progress_path = args.product / PROGRESS_PATH
+    if not progress_path.is_file():
+        print(f"{progress_path} not found: run scio new first", file=sys.stderr)
+        return 2
+    progress = ProgressFile.from_json(progress_path.read_text(encoding="utf-8"))
+    settings = get_settings()
+    gh_repo = args.gh or settings.gh_repo
+    thread = args.thread or build_thread_id(progress.product)
+    ctx = RunContext.create(
+        thread_id=thread,
+        sandbox_root=args.product,
+        tier="T1",  # the orchestrator's own calls (planner, gate); features get their own
+        tier_pin="T1",
+        settings=settings,
+        harness=_scripted_harness(settings),
+        github=GitHubClient(gh_repo) if gh_repo else None,
+    )
+    try:
+        if build_started(ctx):
+            outcome = resume_build(ctx, args.decision)
+        else:
+            outcome = run_build(ctx, gh_repo=gh_repo)
+    finally:
+        ctx.close()
+    _print_build(outcome)
+    return 0 if outcome.state.exit_reason is None else 1
+
+
+def _status(args: argparse.Namespace) -> int:
+    from scio.product.build import progress_summary
+    from scio.product.progress import PROGRESS_PATH
+
+    progress_path = args.product / PROGRESS_PATH
+    if not progress_path.is_file():
+        print(f"{progress_path} not found: run scio new first", file=sys.stderr)
+        return 2
+    print(progress_summary(progress_path))
+    return 0
+
+
+def _new(args: argparse.Namespace) -> int:
+    """``scio new``: start or resume a product thread (ADR 0010)."""
+    from scio.product import resume_product, run_product
+
+    settings = get_settings()
+    harness = _scripted_harness(settings)
     # A prompt starts a product thread (optionally under a chosen --thread id); no prompt
     # means resume the thread named by --thread (I-061).
     resuming = args.prompt is None
@@ -141,19 +224,23 @@ def main(argv: list[str] | None = None) -> int:
     new.add_argument("--gh", default=None, help="owner/name to publish to, after confirmation")
     new.add_argument("--thread", default=None, help="resume this product thread")
     new.add_argument("--decision", default=None, help="answer to the pending question")
+    build = sub.add_parser("build", help="product mode: run the next milestone of a product")
+    build.add_argument("--product", type=Path, required=True, help="the bootstrapped repository")
+    build.add_argument("--gh", default=None, help="owner/name for milestones, issues and PRs")
+    build.add_argument("--thread", default=None, help="build thread (default build-<product>)")
+    build.add_argument("--decision", default=None, help="answer to the pending question")
+    status = sub.add_parser("status", help="product mode: progress of a product")
+    status.add_argument("--product", type=Path, required=True)
     args = ap.parse_args(argv)
     if args.cmd == "new":
         return _new(args)
+    if args.cmd == "build":
+        return _build(args)
+    if args.cmd == "status":
+        return _status(args)
 
     settings = get_settings()
-    harness = None
-    if settings.provider_override == "fake" and os.environ.get("SCIO_FAKE_SCRIPT") == "1":
-        # Offline demo: drive the Fake provider with the scripted eval behaviour.
-        from evals.fake_scripts import ScriptedResponder
-        from scio.harness.providers.fake import FakeProvider
-
-        harness = Harness.from_settings(settings)
-        harness.providers.register("fake", FakeProvider(responder=ScriptedResponder()))
+    harness = _scripted_harness(settings)
     thread = args.thread or f"run-{uuid.uuid4().hex[:8]}"
     sandbox = args.sandbox or Path(".scio") / "sandbox" / thread
     pinned = getattr(args, "tier", None)
@@ -169,11 +256,20 @@ def main(argv: list[str] | None = None) -> int:
         from scio.graph.report import build_report, load_state, write_report
         from scio.harness.accounting import CostLedger
 
-        state = load_state(ctx)
         entries = CostLedger.load_entries(Path(".scio") / "ledger" / f"{thread}.jsonl")
-        report = build_report(state, entries)
-        json_path, md_path = write_report(report, args.out)
-        print(report.to_markdown())
+        if thread.startswith("build-"):
+            # A product build thread (ADR 0011): milestones and feature runs, not one task.
+            from scio.product.build import load_build_state
+            from scio.product.report import build_product_report, write_product_report
+
+            product = build_product_report(load_build_state(ctx), entries)
+            json_path, md_path = write_product_report(product, args.out)
+            print(product.to_markdown())
+        else:
+            state = load_state(ctx)
+            report = build_report(state, entries)
+            json_path, md_path = write_report(report, args.out)
+            print(report.to_markdown())
         print(f"wrote {json_path}")
         print(f"wrote {md_path}")
         return 0

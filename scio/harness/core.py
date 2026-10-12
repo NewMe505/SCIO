@@ -53,6 +53,20 @@ class Harness:
         self.retry = retry or RetryPolicy(max_attempts=self.settings.max_attempts)
         self._sleep = sleep
 
+    def child(self, *, budget: BudgetGuard) -> Harness:
+        """A harness for one feature run inside a product build (ADR 0011): the same models,
+        providers (so the one SDK client per process is kept, I-044), settings and retry
+        policy, with its own budget guard and its own cost ledger."""
+        return Harness(
+            self.config,
+            self.providers,
+            settings=self.settings,
+            budget=budget,
+            ledger=CostLedger(),
+            retry=self.retry,
+            sleep=self._sleep,
+        )
+
     @classmethod
     def from_settings(
         cls,

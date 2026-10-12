@@ -43,3 +43,35 @@ def test_render_pr_body_has_template_sections() -> None:
         st, PRBody(summary="s", plan_vs_done=[], test_evidence="", risk_notes=""), "broken link"
     )
     assert "Docs check still failing" in failing
+
+
+def test_diff_stat_counts_untracked_files_as_changes(tmp_path) -> None:
+    """I-063: a feature delivered only by new files was invisible to `git diff --stat`, so
+    verify reported no changes and the run stalled."""
+    import subprocess
+
+    from scio.aci.sandbox.local import LocalSandbox
+    from scio.graph.nodes.common import diff_stat, untracked_files
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"],
+        cwd=repo,
+        check=True,
+    )
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    sb = LocalSandbox(repo)
+    assert diff_stat(sb, base) == "(no changes since base)"
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_new.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    assert untracked_files(sb) == ["tests/test_new.py"]
+    assert diff_stat(sb, base) == " new file: tests/test_new.py"
+    (repo / "a.py").write_text("x = 2\n", encoding="utf-8", newline="\n")
+    stat = diff_stat(sb, base)
+    assert "a.py" in stat and stat.endswith(" new file: tests/test_new.py")

@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from scio.aci.toolbox import ToolBox
 from scio.context.projections import advisor_brief, debug_message, review_message, step_message
-from scio.graph.nodes.common import decision, diff_stat, fact, git_out
+from scio.graph.nodes.common import decision, diff_stat, fact, git_out, untracked_files
 from scio.graph.nodes.planning import normalize_steps, summaries_text
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
@@ -34,7 +34,11 @@ WRITER_TOOLS = ("repo_search", "view_file", "edit_file", "run_tests")
 
 
 def _diff_text(ctx: RunContext, state: SCIOState) -> str:
+    """The full diff since the base commit, new files included (``git add -N``, I-063)."""
     base = state.github.base_sha
+    new = untracked_files(ctx.sandbox)
+    if new:
+        ctx.sandbox.exec(["git", "add", "-N", "--", *new], timeout_s=60)
     return git_out(ctx.sandbox, "diff", base) if base else git_out(ctx.sandbox, "diff")
 
 
