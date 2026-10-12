@@ -434,6 +434,30 @@ Template:
 - Sweep: the only other repository SCIO wrote to (the throwaway evaluation repository) has been deleted; `GitHubClient` already refuses default-branch writes on its side
 - Resolved: 2026-10-10 · Status: resolved
 
+### I-053 · `scio run --tier` sets the budget but not the route
+- Found: 2026-10-11 · Product Mode survey (#34) · `scio/cli.py` passes `tier` to `RunContext.create`, which uses it only for the budget row; `tier_pin` is set only by the eval runner
+- Symptom: a CLI run with `--tier T0` can be routed to T2 by the router and then work under T0's $0.50 budget (same failure class as I-035 and I-050)
+- Root cause: open; to be fixed in M6
+- Fix: open
+- Sweep: open
+- Resolved: · Status: open
+
+### I-054 · `SCIO_SANDBOX_BACKEND` is never read
+- Found: 2026-10-11 · Product Mode survey (#34) · `grep -rn sandbox_backend scio` finds only the field in `scio/settings.py`
+- Symptom: setting `SCIO_SANDBOX_BACKEND=docker` has no effect; `RunContext.create` always builds a `LocalSandbox`
+- Root cause: open; to be fixed in M6
+- Fix: open
+- Sweep: open
+- Resolved: · Status: open
+
+### I-058 · A commit landed on local `main` because another session switched the shared checkout
+- Found: 2026-10-11 · Product Mode docs (#34) · `git push` rejected (non-fast-forward); `git status -sb` showed `main` instead of `docs/34-product-mode`
+- Symptom: the docs commit was on local `main`; the push of `main` was rejected, so nothing reached the remote
+- Root cause: two AI sessions shared one working checkout. Between `git switch -c docs/34-product-mode` and `git commit`, the other session (which was cutting `release/0.3.0`) ran `git checkout main` in this checkout (reflog `HEAD@{1}`); the commit command did not check the branch first
+- Fix: moved the commit to `docs/34-product-mode`, reset local `main` to `origin/main`, rebased onto `origin/main` (clean)
+- Sweep: `git branch -vv` and `git worktree list` showed one other worktree (`release/0.3.0`) and no other stray commits; the ruleset on `main` (I-009) would also have rejected a direct push
+- Guard: CONTRIBUTING rule: one session per checkout (others use `git worktree add`), and every commit command starts with a branch assertion (`test "$(git branch --show-current)" = "<branch>"`)
+- Resolved: 2026-10-11 · Status: resolved
 ### I-055 · Package version stayed at 0.1.0 through the 0.2.0 release
 - Found: 2026-10-12 · release 0.3.0 cut · `grep -n '^version' pyproject.toml` showed `0.1.0` while `v0.2.0` was tagged
 - Symptom: `pyproject.toml` and `scio.__version__` said 0.1.0 after the 0.2.0 release; the changelog and the tag were the only places the version moved
