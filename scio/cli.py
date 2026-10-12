@@ -60,12 +60,18 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--issue", type=int, default=None)
     run.add_argument("--sandbox", type=Path, default=None)
     run.add_argument("--thread", default=None)
-    run.add_argument("--tier", default="T0")
+    run.add_argument(
+        "--tier",
+        default=None,
+        choices=["T0", "T1", "T2"],
+        help="pin the tier: the router is skipped and budgets are sized for it (I-053); "
+        "default: the router decides and budgets follow its decision",
+    )
     res = sub.add_parser("resume")
     res.add_argument("--thread", required=True)
     res.add_argument("--sandbox", type=Path, default=None)
     res.add_argument("--decision", default=None)
-    res.add_argument("--tier", default="T0")
+    res.add_argument("--tier", default=None, choices=["T0", "T1", "T2"])
     rep = sub.add_parser("report", help="write the observability report for a run")
     rep.add_argument("--thread", required=True)
     rep.add_argument("--sandbox", type=Path, default=None)
@@ -83,10 +89,12 @@ def main(argv: list[str] | None = None) -> int:
         harness.providers.register("fake", FakeProvider(responder=ScriptedResponder()))
     thread = args.thread or f"run-{uuid.uuid4().hex[:8]}"
     sandbox = args.sandbox or Path(".scio") / "sandbox" / thread
+    pinned = getattr(args, "tier", None)
     ctx = RunContext.create(
         thread_id=thread,
         sandbox_root=sandbox,
-        tier=getattr(args, "tier", "T0"),
+        tier=pinned or "T0",
+        tier_pin=pinned,  # I-053: an explicit --tier pins the route, not only the budget
         settings=settings,
         harness=harness,
     )

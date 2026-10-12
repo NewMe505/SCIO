@@ -481,3 +481,19 @@ Template:
 - Fix: one whole-file edit per caller, built from `MONEY_CALLERS` (signature, body, docstring), the same table the fixture generator used; a check in the test run asserts the fake's "before" text equals each fixture module
 - Sweep: `grep -n "Edit(" evals/fake_scripts.py` shows every other script edits an import and its use in one `Edit` or adds whole functions; no other two-step rename exists. Lesson recorded: rename edits must be atomic per file
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-059 · Four more `Settings` fields were declared but never read (sweep of I-054)
+- Found: 2026-10-12 · M6 (#39) · the I-054 sweep: every `Settings` field grepped for a reader outside `settings.py`
+- Symptom: `sandbox_docker_image`, `sandbox_e2b_template`, `effects_path` and `run_live_tests` had no reader. `RunContext` always built a `LocalSandbox` and hard-coded `.scio/effects.sqlite`; `tests/conftest.py` read `SCIO_RUN_LIVE_TESTS` from `os.environ` directly
+- Root cause: fields were added with the M2 design and the readers were never written; nothing checks that a declared setting is consumed
+- Fix: `make_sandbox(settings, root, limits)` selects `local`/`docker`/`e2b` and passes the image or template (I-054); `RunContext.create` uses `settings.effects_path` when no explicit work dir isolates the run; `live_enabled()` reads `Settings().run_live_tests`. Tests: `test_make_sandbox_reads_the_backend_setting`, `test_effects_path_setting_is_used_without_an_explicit_work_dir`, `test_run_live_tests_setting_is_read`
+- Sweep: every field of `Settings` now has at least one reader (`grep -rn "settings\.<field>\|\.<field>" scio evals tests` per field). Guard: none mechanical yet; a test that introspects `Settings.model_fields` and greps for readers is a candidate if the list grows again
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-060 · The `ant auth login` profile died mid-session (`invalid_grant`), blocking the M6 live trial
+- Found: 2026-10-12 · M6 (#39) · first live trial of t001 on the toolchain-profile code: `WorkloadIdentityError: user_oauth refresh failed (HTTP 400): invalid_grant, Refresh token not found or invalid` at the first `route` call, $0.00 spent
+- Symptom: every live call fails before the model is reached; the Fake-provider suite is unaffected. Earlier in the same day the profile served ten live trials (t008 to t010, about $2.40)
+- Root cause: the profile's refresh token rotated and the stored one is no longer valid; CLAUDE.md names this exact error as "the profile is dead and the user must run `ant auth login` again". Nothing in SCIO can refresh it
+- Fix: the owner re-ran `ant auth login`; the kept t001 trial then passed on the toolchain-profile code ($0.11, 1 iteration, 4 tool calls), the same shape and cost as the nightly rows before M6
+- Sweep: `grep -rn invalid_grant scio` shows the error is surfaced as `FatalError` by `scio/harness/providers/anthropic.py`, not retried (correct: retrying a dead token burns nothing but cannot succeed). Guard: `scripts/nightly_live.py` already reports this case; no further code change
+- Resolved: 2026-10-12 · Status: resolved

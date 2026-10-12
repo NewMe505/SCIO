@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 
 from scio.state.models import FeatureItem, ProgressLedger
 
@@ -84,16 +85,24 @@ def progress_fingerprint(progress: ProgressLedger, feature_list: list[FeatureIte
 
 
 def advance(
-    progress: ProgressLedger, feature_list: list[FeatureItem], *, error_text: str | None
+    progress: ProgressLedger,
+    feature_list: list[FeatureItem],
+    *,
+    error_text: str | None,
+    signature_fn: Callable[[str], str] = error_signature,
 ) -> ProgressLedger:
-    """Return the ledger after one act→verify iteration (pure; the node writes it back)."""
+    """Return the ledger after one act→verify iteration (pure; the node writes it back).
+
+    ``signature_fn`` is the toolchain's error-signature parser (ADR 0009); the default is
+    the Python one, so callers without a toolchain keep the pre-M6 behaviour.
+    """
     p = progress.model_copy()
     p.iterations += 1
     if error_text is None:
         p.last_error_signature = None
         p.fix_attempts_on_error = 0
     else:
-        sig = error_signature(error_text)
+        sig = signature_fn(error_text)
         p.fix_attempts_on_error = (
             p.fix_attempts_on_error + 1 if sig == p.last_error_signature else 1
         )

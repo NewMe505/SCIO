@@ -64,7 +64,11 @@ def _after_worker(
             "tool_calls": state.progress.tool_calls + tool_calls,
         }
     )
-    flags = assess(_diff_text(ctx, state), max_files=ctx.escalation.high_impact_files)
+    flags = assess(
+        _diff_text(ctx, state),
+        max_files=ctx.escalation.high_impact_files,
+        toolchain=ctx.toolchain,
+    )
     entries = [
         fact(
             f"{role.value} attempt {attempt} on {progress.current_step_id}: {output.summary} "

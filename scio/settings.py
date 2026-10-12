@@ -49,8 +49,12 @@ class Settings(BaseSettings):
     effects_path: Path = Path(".scio/effects.sqlite")
     """Durable log of idempotent side effects, keyed by hash(thread_id, node, intent)."""
 
+    toolchain: str = "python"
+    """Toolchain profile for the target repository (ADR 0009); ``python`` until M10 adds more."""
+
     sandbox_backend: Literal["local", "docker", "e2b"] = "local"
-    """``local`` is for tests and dev only: it cannot disable the network."""
+    """``local`` is for tests and dev only: it cannot disable the network. Read by
+    ``RunContext.create`` (I-054)."""
     sandbox_docker_image: str = "python:3.12-slim"
     sandbox_e2b_template: str | None = None
     sandbox_timeout_s: int = 120

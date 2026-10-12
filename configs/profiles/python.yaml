@@ -1,0 +1,36 @@
+# Toolchain profile: python (ADR 0009). Data only; the parsers live in scio/toolchain/python.py.
+# These values are the exact commands the graph used before M6, moved here with no change.
+name: python
+source_suffixes: [".py"]
+test_dirs: ["tests/", "test/"]
+test_file_prefix: "test_"
+# Written to .git/info/exclude (directories get a trailing slash) and used as copytree ignores.
+cache_excludes: ["__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache"]
+dependency_files:
+  - pyproject.toml
+  - requirements.txt
+  - requirements-dev.txt
+  - setup.py
+  - setup.cfg
+  - Pipfile
+  - poetry.lock
+  - uv.lock
+  - package.json
+  - package-lock.json
+  - go.mod
+  - Cargo.toml
+# Environment every command runs with (the sandbox adds its own).
+env: { PYTHONUTF8: "1" }
+interpreter: python
+test:
+  runner: pytest
+  argv: [python, -m, pytest, -q, --tb=short, -p, "no:cacheprovider", -rfE, --no-header]
+  filter_flag: "-k"
+  exit_codes: { passed: [0], no_tests: [5], broken: [2, 3, 4] }
+  selector_help: "pytest node ids like tests/test_x.py::test_name, or -k keywords"
+  filter_help: "pytest -k filter"
+lint:
+  argv: [ruff, check, --no-cache, --select, "E9,F63,F7,F82,F821", --output-format, concise]
+  clean_exit_codes: [0, 127]   # 127: the linter is not installed; not the agent's problem
+  findings_exit_codes: [1]
+script_argv: [python]

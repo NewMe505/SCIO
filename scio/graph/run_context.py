@@ -22,8 +22,22 @@ from scio.loop.exits import LoopLimits
 from scio.prompt.registry import PromptRegistry
 from scio.settings import Settings, get_settings
 from scio.state.models import Budget
+from scio.toolchain import Toolchain, get_toolchain
 
 T0_TOOL_CAP = 10
+
+
+def make_sandbox(settings: Settings, sandbox_root: Path | str, limits: Limits) -> Sandbox:
+    """The sandbox backend named by ``settings.sandbox_backend`` (I-054)."""
+    if settings.sandbox_backend == "docker":
+        from scio.aci.sandbox.docker import DockerSandbox
+
+        return DockerSandbox(sandbox_root, image=settings.sandbox_docker_image, limits=limits)
+    if settings.sandbox_backend == "e2b":
+        from scio.aci.sandbox.e2b import E2BSandbox
+
+        return E2BSandbox(template=settings.sandbox_e2b_template, limits=limits)
+    return LocalSandbox(sandbox_root, limits)
 
 
 @dataclass
@@ -42,6 +56,11 @@ class RunContext:
     tier: str = "T0"
     tier_pin: str | None = None
     """When set, ``route`` skips the classifier and runs this tier (eval tasks, I-050)."""
+    toolchain: Toolchain = field(default_factory=lambda: get_toolchain("python"))
+    """The stack profile every command and parser comes from (ADR 0009)."""
+    budget_from_tier: bool = False
+    """True when the budget was sized from ``tier`` defaults rather than explicit limits, so
+    ``route`` may resize it for the tier the classifier picks (I-053)."""
 
     @classmethod
     def create(
@@ -75,7 +94,9 @@ class RunContext:
             )
             harness = Harness.from_settings(settings, budget=guard)
         work = Path(work_dir) if work_dir else Path(".scio")
-        sandbox = sandbox or LocalSandbox(
+        toolchain = get_toolchain(settings.toolchain)
+        sandbox = sandbox or make_sandbox(
+            settings,
             sandbox_root,
             Limits(
                 timeout_s=settings.sandbox_timeout_s,
@@ -86,12 +107,14 @@ class RunContext:
         if github is None and settings.gh_repo:
             github = GitHubClient(settings.gh_repo)
         harness.ledger.persist_to(work / "ledger" / f"{thread_id}.jsonl")
+        # An explicit work_dir isolates a run (evals); otherwise the configured effects path.
+        effects_path = work / "effects.sqlite" if work_dir else settings.effects_path
         return cls(
             settings=settings,
             thread_id=thread_id,
             harness=harness,
             sandbox=sandbox,
-            effects=EffectLog(work / "effects.sqlite"),
+            effects=EffectLog(effects_path),
             artifacts=ArtifactStore(work / "artifacts", thread_id),
             prompts=PromptRegistry(),
             limits=LoopLimits(
@@ -101,10 +124,38 @@ class RunContext:
             ),
             budget=budget,
             github=github,
-            escalation=EscalationConfig(**budgets.escalation.model_dump()),
+            escalation=EscalationConfig(
+                **budgets.escalation.model_dump(), test_dirs=toolchain.test_dirs
+            ),
             tier=tier,
             tier_pin=tier_pin,
+            toolchain=toolchain,
+            budget_from_tier=budget_limits is None,
         )
+
+    def apply_tier_budgets(self, tier: str) -> None:
+        """Resize the budget, the loop limits and the harness guard for ``tier`` (I-053).
+
+        Called by ``route`` when the classifier picks a tier other than the one the budget
+        was sized for and the budget came from tier defaults (not explicit limits).
+        """
+        lim = BudgetsConfig.load(self.settings.budgets_path).tiers[tier]
+        self.budget = self.budget.model_copy(
+            update={
+                "tokens_max": lim.tokens_max,
+                "usd_max": lim.usd_max,
+                "advisor_calls_max": lim.advisor_calls_max,
+                "max_iters": lim.max_iters,
+                "max_stall": lim.max_stall,
+            }
+        )
+        self.limits = LoopLimits(
+            max_iters=lim.max_iters,
+            max_stall=lim.max_stall,
+            max_tool_calls_per_iter=T0_TOOL_CAP if tier == "T0" else None,
+        )
+        self.harness.budget.limits = BudgetLimits(tokens_max=lim.tokens_max, usd_max=lim.usd_max)
+        self.tier = tier
 
     def close(self) -> None:
         """Release the run's file handles (the effect log's SQLite connection).

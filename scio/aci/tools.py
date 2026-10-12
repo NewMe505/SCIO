@@ -6,7 +6,6 @@ mode, actionable error messages, absolute paths, bounded output with a hint.
 
 from __future__ import annotations
 
-import ast
 import re
 import shutil
 from collections import defaultdict
@@ -17,6 +16,8 @@ from pydantic import BaseModel, Field
 
 from scio.aci.sandbox.base import PathEscapeError, Sandbox
 from scio.aci.truncate import truncate
+from scio.toolchain import Toolchain, python_toolchain
+from scio.toolchain.python import failures_only  # noqa: F401  (re-export; ADR 0009)
 
 VIEW_WINDOW = 100
 
@@ -184,36 +185,16 @@ def view_file(sandbox: Sandbox, inp: ViewFileInput) -> str:
 # ---------- edit_file ----------
 
 
-def _check_python(content: str, path: str) -> None:
-    try:
-        ast.parse(content, filename=path)
-    except SyntaxError as exc:
-        raise ToolError(f"edit rejected: syntax error at {path}:{exc.lineno}: {exc.msg}") from exc
+def _lint(sandbox: Sandbox, path: str, tc: Toolchain) -> str | None:
+    """Return lint findings for ``path``; None if clean or the linter is unavailable."""
+    r = sandbox.exec(tc.lint_argv(path), timeout_s=60)
+    return tc.lint_findings(r.exit_code, r.stdout, r.stderr)
 
 
-def _lint(sandbox: Sandbox, path: str) -> str | None:
-    """Return lint output if ruff finds errors; None if clean or ruff is unavailable."""
-    r = sandbox.exec(
-        [
-            "ruff",
-            "check",
-            "--no-cache",
-            "--select",
-            "E9,F63,F7,F82,F821",
-            "--output-format",
-            "concise",
-            path,
-        ],
-        timeout_s=60,
-    )
-    if r.exit_code == 0 or r.exit_code == 127:
-        return None
-    if r.exit_code == 1:
-        return r.stdout.strip() or r.stderr.strip()
-    return None  # ruff misconfiguration is not the agent's problem
-
-
-def edit_file(sandbox: Sandbox, inp: EditFileInput) -> str:
+def edit_file(sandbox: Sandbox, inp: EditFileInput, toolchain: Toolchain | None = None) -> str:
+    """Replace ``old_text`` once (or create the file). Source files of the toolchain are
+    syntax-checked and lint-gated; a rejected edit is reverted (ADR 0009)."""
+    tc = toolchain or python_toolchain()
     path = _abs(sandbox, inp.path)
     exists = sandbox.exists(path)
     if inp.old_text == "":
@@ -232,11 +213,13 @@ def edit_file(sandbox: Sandbox, inp: EditFileInput) -> str:
                 f"old_text is ambiguous ({n} matches); include more surrounding context"
             )
         after = before.replace(inp.old_text, inp.new_text, 1)
-    if path.endswith(".py"):
-        _check_python(after, path)
+    if tc.is_source(path):
+        problem = tc.syntax_error(after, path)
+        if problem:
+            raise ToolError(f"edit rejected: {problem}")
     sandbox.write_text(path, after)
-    if path.endswith(".py"):
-        problems = _lint(sandbox, path)
+    if tc.is_source(path):
+        problems = _lint(sandbox, path, tc)
         if problems:
             if before is None:
                 sandbox.write_text(path, "")  # cannot delete through the protocol; leave empty
@@ -251,49 +234,32 @@ def edit_file(sandbox: Sandbox, inp: EditFileInput) -> str:
 
 # ---------- run_tests ----------
 
-_FAIL_SECTION_RE = re.compile(r"^=+ (FAILURES|ERRORS) =+$", re.MULTILINE)
-_SUMMARY_RE = re.compile(r"^=+ .*(passed|failed|error|no tests ran).* =+$", re.MULTILINE)
 
+def run_tests(sandbox: Sandbox, inp: RunTestsInput, toolchain: Toolchain | None = None) -> str:
+    """Run the toolchain's test command and return failures only (ADR 0009).
 
-def failures_only(output: str) -> str:
-    """Keep the FAILURES/ERRORS sections and the summary line; drop passing noise."""
-    m = _FAIL_SECTION_RE.search(output)
-    body = output[m.start() :] if m else output
-    lines = [ln for ln in body.splitlines() if " PASSED" not in ln and not ln.startswith("PASSED")]
-    return "\n".join(lines).strip()
-
-
-def run_tests(sandbox: Sandbox, inp: RunTestsInput) -> str:
-    argv = [
-        "python",
-        "-m",
-        "pytest",
-        "-q",
-        "--tb=short",
-        "-p",
-        "no:cacheprovider",
-        "-rfE",
-        "--no-header",
-    ]
-    if inp.filter:
-        argv += ["-k", inp.filter]
-    if inp.path:
-        argv.append(_abs(sandbox, inp.path))
+    The result strings are the contract verify relies on: ``all tests passed: ...``,
+    ``no tests collected[ for filter ...]: ...``, failure text, or ``ToolError`` when the
+    runner itself could not run.
+    """
+    tc = toolchain or python_toolchain()
+    path = _abs(sandbox, inp.path) if inp.path else None
+    argv = tc.test_argv(filter=inp.filter, path=path)
     timeout = inp.timeout_s or sandbox.limits.timeout_s
     r = sandbox.exec(argv, timeout_s=timeout)
     if r.timed_out:
         raise ToolError(f"tests timed out after {timeout}s; narrow with filter= or path=")
-    summary = _SUMMARY_RE.findall(r.stdout)
     last_line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.strip()), "")
-    if r.exit_code == 0:
+    outcome = tc.test_outcome(r.exit_code, r.stdout)
+    if outcome == "passed":
         return f"all tests passed: {last_line}"
-    if r.exit_code == 5:
+    if outcome == "no_tests":
         scope = f" for filter {inp.filter!r}" if inp.filter else ""
         return f"no tests collected{scope}: {last_line}"
-    if r.exit_code in (2, 3, 4) and not summary:
+    if outcome == "broken":
         shown = truncate(r.output, max_chars=2000, hint="fix collection errors first")
-        raise ToolError(f"pytest could not run (exit {r.exit_code}):\n{shown}")
-    body = failures_only(r.stdout) or r.output
+        raise ToolError(f"{tc.test_runner} could not run (exit {r.exit_code}):\n{shown}")
+    body = tc.failures_only(r.stdout) or r.output
     return truncate(body, hint="use filter= to run only the failing test(s)")
 
 

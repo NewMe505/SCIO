@@ -73,7 +73,9 @@ Human interrupt before: merge, deletion, dependency change, any network-enabled 
 Private task suite (not public SWE-bench). Each task run n≥5 → report pass@1, pass^k, tokens, $, latency, advisor-call rate, advisor-resolution rate. Regression suite (~100% expected, blocks CI) separate from capability suite. Grade final state (tests), not exact trajectories. A/B configs: Sonnet-only vs Sonnet+Opus-advisor vs Opus-only; tune escalation thresholds from data.
 
 ## Non-goals
-No UI, no multi-tenant auth, no custom vector DB, no agent debate, no parallel writers.
+No UI *for SCIO itself*, no multi-tenant auth, no custom vector DB, no agent debate, no parallel writers.
+
+Amended by ADR 0007 (Product Mode, 2026-10-12): the products SCIO builds may have user interfaces and may be in any stack with a toolchain profile (ADR 0009); SCIO remains a CLI with no UI of its own.
 
 ## Acceptance criteria
 - Crash mid-run resumes from checkpoint with zero duplicated side effects.

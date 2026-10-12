@@ -55,9 +55,9 @@ GENERIC_QUESTIONS = [
 
 def _repo_stats(ctx: RunContext) -> tuple[str, str]:
     files = [f for f in git_out(ctx.sandbox, "ls-files").splitlines() if f]
-    py = sum(1 for f in files if f.endswith(".py"))
+    src = sum(1 for f in files if ctx.toolchain.is_source(f))
     tree = "\n".join(files[:120]) + ("\n..." if len(files) > 120 else "")
-    return f"{len(files)} tracked files, {py} Python files", tree
+    return f"{len(files)} tracked files, {src} {ctx.toolchain.name} source files", tree
 
 
 def scope(ctx: RunContext) -> Node:
