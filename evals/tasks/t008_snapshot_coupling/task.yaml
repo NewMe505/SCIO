@@ -1,0 +1,8 @@
+id: t008_snapshot_coupling
+suite: regression
+title: Right-align numeric cells in render_table
+tier_hint: T1
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_align_hidden.py

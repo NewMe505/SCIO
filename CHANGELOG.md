@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ### Changed
 - E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
+- t008_snapshot_coupling: a formatting change that breaks a CLI snapshot test and a README example test outside the coder's filtered run; the first regression task built to make verify's full-suite step fail and the debugger run live.
 - Two realistic regression tasks: t006 (a change spanning the store module, the CLI and their tests) and t007 (a fixture whose own CI is red on `ruff` with the repo config and on `pytest`); hidden tests run the fixture's own lint rules. One live trial each passed ($0.35 and $0.40).
 - Suite cost cap: `evals/runner --max-usd`; the report records spend, cap and skipped tasks.
 - Nightly live suite: `scripts/nightly_live.py` (profile auth, cost cap, rows in `docs/EVAL_HISTORY.md`) registered as a Windows scheduled task on the dev machine with `--max-usd 12`; the GitHub nightly workflow gained the cap, parallel trials and auth-token secret support.

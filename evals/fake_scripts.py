@@ -182,6 +182,20 @@ WITHDRAW_NEW = (
 LEDGER_IMPORT_OLD = '"""ledger: a minimal account balance."""\n\nimport os\n\n\nclass Account:\n'
 LEDGER_IMPORT_NEW = '"""ledger: a minimal account balance."""\n\n\nclass Account:\n'
 
+PAD_OLD = "def _pad(cell, width):\n    return cell.ljust(width)\n"
+PAD_NEW = (
+    "def _is_number(text):\n    try:\n        float(text)\n    except ValueError:\n"
+    "        return False\n    return True\n\n\n"
+    "def _pad(cell, width):\n"
+    "    return cell.rjust(width) if _is_number(cell) else cell.ljust(width)\n"
+)
+DEMO_OLD = "item   | qty | price\nwidget | 3   | 2.5\ngear   | 12  | 10.0\n"
+DEMO_NEW = "item   | qty | price\nwidget |   3 |   2.5\ngear   |  12 |  10.0\n"
+ALIGN_TESTS = (
+    "from textfmt.table import render_table\n\n\ndef test_align_numbers_right():\n"
+    "    assert render_table([['a', '1'], ['bbb', '22']]) == 'a   |  1\\nbbb | 22'\n"
+)
+
 
 def changelog(line: str) -> Edit:
     return Edit("CHANGELOG.md", "## [Unreleased]\n", f"## [Unreleased]\n### Added\n- {line}\n")
@@ -389,6 +403,31 @@ SCRIPTS: list[TaskScript] = [
             ),
         ],
         docs=[changelog("fix: `withdraw` subtracts; unused import removed so CI lint passes.")],
+    ),
+    TaskScript(
+        key="right-align",
+        tier="T1",
+        features=[
+            ("F1", "numeric cells right-aligned", "align"),
+            ("F2", "snapshot and README regenerated", "snapshot or readme"),
+        ],
+        steps=[
+            Step(
+                "S1",
+                "right-align numeric cells; regenerate the snapshot and the README example",
+                ["F1", "F2"],
+                ["textfmt/table.py", "tests/golden/demo.txt", "README.md"],
+                edits=[
+                    Edit("textfmt/table.py", PAD_OLD, PAD_NEW),
+                    Edit("tests/golden/demo.txt", DEMO_OLD, DEMO_NEW),
+                    Edit("README.md", DEMO_OLD, DEMO_NEW),
+                    Edit("tests/test_align.py", "", ALIGN_TESTS),
+                ],
+                test_filter="align",
+                tests_added=["align", "snapshot or readme"],
+            )
+        ],
+        docs=[changelog("`render_table` right-aligns numeric cells.")],
     ),
 ]
 
