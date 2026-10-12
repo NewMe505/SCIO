@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from scio.harness.caching import estimate_tokens
-from scio.harness.failures import FatalError, RetryableError
+from scio.harness.failures import BudgetExceeded, FatalError, RetryableError
 from scio.harness.types import (
     CompletionRequest,
     CompletionResponse,
@@ -126,6 +126,11 @@ def parse_result(res: ClaudeRunResult) -> dict[str, Any]:
         subtype = str(data.get("subtype") or "")
         message = f"{detail or 'no message'} (subtype={subtype or '-'})"
         low = message.lower()
+        if subtype == "error_max_budget_usd":
+            # The binary's own dollar cap: SCIO's graceful budget exit, not a crash (I-069).
+            raise BudgetExceeded(
+                f"claude -p stopped at its budget cap: {message[:300]}", tokens_used=0, usd_used=0.0
+            )
         if any(k in low for k in FATAL_ERRORS):
             raise FatalError(f"claude -p failed: {message[:500]}")
         # A run that died without saying why (I-068), or a transient condition: let the

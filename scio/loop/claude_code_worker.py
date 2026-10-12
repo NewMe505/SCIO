@@ -218,11 +218,14 @@ class ClaudeCodeWorker:
                 f"claude -p ({self.role}) produced no result: exit {res.code}, "
                 f"{(res.stderr or res.stdout).strip()[:400]!r}"
             )
+        capped = turn.result.get("subtype") == "error_max_turns"
+        if capped:  # the turn cap is a normal stop for SCIO, not an error: summarise the session
+            turn.result = {**turn.result, "is_error": False}
         result = parse_result(ClaudeRunResult(res.code, json.dumps(turn.result), res.stderr))
         session_id = str(result.get("session_id") or "")
         self._account(result, model, tags)
         messages = [Message.user(user_message), *turn.messages]
-        stop: StopKind = "tool_cap" if turn.turns >= self.max_turns else "end_turn"
+        stop: StopKind = "tool_cap" if capped or turn.turns >= self.max_turns else "end_turn"
 
         # The typed closing output: one more turn on the same session, no tools.
         schema = wire_schema(output_model)

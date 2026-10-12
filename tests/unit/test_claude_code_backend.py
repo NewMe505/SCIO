@@ -376,3 +376,65 @@ def test_worker_without_a_result_line_fails_loudly(tmp_path: Path) -> None:
     )  # fmt: skip
     with pytest.raises(FatalError, match="no result"):
         worker.run("task")
+
+
+def test_tier_budgets_scale_on_the_claude_code_backend() -> None:
+    """I-069: a T0 task that costs $0.11 on the API reads as about $0.57 through Claude Code,
+    so the API-price caps in budgets.yaml are scaled for this backend."""
+    from scio.harness.budget import BudgetsConfig, budget_factor
+
+    aci = Settings(provider_override="fake")
+    cc = Settings(provider_override="fake", worker_backend="claude_code")
+    assert budget_factor(aci) == 1.0 and budget_factor(cc) == 4.0
+    base = BudgetsConfig.load(aci.budgets_path).tiers["T0"]
+    scaled = BudgetsConfig.for_settings(cc).tiers["T0"]
+    assert scaled.usd_max == base.usd_max * 4 and scaled.tokens_max == base.tokens_max * 4
+    assert scaled.max_iters == base.max_iters and scaled.advisor_calls_max == base.advisor_calls_max
+    assert BudgetsConfig.for_settings(aci).tiers["T0"] == base
+    custom = Settings(
+        provider_override="fake", worker_backend="claude_code", claude_code_budget_factor=2.5
+    )
+    assert BudgetsConfig.for_settings(custom).tiers["T1"].usd_max == round(
+        BudgetsConfig.load(custom.budgets_path).tiers["T1"].usd_max * 2.5, 4
+    )
+
+
+def test_budget_cap_from_the_binary_is_a_graceful_budget_exit() -> None:
+    from scio.harness.failures import BudgetExceeded
+
+    fake = FakeClaude(
+        [
+            _result(
+                is_error=True,
+                result="Reached maximum budget ($0.29)",
+                subtype="error_max_budget_usd",
+            )
+        ]
+    )
+    provider = ClaudeCodeProvider(runner=fake)
+    req = CompletionRequest(model=HAIKU, messages=[Message.user("q")])
+    with pytest.raises(BudgetExceeded, match="budget cap"):
+        provider.complete(req)
+
+
+def test_worker_treats_the_turn_cap_as_a_stop_not_an_error(tmp_path: Path) -> None:
+    settings = Settings(provider_override="fake")
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    capped = [
+        *STREAM[:-1],
+        _result(session_id="sess-w", num_turns=10, is_error=True, subtype="error_max_turns"),
+    ]
+    summary = {
+        "step_id": "S1", "summary": "ran out of turns", "files_touched": [], "confidence": "low",
+        "needs_design_decision": False, "design_question": None, "next_action": "verify",
+        "tests_added": [], "sweep": None,
+    }  # fmt: skip
+    fake = FakeClaude([capped, _result(session_id="sess-w", structured_output=summary)])
+    worker = ClaudeCodeWorker(
+        harness, LocalSandbox(tmp_path), PromptRegistry(), "coder",
+        toolchain=python_toolchain(), tool_names=("edit_file",), max_turns=10, runner=fake,
+    )  # fmt: skip
+    result = worker.run("task")
+    assert result.stop == "tool_cap" and result.output.summary == "ran out of turns"
+    assert harness.budget.snapshot().calls == 2

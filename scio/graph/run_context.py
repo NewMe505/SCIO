@@ -78,7 +78,7 @@ class RunContext:
         tier_pin: str | None = None,
     ) -> RunContext:
         settings = settings or get_settings()
-        budgets = BudgetsConfig.load(settings.budgets_path)
+        budgets = BudgetsConfig.for_settings(settings)
         lim = budget_limits or budgets.tiers[tier]
         budget = Budget(
             tokens_max=lim.tokens_max,
@@ -139,7 +139,7 @@ class RunContext:
         Called by ``route`` when the classifier picks a tier other than the one the budget
         was sized for and the budget came from tier defaults (not explicit limits).
         """
-        lim = BudgetsConfig.load(self.settings.budgets_path).tiers[tier]
+        lim = BudgetsConfig.for_settings(self.settings).tiers[tier]
         self.budget = self.budget.model_copy(
             update={
                 "tokens_max": lim.tokens_max,

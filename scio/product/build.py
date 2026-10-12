@@ -160,7 +160,7 @@ def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
     """The task graph's context for one feature run: the same sandbox (the product
     repository), effect log and prompts; its own thread, tier-pinned budget, cost ledger and
     artifact directory; no GitHub client (the milestone PR is the only one)."""
-    budgets = BudgetsConfig.load(ctx.settings.budgets_path)
+    budgets = BudgetsConfig.for_settings(ctx.settings)
     lim = budgets.tiers[tier]
     guard = BudgetGuard(
         BudgetLimits(tokens_max=lim.tokens_max, usd_max=lim.usd_max),

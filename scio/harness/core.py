@@ -92,7 +92,7 @@ class Harness:
             roles = data.get("roles")
             config = config.with_role_overrides(dict(roles) if isinstance(roles, dict) else data)
         if budget is None and tier is not None:
-            budget = BudgetsConfig.load(settings.budgets_path).guard_for(tier)
+            budget = BudgetsConfig.for_settings(settings).guard_for(tier)
         return cls(config, ProviderRegistry(config, settings), settings=settings, budget=budget)
 
     # -- request construction ------------------------------------------------
