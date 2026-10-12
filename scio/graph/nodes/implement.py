@@ -186,6 +186,7 @@ def advise(ctx: RunContext) -> Node:
         step_id = step.id if step else (state.progress.current_step_id or "S?")
         last_ref = state.artifacts.get("verify:last")
         last_error = ctx.artifacts.head(last_ref, 1500) if last_ref else "(none)"
+        verify_passed = state.progress.last_failure_kind == "none"  # ADR 0008 review
         brief = advisor_brief(
             state.task,
             step,
@@ -195,6 +196,7 @@ def advise(ctx: RunContext) -> Node:
             attempts=state.progress.fix_attempts_on_error,
             worker_summary=state.last_worker_output.summary if state.last_worker_output else None,
             impact_flags=state.high_impact_flags,
+            verify_passed=verify_passed,
         )
         brief_ref = ctx.artifacts.put(
             "brief", brief, produced_by=Role.SYSTEM, name=f"brief-{len(state.escalations) + 1:02d}"
@@ -288,6 +290,12 @@ def advise(ctx: RunContext) -> Node:
         elif out.verdict is Verdict.ESCALATE_HUMAN:
             patch["exit_reason"] = ExitReason.ESCALATE_HUMAN
             patch["phase"] = "halted"
+        elif out.verdict is Verdict.CONTINUE and verify_passed:
+            # ADR 0008: a pre-commit review that approves the diff has nothing to resolve;
+            # the run commits without another coder turn.
+            record = record.model_copy(update={"outcome": "resolved"})
+            patch["escalations"] = [*state.escalations, record]
+            patch["phase"] = "checkpoint"
         else:
             patch["phase"] = "implement"
         patch.update(ctx.budget_update())
@@ -303,9 +311,11 @@ def advise(ctx: RunContext) -> Node:
     return node
 
 
-def after_advise(state: SCIOState) -> Literal["implement", "plan", "halt"]:
+def after_advise(state: SCIOState) -> Literal["implement", "plan", "checkpoint", "halt"]:
     if state.exit_reason is not None:
         return "halt"
+    if state.phase == "checkpoint":  # ADR 0008: approved pre-commit review
+        return "checkpoint"
     return "plan" if state.phase == "plan" else "implement"
 
 

@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- A passing verify whose diff is high impact (more than 8 files, dependency or schema files, a removed public symbol) now gets one advisor review before commit (ADR 0008): `review_decision`, a `triage` route from a passing verify, and an `advise -> git_checkpoint` edge for `continue`. Until now every advisor trigger required a failing verify, and no live run had ever called the advisor (I-056).
+### Added
+- t010_wide_rename (T1, pinned): `format_cents` becomes `format_money(cents, currency)` across nine caller modules; the correct diff passes verify and trips the impact detector, so the advisor reviews it. Fake script edits each caller in one whole-file edit because `edit_file` lints every edit (I-057).
 
 ## [0.3.0] - 2026-10-12
 ### Changed

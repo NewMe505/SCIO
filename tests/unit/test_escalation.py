@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from scio.loop.escalation import EscalationConfig, decide, detect, drifted_files, exit_for
+from scio.loop.escalation import (
+    EscalationConfig,
+    decide,
+    detect,
+    drifted_files,
+    exit_for,
+    review_decision,
+)
 from scio.loop.impact import assess, changed_files
 from scio.state.models import (
     Budget,
@@ -270,3 +277,34 @@ def test_every_trigger_has_a_flip_test(trigger: EscalationTrigger) -> None:
         EscalationTrigger.FIXED_GATE,  # the gate node itself
     }
     assert trigger in covered
+
+
+# --- ADR 0008: a passing high-impact diff is reviewed before commit ---
+
+
+def _passing(**overrides: object) -> SCIOState:
+    return _state(
+        progress=ProgressLedger(current_step_id="S1", last_failure_kind="none"), **overrides
+    )
+
+
+def test_passing_high_impact_diff_is_reviewed_once() -> None:
+    s = _passing(high_impact_flags=["12 files changed (> 8)"])
+    d = review_decision(s, CFG)
+    assert d is not None and d.route == "advise"
+    assert d.triggers == [EscalationTrigger.HIGH_IMPACT] and "12 files" in d.reason
+    assert (
+        review_decision(_passing(high_impact_flags=["x"], high_impact_reviewed=True), CFG) is None
+    )
+
+
+def test_passing_verify_without_impact_flags_is_not_reviewed() -> None:
+    assert review_decision(_passing(), CFG) is None
+
+
+def test_refused_review_commits_instead_of_halting() -> None:
+    s = _passing(
+        high_impact_flags=["x"],
+        budgets=Budget(tokens_max=10**6, usd_max=10.0, advisor_calls_max=0),
+    )
+    assert review_decision(s, CFG) is None  # no halt: nothing failed

@@ -136,7 +136,14 @@ def build_graph(ctx: RunContext | None, tier: TierName | None = None) -> StateGr
         g.add_conditional_edges("implement", im.after_worker, {"verify": "verify", "halt": "halt"})
         g.add_conditional_edges("debug", im.after_worker, {"verify": "verify", "halt": "halt"})
         g.add_conditional_edges(
-            "advise", im.after_advise, {"implement": "implement", "plan": "plan", "halt": "halt"}
+            "advise",
+            im.after_advise,
+            {
+                "implement": "implement",
+                "plan": "plan",
+                "checkpoint": "git_checkpoint",  # ADR 0008: approved high-impact review
+                "halt": "halt",
+            },
         )
         g.add_conditional_edges("review", im.after_review, {"document": "document", "halt": "halt"})
 

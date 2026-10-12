@@ -209,6 +209,87 @@ STDEV_TESTS = (
 )
 REPORT_IMPORT_OLD = "from metrics.stats import mean, median\n"
 REPORT_IMPORT_NEW = "from metrics.stats import DECIMALS, mean, median\n"
+
+MONEY_OLD = (
+    "def format_cents(cents):\n"
+    '    """Format an integer amount of cents as dollars: 1234 -> "$12.34"."""\n'
+    '    sign = "-" if cents < 0 else ""\n'
+    "    cents = abs(cents)\n"
+    '    return f"{sign}${cents // 100}.{cents % 100:02d}"\n'
+)
+MONEY_NEW = (
+    'SYMBOLS = {"USD": "$", "EUR": "EUR ", "GBP": "GBP "}\n\n\n'
+    'def format_money(cents, currency="USD"):\n'
+    '    """Format an integer amount of cents in ``currency``: 1234 -> "$12.34"."""\n'
+    "    if currency not in SYMBOLS:\n"
+    '        raise ValueError(f"unknown currency {currency!r}")\n'
+    '    sign = "-" if cents < 0 else ""\n'
+    "    cents = abs(cents)\n"
+    '    return f"{sign}{SYMBOLS[currency]}{cents // 100}.{cents % 100:02d}"\n'
+)
+# Mirrors the t010 fixture modules (signature, body expression, docstring); keep in sync with
+# evals/tasks/t010_wide_rename/repo/shop/*.py.
+MONEY_CALLERS: dict[str, tuple[str, str, str]] = {
+    "cart": ("cart_total_line(items)", 'f"total {format_cents(sum(items))}"', "Cart totals."),
+    "checkout": ("checkout_summary(cents)", 'f"pay {format_cents(cents)}"', "Checkout messages."),
+    "invoice": ("invoice_line(desc, cents)", 'f"{desc}: {format_cents(cents)}"', "Invoice lines."),
+    "receipt": ("receipt_footer(cents)", 'f"paid {format_cents(cents)}, thank you"', "Receipts."),
+    "refund": ("refund_message(cents)", 'f"refunded {format_cents(cents)}"', "Refund notices."),
+    "tax": ("tax_line(cents, rate)", 'f"tax {format_cents(round(cents * rate))}"', "Tax lines."),
+    "discount": (
+        "discount_line(cents, pct)",
+        'f"discount {format_cents(round(cents * pct / 100))}"',
+        "Discount lines.",
+    ),
+    "report": (
+        "daily_report(totals)",
+        '"\\n".join(f"{day} {format_cents(c)}" for day, c in totals.items())',
+        "Daily report.",
+    ),
+    "cli": ("main(argv)", "print(format_cents(int(argv[0]))) or 0", "Command line."),
+}
+
+
+def _caller_source(mod: str, fn: str) -> str:
+    sig, expr, doc = MONEY_CALLERS[mod]
+    body = expr.replace("format_cents(", f"{fn}(")
+    return f'"""{doc}"""\n\nfrom shop.money import {fn}\n\n\ndef {sig}:\n    return {body}\n'
+
+
+MONEY_TESTS_OLD = (
+    "from shop.money import format_cents\n\n\ndef test_format_cents():\n"
+    '    assert format_cents(1234) == "$12.34"\n    assert format_cents(5) == "$0.05"\n'
+    '    assert format_cents(-250) == "-$2.50"\n'
+)
+MONEY_TESTS_NEW = (
+    "import pytest\n\nfrom shop.money import format_money\n\n\ndef test_format_money_usd():\n"
+    '    assert format_money(1234) == "$12.34"\n    assert format_money(5) == "$0.05"\n'
+    '    assert format_money(-250) == "-$2.50"\n\n\ndef test_format_money_currencies():\n'
+    '    assert format_money(1234, "EUR") == "EUR 12.34"\n'
+    '    assert format_money(-250, "GBP") == "-GBP 2.50"\n'
+    "    with pytest.raises(ValueError):\n"
+    '        format_money(1, "XXX")\n'
+)
+
+
+def _rename_edits() -> list[Edit]:
+    """money.py, then one whole-file edit per caller, then the tests: eleven files, which
+    trips the impact detector's file count (t010, ADR 0008). A caller must change in one
+    edit: ``edit_file`` lints each edit and rejects an import or a call site changed alone
+    (undefined name)."""
+    edits = [Edit("shop/money.py", MONEY_OLD, MONEY_NEW)]
+    for mod in MONEY_CALLERS:
+        edits.append(
+            Edit(
+                f"shop/{mod}.py",
+                _caller_source(mod, "format_cents"),
+                _caller_source(mod, "format_money"),
+            )
+        )
+    edits.append(Edit("tests/test_money.py", MONEY_TESTS_OLD, MONEY_TESTS_NEW))
+    return edits
+
+
 ALIGN_TESTS = (
     "from textfmt.table import render_table\n\n\ndef test_align_numbers_right():\n"
     "    assert render_table([['a', '1'], ['bbb', '22']]) == 'a   |  1\\nbbb | 22'\n"
@@ -473,6 +554,26 @@ SCRIPTS: list[TaskScript] = [
         ],
         docs=[changelog("`stdev` (population standard deviation) in `metrics.stats`.")],
     ),
+    TaskScript(
+        key="format_money",
+        tier="T1",
+        features=[
+            ("F1", "format_money with currency symbols and ValueError", "format_money"),
+            ("F2", "every caller migrated, old name gone", "format_money or test_modules"),
+            ("F3", "tests cover the new function", "format_money"),
+        ],
+        steps=[
+            Step(
+                "S1",
+                "rename format_cents to format_money(cents, currency) and migrate every caller",
+                ["F1", "F2", "F3"],
+                ["shop/money.py", *(f"shop/{m}.py" for m in MONEY_CALLERS)],
+                edits=_rename_edits(),
+                test_filter="format_money or test_modules",
+            )
+        ],
+        docs=[changelog("`format_money(cents, currency)` replaces `format_cents`.")],
+    ),
 ]
 
 
@@ -618,6 +719,16 @@ class ScriptedResponder:
                 }
             )
         if kind == "advisor":
+            if "Verify passed" in text:
+                # ADR 0008 pre-commit review of a passing high-impact diff: approve it.
+                return _json(
+                    {
+                        "verdict": "continue",
+                        "guidance": "Wide but mechanical change; tests green. Commit as is.",
+                        "revised_steps": None,
+                        "confidence": "high",
+                    }
+                )
             return _json(
                 {
                     "verdict": self.advisor_verdict,

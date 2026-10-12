@@ -39,5 +39,5 @@ def test_only_path_specific_tasks_are_pinned() -> None:
     tasks = load_tasks()
     pinned = {t.id: t for t in tasks if t.tier_pin is not None}
     # The pin is for tasks built around one graph path; every other task leaves the router free.
-    assert set(pinned) == {"t008_snapshot_coupling", "t009_verify_only_lint"}
+    assert set(pinned) == {"t008_snapshot_coupling", "t009_verify_only_lint", "t010_wide_rename"}
     assert all(t.tier_pin == "T1" and t.tier_hint == "T1" for t in pinned.values())
