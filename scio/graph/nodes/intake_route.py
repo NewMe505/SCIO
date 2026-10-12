@@ -82,13 +82,26 @@ def route(ctx: RunContext) -> Node:
             classifier_model=req.model,
             confidence=out.confidence,
         )
-        entry = fact(
-            f"routed to {out.tier.value} (confidence {out.confidence:.2f}): {out.rationale}",
-            source=Role.ROUTER,
-        )
+        entries = [
+            fact(
+                f"routed to {out.tier.value} (confidence {out.confidence:.2f}): {out.rationale}",
+                source=Role.ROUTER,
+            )
+        ]
+        if ctx.budget_from_tier and out.tier.value != ctx.tier:
+            # I-053: a budget sized from tier defaults follows the tier the classifier
+            # picked; explicit limits (evals) are left alone.
+            ctx.apply_tier_budgets(out.tier.value)
+            entries.append(
+                fact(
+                    f"budget resized for {out.tier.value}: {ctx.budget.tokens_max} tokens, "
+                    f"${ctx.budget.usd_max:.2f}, {ctx.budget.max_iters} iterations",
+                    source=Role.SYSTEM,
+                )
+            )
         return {
             "routing": routing,
-            "task_ledger": [entry],
+            "task_ledger": entries,
             "phase": "prepare",
             **ctx.budget_update(),
         }
@@ -108,5 +121,5 @@ def _repo_stats(ctx: RunContext) -> str:
     if not r.ok:
         return "(repository not prepared yet; stats unavailable)"
     files = [f for f in r.stdout.splitlines() if f]
-    py = sum(1 for f in files if f.endswith(".py"))
-    return f"{len(files)} tracked files, {py} Python files"
+    src = sum(1 for f in files if ctx.toolchain.is_source(f))
+    return f"{len(files)} tracked files, {src} {ctx.toolchain.name} source files"

@@ -268,6 +268,34 @@ Lessons:
 
 Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_checkpoint` edge, regenerated Mermaid; t010 fixture, hidden tests, fake script with whole-file caller edits; `test_passing_high_impact_diff_is_reviewed_once`, `test_t1_passing_high_impact_diff_gets_one_advisor_review`; ledger I-056, I-057; ADR 0006 live-data note updated. Open: a test_filter the planner invents should be rejected by the plan normaliser (it names a test that does not exist yet and the step does not add); candidate ledger entry once reproduced on the Fake.
 
+## M6: Foundations for Product Mode (2026-10-12, issue #39, ADR 0009)
+
+### Lessons applied
+- Pre-flight 12 (apply a new indirection at every call site in the same change): a read-only research pass produced the full inventory of Python-specific literals before any code was written: two command builders, one lint builder, one script runner, five prompt strings, two file-count helpers, the signature parser, the drift and impact file rules, two cache lists, and the settings fields nobody read. Every item became an edit or a test.
+- I-050 and I-053 (a hint is not a pin): `scio run --tier` now pins the route with the same `tier_pin` the evals use, and a budget that was only a default follows the tier the classifier picks.
+- Pre-flight 6 and 10: all edits went through the file tools; every check chain started with `set -o pipefail`.
+- The live-trial rule: one kept t001 trial was attempted before claiming "no behaviour change" (see what failed).
+
+### What succeeded
+- The `python` profile reproduces the pre-M6 commands byte for byte, and `test_toolchain.py` says so with the old literals copied into the test, not re-derived. The regression suite passed at pass^5 = 1.00 with no fixture or script change, which is the milestone's definition of "no behaviour change".
+- The boundary is mechanical: `test_no_stack_specific_command_outside_the_toolchain_package` scans `scio/` for command tokens and cache literals outside `scio/toolchain/`. It passed on the first run after the extraction, which means the inventory had been complete.
+- The I-054 sweep found four more declared-but-unread settings (I-059). Grepping every field of a settings model for a reader is cheap and should be a standing check.
+
+### What failed
+- The live t001 trial could not run: the `ant auth login` profile's refresh token had died (`invalid_grant`, I-060), after serving ten live trials earlier the same day. The milestone's live acceptance is pending the owner's re-login; nothing in SCIO can refresh the profile.
+- A `Protocol` with plain attribute annotations does not accept a frozen dataclass (mypy: "expected settable variable, got read-only attribute"). Protocol members that profiles implement as dataclass fields must be declared as read-only properties.
+- `projections.py` imports from `assembler.py`, so the profile-derived prompt constants had to live in the assembler, the lower module, not where they were first written (a circular import caught at the first run).
+
+### Actions
+- `scio/toolchain/` (`base.py`, `python.py`, registry), `configs/profiles/python.yaml`, ADR 0009; `Settings.toolchain`; `RunContext.toolchain`, `make_sandbox`, `apply_tier_budgets`; `route` resizes a default budget; `scio run --tier` pins.
+- `tests/unit/test_toolchain.py` (profile equality with the old literals, exit-code semantics, file rules, the boundary scan); `tests/unit/test_m6_foundations.py` (backend selection, effects path, live-test gate, default budget follows the routed tier, explicit budgets untouched).
+- PROMPT.md non-goal narrowed; ARCHITECTURE F-8 superseded; README ADR list; CHANGELOG; ledger I-059, I-060.
+
+### Carried into M7
+- I-060: re-run the kept live t001 trial after `ant auth login`; record cost and iterations here.
+- Stack detection for existing repositories and the `node-ts` profile are M10; until then `SCIO_TOOLCHAIN=python` is the only accepted value.
+- The sandbox still carries SCIO's own Python runtime facts (`python` argv rewrite, `PYTHONUTF8`, `PIP_NO_INDEX`); M9's two-phase network design decides whether those move into the profile or stay with the sandbox.
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.

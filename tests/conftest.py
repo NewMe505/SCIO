@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 
 import pytest
@@ -68,4 +67,7 @@ def harness(config: ModelsConfig, settings: Settings, fake: FakeProvider) -> Har
 
 
 def live_enabled() -> bool:
-    return os.environ.get("SCIO_RUN_LIVE_TESTS") == "1"
+    """``SCIO_RUN_LIVE_TESTS=1``, read through ``Settings.run_live_tests`` (I-059)."""
+    from scio.settings import Settings
+
+    return Settings().run_live_tests

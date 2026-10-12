@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from scio.context.assembler import feature_block, tag_context, task_block
+from scio.context.assembler import (
+    PYTHON_FILTER_HELP,
+    PYTHON_SELECTOR_HELP,
+    PYTHON_TEST_DIR,
+    feature_block,
+    tag_context,
+    task_block,
+)
 from scio.state.models import (
     EscalationTrigger,
     FeatureItem,
@@ -58,6 +65,7 @@ def plan_message(
     summaries: list[str],
     previous: Plan | None,
     revision_reason: str | None,
+    filter_help: str = PYTHON_FILTER_HELP,
 ) -> str:
     parts = [task_block(task), "", feature_block(features)]
     if summaries:
@@ -79,8 +87,8 @@ def plan_message(
         ]
     parts += [
         "",
-        "Every feature id must be covered by exactly one step. Give each feature a pytest -k "
-        "filter in test_filter. Output JSON matching the schema.",
+        f"Every feature id must be covered by exactly one step. Give each feature a {filter_help} "
+        "in test_filter. Output JSON matching the schema.",
     ]
     return "\n".join(parts)
 
@@ -112,13 +120,15 @@ def step_message(
     summaries: list[str],
     guidance: str | None,
     last_verify: str | None,
+    selector_help: str = PYTHON_SELECTOR_HELP,
+    test_dir: str = PYTHON_TEST_DIR,
 ) -> str:
     parts = [
         task_block(task),
         "",
         f"## Plan step {step.id}: {step.description}",
         f"Files expected: {', '.join(step.files_expected) or '(unspecified)'}",
-        "Tests go under tests/. Touching other files is plan drift and will be escalated.",
+        f"Tests go under {test_dir}. Touching other files is plan drift and will be escalated.",
         "",
         feature_block(features),
         "",
@@ -135,7 +145,7 @@ def step_message(
     parts += [
         "",
         "Implement this step and its tests, run them, then stop. In your summary, tests_added "
-        "must list the tests that prove this step's features (pytest node ids or -k keywords), "
+        f"must list the tests that prove this step's features ({selector_help}), "
         "existing tests included; verification runs exactly those.",
     ]
     return "\n".join(parts)

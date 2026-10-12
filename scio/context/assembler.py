@@ -7,6 +7,13 @@ the static role template) and nothing here is conversation history.
 from __future__ import annotations
 
 from scio.state.models import FeatureItem, TaskSpec
+from scio.toolchain import python_toolchain
+
+PYTHON_SELECTOR_HELP = python_toolchain().selector_help
+PYTHON_FILTER_HELP = python_toolchain().filter_help
+PYTHON_TEST_DIR = python_toolchain().test_dirs[0]
+"""Defaults for callers without a toolchain (tests); nodes pass ``ctx.toolchain``'s values
+(ADR 0009)."""
 
 
 def tag_context(role: str, text: str) -> str:
@@ -44,6 +51,7 @@ def coder_message(
     attempt: int,
     last_verify: str | None,
     step_id: str = "S1",
+    selector_help: str = PYTHON_SELECTOR_HELP,
 ) -> str:
     parts = [
         task_block(task),
@@ -59,9 +67,8 @@ def coder_message(
     parts += [
         "",
         "Work until the tests for the failing features pass, then stop. In your summary, "
-        "tests_added must list the tests that prove each feature (pytest node ids like "
-        "tests/test_x.py::test_name, or -k keywords), including existing tests you did not "
-        "write; verification runs exactly those.",
+        f"tests_added must list the tests that prove each feature ({selector_help}), "
+        "including existing tests you did not write; verification runs exactly those.",
     ]
     return "\n".join(parts)
 

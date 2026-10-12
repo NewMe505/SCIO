@@ -307,7 +307,7 @@ def run_docs_check(ctx: RunContext) -> str | None:
     script = f"{sb.root}/scripts/check_docs.py"
     if not sb.exists(script):
         return None
-    r = sb.exec(["python", script], timeout_s=120)
+    r = sb.exec(ctx.toolchain.script_argv(script), timeout_s=120)
     return None if r.ok else r.output.strip()[:3000]
 
 

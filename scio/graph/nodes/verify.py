@@ -13,43 +13,31 @@ from scio.loop.escalation import decide, exit_for, review_decision
 from scio.loop.exits import check_exit
 from scio.state.models import ExitReason, FeatureStatus, Role, SCIOState
 from scio.state.signatures import advance
+from scio.toolchain import Toolchain, python_toolchain
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
 
 def lint(ctx: RunContext) -> str:
-    """Ruff output on the sandbox tree, or '' when clean or ruff is unavailable."""
-    r = ctx.sandbox.exec(
-        [
-            "ruff",
-            "check",
-            "--no-cache",
-            "--select",
-            "E9,F63,F7,F82,F821",
-            "--output-format",
-            "concise",
-            ".",
-        ],
-        timeout_s=120,
-    )
-    if r.exit_code in (0, 127):
-        return ""
-    return r.stdout.strip()[:3000] if r.exit_code == 1 else ""
+    """The toolchain's lint findings on the sandbox tree, or '' when clean or unavailable."""
+    tc = ctx.toolchain
+    r = ctx.sandbox.exec(tc.lint_argv("."), timeout_s=120)
+    findings = tc.lint_findings(r.exit_code, r.stdout, "")
+    return (findings or "")[:3000]
 
 
 SELECTOR_SEP = " ; "
 
 
-def is_path_selector(selector: str) -> bool:
-    """``path::name`` node ids and ``*.py`` paths are positional targets; else ``-k``."""
-    s = selector.strip()
-    return "::" in s or s.endswith(".py") or "/" in s or "\\" in s
+def is_path_selector(selector: str, toolchain: Toolchain | None = None) -> bool:
+    """``path::name`` node ids and source paths are positional targets; else a filter."""
+    return (toolchain or python_toolchain()).is_path_selector(selector)
 
 
-def selector_input(root: str, selector: str) -> RunTestsInput:
+def selector_input(root: str, selector: str, toolchain: Toolchain | None = None) -> RunTestsInput:
     """Turn one reported test selector into a ``run_tests`` call (ledger I-031)."""
     s = selector.strip()
-    if is_path_selector(s):
+    if is_path_selector(s, toolchain):
         path = s if s.startswith(root) or s[1:3] == ":\\" or s.startswith("/") else f"{root}/{s}"
         return RunTestsInput(path=path)
     return RunTestsInput(filter=s)
@@ -65,7 +53,7 @@ def split_selectors(test_filter: str) -> list[str]:
 
 def _run(ctx: RunContext, flt: str | None) -> tuple[str, bool]:
     try:
-        out = run_tests(ctx.sandbox, RunTestsInput(filter=flt))
+        out = run_tests(ctx.sandbox, RunTestsInput(filter=flt), ctx.toolchain)
     except ToolError as exc:
         return str(exc), False
     return out, out.startswith("all tests passed")
@@ -76,15 +64,15 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
     chunks: list[str] = []
     ok_all = True
     for sel in split_selectors(test_filter):
-        inp = selector_input(ctx.sandbox.root, sel)
+        inp = selector_input(ctx.sandbox.root, sel, ctx.toolchain)
         try:
-            out = run_tests(ctx.sandbox, inp)
+            out = run_tests(ctx.sandbox, inp, ctx.toolchain)
             ok = out.startswith("all tests passed")
         except ToolError as exc:
             out, ok = str(exc), False
         if out.startswith("no tests collected"):
             ok = False
-            out += " (selector matched nothing: use 'path::test_name' or a -k keyword)"
+            out += f" (selector matched nothing: use {ctx.toolchain.selector_help})"
         label = f"path={inp.path!r}" if inp.path else f"filter={inp.filter!r}"
         chunks.append(f"[run_tests {label}]\n{out}")
         ok_all &= ok
@@ -146,9 +134,9 @@ def verify(ctx: RunContext) -> Node:
         if not any(f.test_filter for f in in_scope):
             tests_ok = False
             outputs.append(
-                "[tests] no feature tests reported. In tests_added, list the pytest node ids "
-                "(tests/test_x.py::test_name) or -k keywords of the tests that prove each "
-                "feature; existing tests count, you do not have to write new ones"
+                "[tests] no feature tests reported. In tests_added, list the tests that prove "
+                f"each feature ({ctx.toolchain.selector_help}); existing tests count, you do "
+                "not have to write new ones"
             )
 
         # 2. Whole suite (regressions) and 3. lint.
@@ -177,7 +165,12 @@ def verify(ctx: RunContext) -> Node:
             )
             for f in features
         ]
-        progress = advance(state.progress, features, error_text=None if all_ok else text)
+        progress = advance(
+            state.progress,
+            features,
+            error_text=None if all_ok else text,
+            signature_fn=ctx.toolchain.error_signature,
+        )
         progress.last_failure_kind = (
             "none"
             if all_ok

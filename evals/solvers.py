@@ -32,6 +32,7 @@ from scio.harness.providers.fake import FakeProvider
 from scio.harness.types import Message
 from scio.prompt.registry import PromptRegistry
 from scio.state.models import ExitReason, TaskSpec
+from scio.toolchain import python_toolchain
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class PlaceholderSolver:
         return TrialOutcome(passed=result.value.step_id != "", notes=f"attempts={result.attempts}")
 
 
-CACHE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+CACHE_PATTERNS = python_toolchain().cache_excludes  # ADR 0009: the profile owns the list
 
 
 def _make_writable(func: Callable[..., Any], path: str, _exc: BaseException) -> None:

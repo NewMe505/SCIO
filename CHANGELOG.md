@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- Toolchain profiles (ADR 0009, Product Mode M6): every stack-specific command and parser (pytest argv and exit codes, ruff lint, syntax check, test-path rules, cache excludes, dependency files, error signatures, the prompt phrases that name tests) moved behind `scio.toolchain.Toolchain`, with the `python` profile in `configs/profiles/python.yaml` reproducing the pre-M6 behaviour byte for byte. `Settings.toolchain` selects the profile; `test_toolchain.py` guards the boundary.
+- `scio run --tier` pins the route as well as the budget (I-053); without `--tier` the router decides and a default budget is resized for the tier it picks (`RunContext.apply_tier_budgets`); explicit eval budgets are untouched.
+- Assumption F-8 ("targets are Python") superseded by ADR 0009; PROMPT.md's "No UI" non-goal narrowed to SCIO itself (ADR 0007).
+### Fixed
+- `SCIO_SANDBOX_BACKEND`, `SCIO_SANDBOX_DOCKER_IMAGE`, `SCIO_SANDBOX_E2B_TEMPLATE`, `SCIO_EFFECTS_PATH` and `SCIO_RUN_LIVE_TESTS` were declared and never read (I-054, I-059); `make_sandbox` selects the backend, `RunContext.create` honours the effects path, the live-test gate reads `Settings`.
 
 ## [0.4.0] - 2026-10-12
 ### Changed
