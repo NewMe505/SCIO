@@ -20,6 +20,12 @@ machine was asleep or on battery at 03:17 (result 0x800710E0, ledger I-045)::
     Register-ScheduledTask "SCIO nightly live evals" -Action $action -Trigger $trigger `
       -Settings $settings
 
+On a Claude subscription instead of the API (ADR 0012), register the same task with
+``--provider claude_code`` and a ceiling that bounds the estimate (nothing is billed; the
+dollars are Claude Code's API-price estimate, about 4x the API figure)::
+
+    ... 'uv run python scripts/nightly_live.py --provider claude_code --max-usd 30 --trials 1 ' ...
+
 The profile's refresh token rotates on every refresh; all trials share one SDK client so
 only one refresh is ever in flight (I-044). If a run logs ``invalid_grant``, the profile is
 dead: run ``ant auth login`` again.
@@ -79,12 +85,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--config", default="sonnet_opus_advisor", help="A/B config name (evals/configs)"
     )
-    ap.add_argument("--provider", default="anthropic")
+    ap.add_argument(
+        "--provider",
+        default="anthropic",
+        help="anthropic (the ant profile, Console billing) or claude_code (the unmodified "
+        "claude binary on the owner's subscription, ADR 0012; also sets the worker backend)",
+    )
     args = ap.parse_args(argv)
 
     # The profile must win: a stale key in the environment would shadow it.
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("SCIO_PROVIDER_OVERRIDE", None)
+    if args.provider == "claude_code":
+        # Every role through Claude Code: the worker backend too, and print mode must not
+        # think it is nested in a Claude Code session. One trial at a time: each turn is a
+        # separate `claude -p` process, and the subscription's usage window is the cap.
+        os.environ["SCIO_WORKER_BACKEND"] = "claude_code"
+        os.environ.pop("CLAUDECODE", None)
+        args.parallel = 1
     sys.path.insert(0, str(ROOT))
     from evals.runner import RESULTS_DIR, run_suite
 
