@@ -907,20 +907,26 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	interview(interview)
+	answers(answers)
 	specify(specify)
+	approval(approval)
 	bootstrap(bootstrap)
 	publish(publish)
 	done(done)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> interview;
+	answers --> specify;
+	approval -.-> bootstrap;
+	approval -. &nbsp;halt&nbsp; .-> done;
+	approval -.-> specify;
 	bootstrap -.-> done;
 	bootstrap -.-> publish;
-	interview --> specify;
+	interview -.-> answers;
+	interview -. &nbsp;halt&nbsp; .-> done;
 	publish --> done;
-	specify -.-> bootstrap;
+	specify -.-> approval;
 	specify -. &nbsp;halt&nbsp; .-> done;
 	done --> __end__;
-	specify -.-> specify;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

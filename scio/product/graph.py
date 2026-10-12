@@ -1,11 +1,14 @@
 """The product graph behind ``scio new`` (ADR 0010).
 
-    interview -> (human answers) -> specify -> (human approves PRODUCT.md) -> bootstrap
+    interview -> answers (human) -> specify -> approval (human) -> bootstrap
       -> [publish: human confirms the GitHub repository] -> done
 
-Every stop for a human is a LangGraph ``interrupt``; the run resumes with
-``scio new --thread ID --decision "<text>"``. Bootstrap steps are idempotent effects with
-world probes, so a crash or a second resume never duplicates a commit (ADR 0003).
+Every stop for a human is a LangGraph ``interrupt`` in a node of its own, after the node
+that made the model call: a node re-runs from its start on resume, so a call and an
+interrupt in one node would run the call twice and approve a draft nobody saw (I-065).
+The run resumes with ``scio new --thread ID --decision "<text>"``. Bootstrap steps are
+idempotent effects with world probes, so a crash or a second resume never duplicates a
+commit (ADR 0003).
 """
 
 from __future__ import annotations
@@ -46,37 +49,48 @@ class ProductOutcome:
 
 
 def interview(ctx: RunContext) -> Node:
+    """The interviewer's questions. No interrupt here: a node re-runs from its start when the
+    graph resumes, so a model call and an interrupt in one node means the call runs twice and
+    the human answers a draft they never saw (I-065). The stop is the next node."""
+
     def node(state: ProductState) -> dict[str, Any]:
-        if state.questions:  # resumed: the questions are in state, ask the human again
-            questions = state.questions
-            entries: list[Any] = []
-        else:
-            req = ctx.harness.build_request(
-                "interviewer",
-                system=ctx.prompts.get("interviewer").render(),
-                messages=[Message.user(f"# Product prompt\n{state.prompt.strip()}")],
-                tags={"thread": ctx.thread_id},
-            )
-            try:
-                out: InterviewOutput = ctx.harness.structured(req, InterviewOutput).value
-            except BudgetExceeded as exc:
-                return {"exit_reason": "budget", "phase": "halted", **_fact(f"budget: {exc}")}
-            questions = [q.strip() for q in out.interview_questions]
-            entries = [fact(f"interview: {len(questions)} questions", source=Role.INTERVIEWER)]
-        answers = interrupt(
+        req = ctx.harness.build_request(
+            "interviewer",
+            system=ctx.prompts.get("interviewer").render(),
+            messages=[Message.user(f"# Product prompt\n{state.prompt.strip()}")],
+            tags={"thread": ctx.thread_id},
+        )
+        try:
+            out: InterviewOutput = ctx.harness.structured(req, InterviewOutput).value
+        except BudgetExceeded as exc:
+            return {"exit_reason": "budget", "phase": "halted", **_fact(f"budget: {exc}")}
+        questions = [q.strip() for q in out.interview_questions]
+        return {
+            "questions": questions,
+            "phase": "answers",
+            "ledger": [fact(f"interview: {len(questions)} questions", source=Role.INTERVIEWER)],
+            **ctx.budget_update(),
+        }
+
+    return node
+
+
+def after_interview(state: ProductState) -> Literal["answers", "halt"]:
+    return "halt" if state.exit_reason is not None else "answers"
+
+
+def answers(_ctx: RunContext) -> Node:
+    """Human stop: the interview answers (interrupt only, so a resume repeats no model call)."""
+
+    def node(state: ProductState) -> dict[str, Any]:
+        reply = interrupt(
             {
                 "question": "Answer the interview (one reply; number or separate your answers)",
-                "questions": questions,
+                "questions": state.questions,
                 "resume": 'scio new --thread <id> --decision "<answers>"',
             }
         )
-        return {
-            "questions": questions,
-            "answers": str(answers),
-            "phase": "specify",
-            "ledger": entries,
-            **ctx.budget_update(),
-        }
+        return {"answers": str(reply), "phase": "specify"}
 
     return node
 
@@ -117,43 +131,61 @@ def specify(ctx: RunContext) -> Node:
             )
         ]
         entries += [fact(n, source=Role.SYSTEM) for n in notes]
-        decision = str(
-            interrupt(
-                {
-                    "question": "Approve PRODUCT.md? Reply 'approve', or give revision notes.",
-                    "product_md": product_md,
-                    "target_dir": state.target_dir,
-                    "cost_usd": round(ctx.harness.budget.snapshot().usd_used, 4),
-                }
-            )
-        )
-        patch: dict[str, Any] = {
+        return {
             "spec": spec,
             "product_md": product_md,
+            "phase": "approval",
             "ledger": entries,
             **ctx.budget_update(),
         }
-        if decision.strip().lower().startswith("approve"):
-            patch.update(approved=True, phase="bootstrap")
-            patch["ledger"] = [*entries, fact("PRODUCT.md approved", source=Role.HUMAN)]
-        elif len(state.revision_notes) >= MAX_REVISIONS:
-            patch.update(exit_reason="rejected", phase="halted")
-            patch["ledger"] = [
-                *entries,
-                fact(f"PRODUCT.md rejected {MAX_REVISIONS + 1} times; halting", source=Role.HUMAN),
-            ]
-        else:
-            patch.update(revision_notes=[*state.revision_notes, decision.strip()], phase="specify")
-            patch["ledger"] = [
-                *entries,
-                fact(f"revision requested: {decision[:200]}", source=Role.HUMAN),
-            ]
-        return patch
 
     return node
 
 
-def after_specify(state: ProductState) -> Literal["bootstrap", "specify", "halt"]:
+def after_specify(state: ProductState) -> Literal["approval", "halt"]:
+    return "halt" if state.exit_reason is not None else "approval"
+
+
+def approval(ctx: RunContext) -> Node:
+    """Human stop on the draft in state: the text shown is the text approved (I-065)."""
+
+    def node(state: ProductState) -> dict[str, Any]:
+        decision = str(
+            interrupt(
+                {
+                    "question": "Approve PRODUCT.md? Reply 'approve', or give revision notes.",
+                    "product_md": state.product_md,
+                    "target_dir": state.target_dir,
+                    "cost_usd": round(state.budgets.usd_used, 4),
+                }
+            )
+        )
+        if decision.strip().lower().startswith("approve"):
+            return {
+                "approved": True,
+                "phase": "bootstrap",
+                "ledger": [fact("PRODUCT.md approved", source=Role.HUMAN)],
+            }
+        if len(state.revision_notes) >= MAX_REVISIONS:
+            return {
+                "exit_reason": "rejected",
+                "phase": "halted",
+                "ledger": [
+                    fact(
+                        f"PRODUCT.md rejected {MAX_REVISIONS + 1} times; halting", source=Role.HUMAN
+                    )
+                ],
+            }
+        return {
+            "revision_notes": [*state.revision_notes, decision.strip()],
+            "phase": "specify",
+            "ledger": [fact(f"revision requested: {decision[:200]}", source=Role.HUMAN)],
+        }
+
+    return node
+
+
+def after_approval(state: ProductState) -> Literal["bootstrap", "specify", "halt"]:
     if state.exit_reason is not None:
         return "halt"
     return "bootstrap" if state.approved else "specify"
@@ -360,14 +392,20 @@ def build_product_graph(ctx: RunContext | None) -> Any:
         g.add_node(name, factory(ctx) if ctx is not None else _unbound(name))
 
     n("interview", interview)
+    n("answers", answers)
     n("specify", specify)
+    n("approval", approval)
     n("bootstrap", bootstrap)
     n("publish", publish)
     n("done", done)
     g.add_edge(START, "interview")
-    g.add_edge("interview", "specify")
+    g.add_conditional_edges("interview", after_interview, {"answers": "answers", "halt": "done"})
+    g.add_edge("answers", "specify")
+    g.add_conditional_edges("specify", after_specify, {"approval": "approval", "halt": "done"})
     g.add_conditional_edges(
-        "specify", after_specify, {"bootstrap": "bootstrap", "specify": "specify", "halt": "done"}
+        "approval",
+        after_approval,
+        {"bootstrap": "bootstrap", "specify": "specify", "halt": "done"},
     )
     g.add_conditional_edges(
         "bootstrap", after_bootstrap, {"publish": "publish", "done": "done", "halt": "done"}

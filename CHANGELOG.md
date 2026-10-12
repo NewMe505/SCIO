@@ -9,6 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ### Changed
 - After `scio new` every feature in `progress.json` is `todo`, the walking skeleton included: the scaffold proves the toolchain and P1 is verified by its own feature run (ADR 0011 decision 1, the M7 open question).
 ### Fixed
+- `scio new` ran the interviewer and the product planner twice and approved a draft the human never saw: a node re-runs from its start on resume, and both nodes made their model call and interrupted in the same node (I-065, found by the first live run after M8). The stops are now their own nodes (`answers`, `approval`) reading the draft from state; a Fake test with a planner whose draft changes every call guards it.
 - Verify's "something changed since the base commit" check read `git diff --stat`, which ignores untracked files, so a feature delivered only by new files stalled as "no changes" (I-063); `diff_stat` lists untracked files and the full diff stages them with `git add -N`.
 - `uv.lock` recorded the project at 0.3.0 after two releases (I-062); relocked, and `test_version.py` now checks the lock.
 
