@@ -1,0 +1,10 @@
+[project]
+name = "metrics"
+version = "0.1.0"
+description = "Small numeric helpers."
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F"]

@@ -1,0 +1,9 @@
+id: t009_verify_only_lint
+suite: regression
+title: Add a population standard deviation to metrics.stats
+tier_hint: T1
+tier_pin: T1  # built for the plan -> verify -> debug path; the router would rate it T0 (I-050)
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_stdev_hidden.py

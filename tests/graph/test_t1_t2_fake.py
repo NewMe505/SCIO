@@ -137,6 +137,22 @@ def test_t1_two_steps_one_commit_each(tmp_path: Path) -> None:
     assert _hidden_pass(ctx, "t004_two_features", "test_shapes_hidden.py")
 
 
+def test_t1_lint_only_failure_runs_the_debugger(tmp_path: Path) -> None:
+    """t009: the step is correct and its tests pass, but verify's lint finds an undefined name
+    in a module the step never touched; triage routes to debug, which fixes it (issue #31)."""
+    ctx, outcome = _run(tmp_path, "t009_verify_only_lint", "T1", ScriptedResponder())
+    s = _finish(ctx, outcome).state
+    assert s.exit_reason is ExitReason.SUCCESS
+    debug_keys = [k for k in s.artifacts if k.startswith("debugger:")]
+    assert debug_keys == ["debugger:2"], sorted(s.artifacts)
+    assert s.progress.iterations == 2 and s.escalations == []
+    # The debugger was shown the lint failure, not a test failure.
+    debug_transcript = Path(s.artifacts["debugger:2"].path).read_text(encoding="utf-8")
+    assert "[lint]" in debug_transcript and "F821" in debug_transcript
+    assert "FAILED" not in debug_transcript
+    assert _hidden_pass(ctx, "t009_verify_only_lint", "test_stdev_hidden.py")
+
+
 # ---------- escalation ----------
 
 

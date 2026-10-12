@@ -20,7 +20,7 @@ def test_cap_skips_tasks_after_spend_reaches_it() -> None:
         "regression", provider="fake", trials=1, solver=PlaceholderSolver(), max_usd=0.0001
     )
     assert report.capped and report.usd_cap == 0.0001
-    assert len(report.tasks) == 1 and len(report.skipped_tasks) == 7
+    assert len(report.tasks) == 1 and len(report.skipped_tasks) == 8
     md = report.to_markdown()
     assert "CAPPED" in md and "of cap $0.00" in md and report.usd_total > 0
 

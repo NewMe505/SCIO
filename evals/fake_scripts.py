@@ -44,6 +44,9 @@ class Step:
     """Turns the wrong implementation into the right one (applied once guided by the advisor)."""
     tests_added: list[str] | None = None
     """What the worker reports in ``tests_added``; defaults to ``[test_filter]``."""
+    debug_edits: list[Edit] = field(default_factory=list)
+    """What the debugger applies when verify fails after a correct step (t009: a lint failure
+    in a file the step never touched). Without these the debugger would replay ``edits``."""
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,21 @@ PAD_NEW = (
 )
 DEMO_OLD = "item   | qty | price\nwidget | 3   | 2.5\ngear   | 12  | 10.0\n"
 DEMO_NEW = "item   | qty | price\nwidget |   3 |   2.5\ngear   |  12 |  10.0\n"
+MEDIAN_TAIL = "    return float(s[mid])\n"
+STDEV_DEF = (
+    "\n\ndef stdev(values):\n    if not values:\n"
+    '        raise ValueError("stdev of an empty sequence")\n'
+    "    m = mean(values)\n"
+    "    return (sum((v - m) ** 2 for v in values) / len(values)) ** 0.5\n"
+)
+STATS_TEST_HEAD = "from metrics.stats import mean, median\n"
+STDEV_TESTS = (
+    "from metrics.stats import stdev\n\n\ndef test_stdev_population():\n"
+    "    assert stdev([2, 4, 4, 4, 5, 5, 7, 9]) == 2.0\n\n\n"
+    "def test_stdev_empty():\n    with pytest.raises(ValueError):\n        stdev([])\n"
+)
+REPORT_IMPORT_OLD = "from metrics.stats import mean, median\n"
+REPORT_IMPORT_NEW = "from metrics.stats import DECIMALS, mean, median\n"
 ALIGN_TESTS = (
     "from textfmt.table import render_table\n\n\ndef test_align_numbers_right():\n"
     "    assert render_table([['a', '1'], ['bbb', '22']]) == 'a   |  1\\nbbb | 22'\n"
@@ -428,6 +446,32 @@ SCRIPTS: list[TaskScript] = [
             )
         ],
         docs=[changelog("`render_table` right-aligns numeric cells.")],
+    ),
+    TaskScript(
+        key="standard deviation",
+        tier="T1",
+        features=[
+            ("F1", "population stdev with ValueError on empty input", "stdev"),
+            ("F2", "stdev covered by tests", "stdev"),
+            ("F3", "CI workflow passes", "stdev or stats"),
+        ],
+        steps=[
+            Step(
+                "S1",
+                "add stdev to metrics.stats with tests",
+                ["F1", "F2", "F3"],
+                ["metrics/stats.py", "tests/test_stats.py"],
+                edits=[
+                    Edit("metrics/stats.py", MEDIAN_TAIL, MEDIAN_TAIL + STDEV_DEF),
+                    Edit("tests/test_stats.py", STATS_TEST_HEAD, STATS_TEST_HEAD + STDEV_TESTS),
+                ],
+                test_filter="stdev",
+                # verify's lint step finds the undefined name in metrics/report.py, a file the
+                # step never touched; the debugger wires the constant instead of deleting it.
+                debug_edits=[Edit("metrics/report.py", REPORT_IMPORT_OLD, REPORT_IMPORT_NEW)],
+            )
+        ],
+        docs=[changelog("`stdev` (population standard deviation) in `metrics.stats`.")],
     ),
 ]
 
@@ -685,6 +729,8 @@ class ScriptedResponder:
                     Edit("README.md", "", "") if False else Edit("README.md", "# ", "# [drift] ")
                 )
             return edits
+        if role == "debugger" and step.debug_edits:
+            return list(step.debug_edits)
         return list(step.edits)
 
     def _turn(self, role: str, text: str) -> FakeReply:

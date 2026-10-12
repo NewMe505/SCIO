@@ -8,6 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
 - t008_snapshot_coupling: a formatting change that breaks a CLI snapshot test and a README example test outside the coder's filtered run; the first regression task built to make verify's full-suite step fail and the debugger run live.
+- t009_verify_only_lint (T1, pinned): an undefined name in a module no test imports; the coder's `run_tests` is green and only verify's lint step fails, so the debugger must run and wire the constant rather than delete the module (hidden tests check both). First live debugger run: one turn, $0.06 of a $0.34 trial, fix plus sweep. Fake scripts gained `Step.debug_edits` for the debugger's turn.
 - `tier_pin:` on an eval task runs that tier without consulting the router, which rated t008 T0 and skipped the nodes the task exists to exercise (I-050). `RunContext.tier_pin`; `route` records `classifier_model="pinned"`.
 - Two realistic regression tasks: t006 (a change spanning the store module, the CLI and their tests) and t007 (a fixture whose own CI is red on `ruff` with the repo config and on `pytest`); hidden tests run the fixture's own lint rules. One live trial each passed ($0.35 and $0.40).
 - Suite cost cap: `evals/runner --max-usd`; the report records spend, cap and skipped tasks.
