@@ -399,5 +399,20 @@ After the M8 live milestone the owner said they had been billed for API usage an
 ### What failed
 - The first live trial script passed an `EvalTask` where the solver wants `to_task_like(task)`; a harness detail, no spend.
 
-### Live trial
-(pending: t001 through the real binary, Max login; results added here.)
+### Live trial (2026-10-12, Max login, no Console API usage)
+t001 through the T0 graph with both seams on (`SCIO_PROVIDER_OVERRIDE=claude_code`, `SCIO_WORKER_BACKEND=claude_code`), run from inside a Claude Code session with `CLAUDECODE` stripped:
+
+| role | `claude -p` runs | output tokens | cache read | cache write | API-price estimate |
+|---|---:|---:|---:|---:|---:|
+| router (haiku) | 1 | 152 | 0 | 10,747 | $0.001 |
+| coder (sonnet) | 2 (session + summary) | 2,602 | 205,212 | 60,010 | $0.217 |
+| documenter (sonnet) | 4 (two rounds) | 6,977 | 405,516 | 52,892 | $0.283 |
+| gate (opus) | 1 | 354 | 0 | 11,697 | $0.066 |
+| total | 8 | | | | $0.57 estimated, $0.00 billed |
+
+Result: pass. The coder's session listed the repository with a read-only Bash call, read the module and the tests, wrote `slugify` and `tests/test_slugify.py`, ran pytest; SCIO's verify passed on the first iteration, `git_checkpoint` committed `feat:`, the documenter updated the CHANGELOG, the gate passed, and the hidden tests pass on the kept tree (9 tests). Nothing was sent to the Console organisation.
+
+Lessons:
+- The same task costs about four times its API estimate when run through Claude Code ($0.57 versus $0.11 to $0.15 for t001 on the API), because every `claude -p` process carries Claude Code's own system prompt and tool set as cache writes and reads (60k cache-write tokens on the coder's first turn). On a subscription this is usage-window consumption, not dollars; the estimate is still the right number to cap turns with.
+- The documenter's two rounds are four processes; `--resume` keeps the second round's context but each round pays the session start. A single-round documenter would halve its cost on this backend.
+- Print mode's read-only command set (`ls`, `cat`) runs without an `--allowedTools` entry, so the coder explores with Bash even though only the test and lint commands were allowed; `acceptEdits` plus `--permission-prompts none` never blocked the run.
