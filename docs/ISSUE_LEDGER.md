@@ -528,7 +528,7 @@ Template:
 - Root cause: the profile's refresh token rotates and expires between sessions (I-060); SCIO cannot refresh it, and `scio new` has no pre-flight check, so the failure surfaces as a traceback from inside the graph
 - Fix: the owner runs `ant auth login`, then the live milestone runs on a fresh thread (`new-live3`; an empty checkpoint on `new-live2` would otherwise be resumed, I-061). Code change: none in M8; a pre-flight credential probe before the first product call is a candidate (`docs/IDEAS_TRIAGE.md`)
 - Sweep: every live command in CLAUDE.md and the nightly script already strips the placeholder key; the gap is the missing probe, not a wrong command. Guard: this entry and the M8 runbook in LESSONS_LEARNED
-- Resolved: · Status: open (waits for the owner's re-login; the M8 PR stays draft until the live milestone is recorded)
+- Resolved: 2026-10-12 · Status: resolved (the owner logged in again with `ant auth login`; the live milestone ran on thread `new-live3` / `build-todo_cli`, recorded in LESSONS_LEARNED M8)
 
 ### I-065 · `scio new` approved a PRODUCT.md the human never saw: model call and interrupt in one node
 - Found: 2026-10-12 · M8 live milestone · `scio new --thread new-live3 --decision approve`: the approval payload showed "tagtodo, 8 features"; the repository was bootstrapped with "todo_cli, 7 features"; the cost ledger shows `interviewer: 2 calls`, `product_planner: 2 calls`
@@ -536,4 +536,20 @@ Template:
 - Root cause: LangGraph re-executes a node from its first statement when a run resumes; `interrupt()` only short-circuits once reached. `interview` and `specify` made the model call and then interrupted in the same node, and `interview`'s `if state.questions` guard could never fire because the questions reach state only when the node returns, after the interrupt. The M8 loop was written with the stop in its own node (`milestone_gate` then `gate_decision`) but the M7 nodes were not revisited
 - Fix: `interview` and `specify` now only call the model and return; `answers` and `approval` are interrupt-only nodes that read the questions and the draft from state (`scio/product/graph.py`); the approval payload's cost comes from state too
 - Sweep: `grep -rn "interrupt(" scio` lists seven call sites; `checkpoint_gate.merge_wait` and `halt`, `product.graph.publish`, and `build.gate_decision` / `merge_wait` / `feature` make no model call before the interrupt (`feature` resumes a paused or finished subgraph, which repeats nothing). Guard: `test_the_draft_shown_is_the_draft_approved_and_no_model_call_repeats` drives the Fake with a planner whose draft changes on every call and counts calls; rule added to the pre-flight list in LESSONS_LEARNED
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-066 · `scio report` on a feature thread inside a build crashed: thread kind decided by name prefix
+- Found: 2026-10-12 · M8 live milestone · `scio report --thread build-todo_cli-p2-a1` exited 1 (validation error: the checkpoint is an `SCIOState`, the CLI tried to read a `ProductBuildState`)
+- Symptom: the report command picked the product view for every thread whose id starts with `build-`, and every feature run inside a build is named `build-<product>-...`
+- Root cause: the thread kind was inferred from the name, not from the checkpoint; the naming scheme for feature threads was chosen after the report branch was written
+- Fix: `scio/cli.py::_is_build_thread` reads the checkpoint and checks for `feature_runs`; the CLI test reports a feature thread as a task run
+- Sweep: `grep -rn 'startswith("build-")' scio tests` finds no other use; the memory note "report detects by prefix" was wrong and is corrected by the test. Guard: `test_cli_build_status_and_report`
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-067 · A skipped feature's uncommitted edits leaked into the next feature's run
+- Found: 2026-10-12 · M8 live milestone · P2's first verify failed on `tests/test_smoke.py::test_todo_console_script_version`, a test P1's attempt had written; the advisor flagged `plan_drift, high_impact` because `pyproject.toml` and `tests/test_smoke.py` were outside S1's expected files ($0.05 advisor call, one extra coder iteration)
+- Symptom: P1 exited `escalate_human` and was skipped with its working tree dirty (edits to `cli.py`, `pyproject.toml`, `tests/test_smoke.py`, never committed because verify never passed). The next feature's `prepare_repo` ran `git checkout milestone/1` then `checkout -B agent/p2-...`, and git carried the modified files across, so P2 started from P1's half-done work and committed part of it
+- Root cause: the task graph assumes it starts on a clean checkout (it clones in task mode); in a product build the sandbox is the product repository and only the orchestrator knows that a previous attempt ended without a commit. Nothing reset the tree between attempts
+- Fix: `feature` node, before a fresh attempt: `git checkout -q <milestone branch>`, `git reset -q --hard`, `git clean -fdq` (ignored files such as `.scio/sandbox` are kept). A resume of a running attempt does not reset
+- Sweep: the other places that switch branches in the product build (`plan_milestone` to main, `issues` to the milestone branch, `merge_wait` to main, `update_progress` to main) run after a passed feature's fast-forward or after the loop, when the tree is clean; `prepare_repo` in task mode clones fresh. Guard: `test_feature_failure_stops_for_one_human_decision` plants a stray file and a modified tracked file before answering `skip` and asserts the next attempt starts clean
 - Resolved: 2026-10-12 · Status: resolved

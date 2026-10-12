@@ -107,9 +107,12 @@ def _print_build(outcome: Any) -> None:
 
 def _build(args: argparse.Namespace) -> int:
     """``scio build``: start or resume the milestone loop of a bootstrapped product
-    (ADR 0011). The thread is ``build-<product>`` unless ``--thread`` names another."""
+    (ADR 0011). The thread is ``build-<product>-m<next milestone>`` unless ``--thread`` names
+    another; a paused thread is resumed, an ended one (done, halted, or ``merge and stop``)
+    is left alone and a fresh thread starts (``-r2``, ``-r3`` ... after a halt)."""
     from scio.harness.github.client import GitHubClient
     from scio.product.build import (
+        build_finished,
         build_started,
         build_thread_id,
         resume_build,
@@ -124,17 +127,30 @@ def _build(args: argparse.Namespace) -> int:
     progress = ProgressFile.from_json(progress_path.read_text(encoding="utf-8"))
     settings = get_settings()
     gh_repo = args.gh or settings.gh_repo
-    thread = args.thread or build_thread_id(progress.product)
-    ctx = RunContext.create(
-        thread_id=thread,
-        sandbox_root=args.product,
-        tier="T1",  # the orchestrator's own calls (planner, gate); features get their own
-        tier_pin="T1",
-        settings=settings,
-        harness=_scripted_harness(settings),
-        github=GitHubClient(gh_repo) if gh_repo else None,
-    )
+    harness = _scripted_harness(settings)
+    github = GitHubClient(gh_repo) if gh_repo else None
+
+    def make(thread: str) -> RunContext:
+        return RunContext.create(
+            thread_id=thread,
+            sandbox_root=args.product,
+            tier="T1",  # the orchestrator's own calls (planner, gate); features get their own
+            tier_pin="T1",
+            settings=settings,
+            harness=harness,
+            github=github,
+        )
+
+    base = args.thread or build_thread_id(progress.product, progress.next_milestone_number())
+    thread = base
+    ctx = make(thread)
     try:
+        attempt = 1
+        while args.thread is None and build_finished(ctx):
+            ctx.close()
+            attempt += 1
+            thread = f"{base}-r{attempt}"
+            ctx = make(thread)
         if build_started(ctx):
             outcome = resume_build(ctx, args.decision)
         else:
@@ -143,6 +159,23 @@ def _build(args: argparse.Namespace) -> int:
         ctx.close()
     _print_build(outcome)
     return 0 if outcome.state.exit_reason is None else 1
+
+
+def _is_build_thread(ctx: RunContext) -> bool:
+    """True when the thread's checkpoint holds a ``ProductBuildState`` (it has feature runs).
+
+    Read through the build graph: ``get_state`` only returns the channels the reading graph
+    declares, so a task-graph read would never show ``feature_runs``."""
+    from scio.graph.checkpointer import open_checkpointer
+    from scio.product.build import build_product_build_graph
+
+    config = {"configurable": {"thread_id": ctx.thread_id}}
+    with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
+        graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
+        values = graph.get_state(config).values
+    if not values:
+        raise LookupError(f"no checkpoint for thread {ctx.thread_id!r}")
+    return "feature_runs" in values
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -257,8 +290,10 @@ def main(argv: list[str] | None = None) -> int:
         from scio.harness.accounting import CostLedger
 
         entries = CostLedger.load_entries(Path(".scio") / "ledger" / f"{thread}.jsonl")
-        if thread.startswith("build-"):
+        if _is_build_thread(ctx):
             # A product build thread (ADR 0011): milestones and feature runs, not one task.
+            # Decided by the checkpoint's shape, not the name: a feature run inside a build
+            # is a task thread named build-<product>-m<n>-<pk>-a<k> (I-066).
             from scio.product.build import load_build_state
             from scio.product.report import build_product_report, write_product_report
 

@@ -350,28 +350,34 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - A crash test counted commits on the feature branch and forgot that the branch includes the milestone's earlier commits; the assertion, not the code, was wrong (`milestone/1..agent/...` ranges fix it).
 - The first live `scio new` after M8 approved a different `PRODUCT.md` from the one shown ("tagtodo, 8 features" on screen, "todo_cli, 7 features" on disk) and paid the interviewer and the planner twice (I-065): both M7 nodes made their model call and interrupted in the same node, and a node re-runs from its start on resume. The M8 loop had been written with its stops in separate nodes (`gate_decision`, `merge_wait`) without going back to M7. The scripted Fake returns the same draft every call, so no test could see it; the guard test now varies the draft per call and counts calls. Pre-flight item 15.
 
-### Live milestone (pending, I-064)
-The live acceptance (`scio new` from an empty directory, then `scio build` for one milestone on `sonnet_opus_advisor`) could not run: the `ant auth login` profile had died again (`invalid_grant`) before the first call, as in M6 (I-060). Nothing was spent. Runbook once the owner has logged in again (one trial, cost read by role before anything is scaled):
+### Live milestone (2026-10-12, `sonnet_opus_advisor`)
+`scio new` from an empty directory (interview, approval, bootstrap: $0.13 across four Opus calls, two of them the I-065 duplicates) then `scio build` for one milestone on the resulting `todo_cli` product (seven features in PRODUCT.md). The planner grouped P1 to P4 as M1 "Walking skeleton, storage, add and list" with P1 and P4 at T0, P2 and P3 at T1.
 
-```
-ant auth login
-env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --prompt "A CLI todo app with tags and JSON export" --dir <empty dir> --thread new-live3
-env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --thread new-live3 --dir <dir> --decision "<answers>"
-env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --thread new-live3 --dir <dir> --decision approve
-env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio build --product <dir>          # pauses at the M1 PR
-uv run scio report --thread build-<product>                                                   # cost by feature and role
-env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio build --product <dir> --decision merge
-```
+| feature | tier | result | iterations | tool calls | cost | escalations | what happened |
+|---|---|---|---:|---:|---:|---|---|
+| P1 walking skeleton (console script `todo --version`) | T0 | skipped by human | 1 | 22 | $0.21 | 0 | the coder wrote the entry point, `[project.scripts]` and a subprocess smoke test, then asked a design question: the sandbox has no install step, so `todo` is not on PATH (M9 scope) |
+| P2 JSON file storage | T1 | pass | 4 | 44 | $0.77 | 1 resolved (`plan_drift, high_impact`, advisor `change_approach`) | verify failed on a test P1 had left in the tree (I-067); the advisor named the drift, the guided turn fixed it, two more steps passed first time |
+| P3 `todo add` with tags | T1 | pass | 2 | 23 | $0.52 | 0 | plan, localize, one coder turn per step |
+| P4 `todo list` | T0 | pass | 1 | 12 | $0.23 | 0 | one coder turn |
+| orchestrator | | | | | $0.05 | | milestone planner $0.023, milestone gate $0.030 |
 
-Expected spend for one milestone: P1 at T0 (about $0.15 from the t001 rows) plus up to three T1 features at $0.35 to $0.65 each (t006 to t010 rows), so $1 to $2.5 before the merge. This section is completed with the cost by role, the features' tiers and iterations, and whatever the live planner and gate did that the Fake could not reproduce (the M5 lesson).
+Integration checks on `milestone/1`: lint clean, 20 tests passed. The milestone gate returned `escalate_human` on its own ("P1 has no commit, so no feature run covers its criteria") before the orchestrator's override could apply; `proceed` opened the PR file, `merge and stop` merged `milestone/1` into `main` with the `[scio:merge:M1]` marker and recorded M1 in `progress.json` ($1.73 features, $1.78 total). Human stops: four (P1's decision, the gate, the merge, and the approval of PRODUCT.md).
+
+Lessons:
+- The planner's P1 criteria need an installed console script, and the M8 sandbox cannot install anything (`PIP_NO_INDEX`, no `install_deps` until M9). The coder diagnosed it exactly and asked instead of faking a pass; the orchestrator turned that into one decision. Until M9, the walking-skeleton prompt should ask for `python -m <pkg>` criteria only, or the planner's P1 should be rewritten by the normaliser.
+- A failed attempt leaves a dirty tree, and the next feature inherits it (I-067). The orchestrator now resets the milestone branch before every fresh attempt.
+- Every stop that re-runs a model call pays twice and may act on a draft nobody saw (I-065). Found only because the live planner is non-deterministic; the Fake now varies drafts in the guard test.
+- After the merge the loop went straight into planning M2 with no stop and no cap; `merge and stop` now exists and threads are named per starting milestone.
+- `scio report` on a feature thread inside a build crashed (I-066): the thread kind must come from the checkpoint, not the name.
+- Cost shape: a T1 feature on a small product costs $0.5 to $0.8, dominated by coder turns (59% of P2, 53% of P3); the explorer and documenter are the next largest. The orchestrator's own calls are 3% of the milestone.
 
 ### Actions
 - `scio/product/build.py` (the loop), `scio/product/progress.py` (PRODUCT.md parser, `ProgressFile`, `normalise_milestone`), `scio/product/report.py`, `evals/product_scripts.py` (three scripted features), roles `milestone_planner` and `milestone_gate`, `Harness.child`, `GitHubClient.ensure_milestone` / `ensure_issue` / `find_issue` / `pr_merged`, `run_graph(..., saver=)` and `thread_started`, `scio build` / `scio status` / `scio report` for build threads, registered `product_new` and `product_build` diagrams.
 - `tests/graph/test_product_build_fake.py` (ten tests: the two-milestone loop, crash between features, GitHub mode crash after the PR against a bare origin, gate override, integration ground truth, escalations across features, feature decisions, gate escalation, the CLI), `tests/unit/test_product_progress.py`, GitHub client idempotency tests, `test_diff_stat_counts_untracked_files_as_changes`, the lock-version test.
-- ADR 0011; README; PRODUCT_MODE status; ARCHITECTURE product graphs section and tree; CHANGELOG; ledger I-062, I-063, I-064 (open), I-053 and I-054 completed.
+- ADR 0011; README; PRODUCT_MODE status; ARCHITECTURE product graphs section and tree; CHANGELOG; ledger I-062 to I-067, I-053 and I-054 completed; `answers` and `approval` nodes (I-065); `merge and stop`, per-milestone build threads; the working-tree reset before a fresh attempt (I-067); report thread detection by checkpoint shape (I-066).
 
 ### Carried into M9
-- I-064: run the live milestone and complete the section above before the PR leaves draft.
+- I-064 is closed by the live milestone above. Before M9: make the walking-skeleton criteria installable without a package install, or give the normaliser a rule for P1 (the planner wrote a console-script P1 twice in two live runs).
 - `integrate` runs tests and lint only; the build, smoke against a running app, dependency audit and the coverage floor arrive with M9's runtime commands (`install_deps`, `run_app`) and the Docker default.
 - A pre-flight credential probe for live product commands (one cheap call before the interview) would turn I-060/I-064 into a one-line message instead of a traceback.
 - Repositories bootstrapped by 0.5.0 carry the old `progress.json` shape (P1 `done`, one milestone); `ProgressFile.sync_features` adds missing records but does not reset P1. Re-bootstrap or edit by hand until a migration is worth writing.

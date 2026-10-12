@@ -82,9 +82,10 @@ class BuildOutcome:
         return self.interrupt is not None
 
 
-def build_thread_id(product: str) -> str:
-    """One build thread per product: ``scio build`` resumes it until the product is done."""
-    return f"build-{product}"
+def build_thread_id(product: str, milestone: int = 1) -> str:
+    """The build thread that starts at milestone ``milestone``: ``scio build`` resumes it
+    while it is paused and starts the next one (from ``progress.json``) once it has ended."""
+    return f"build-{product}-m{milestone}"
 
 
 # ---------- helpers ----------
@@ -600,6 +601,12 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             outcome = resume_graph(fctx, None, saver=saver)
         else:
             entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
+            # A fresh attempt starts from the milestone branch with a clean tree: a previous
+            # attempt that never passed verify leaves its edits uncommitted, and git carries
+            # them across a checkout into the next feature's run (I-067).
+            _git(ctx, "checkout", "-q", plan.branch)
+            _git(ctx, "reset", "-q", "--hard")
+            _git(ctx, "clean", "-fdq")
             task = feature_task(
                 spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
             )
@@ -1009,6 +1016,7 @@ def merge_wait(ctx: RunContext) -> Node:
             )
         return {
             "merged_commit": str(merged),
+            "stop_after_merge": "stop" in choice,  # "merge and stop": record, then end the thread
             "phase": "update",
             "human_notes": [f"{plan.id} merge: {answer.strip()[:120]}"],
             "ledger": [
@@ -1103,7 +1111,10 @@ def update_progress(ctx: RunContext) -> Node:
         ]
         return {
             "milestones_done": [*state.milestones_done, plan.id],
-            "phase": "plan" if remaining else "done",
+            "milestone": None,  # recorded in progress.json; the next plan sets a new one
+            "pr": None,
+            "merged_commit": None,
+            "phase": "plan" if remaining and not state.stop_after_merge else "done",
             "ledger": entries,
         }
 
@@ -1226,6 +1237,16 @@ def build_started(ctx: RunContext) -> bool:
     with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
         graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
         return bool(graph.get_state(config).values)
+
+
+def build_finished(ctx: RunContext) -> bool:
+    """True when the build thread exists and has ended (``done`` or ``halted``), so a new
+    ``scio build`` must start another thread rather than resume this one."""
+    config = {"configurable": {"thread_id": ctx.thread_id}}
+    with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
+        graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
+        snapshot = graph.get_state(config)
+    return bool(snapshot.values) and not snapshot.next
 
 
 def load_build_state(ctx: RunContext) -> ProductBuildState:

@@ -79,6 +79,7 @@ issue, commit or PR; a feature that halts stops for one decision (`retry`, `skip
 ```bash
 uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR
 uv run scio build --product ./todo --decision merged      # after you merged the PR (offline: "merge")
+uv run scio build --product ./todo --decision "merge and stop"   # record the milestone, end the thread
 uv run scio build --product ./todo --decision skip        # or retry / stop, when a feature halted
 uv run scio status --product ./todo                       # progress.json as text
 uv run scio report --thread build-todo_cli                # feature runs, cost, escalations

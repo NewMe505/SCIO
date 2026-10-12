@@ -491,9 +491,19 @@ def test_feature_failure_stops_for_one_human_decision(
         assert (out.interrupt["inner"] is not None) is inner_pause
         if inner_pause:
             assert out.interrupt["inner"]["reason"] == "escalate_human"
+        # leftovers of the failed attempt (I-067): a stray file and a modified tracked file
+        repo = tmp_path / "product"
+        (repo / "tests" / "test_leftover.py").write_text(
+            "def test_x():\n    pass\n", encoding="utf-8"
+        )
+        readme = repo / "README.md"
+        readme.write_text(readme.read_text(encoding="utf-8") + "\nleftover\n", encoding="utf-8")
         out = resume_build(ctx, "skip")
         assert out.paused and out.interrupt and out.interrupt["feature"] == "P2"
         assert out.state.latest_run("P1") and out.state.latest_run("P1").status == "skipped"
+        assert not (repo / "tests" / "test_leftover.py").exists()
+        assert "leftover" not in _git(repo, "show", "HEAD:README.md")
+        assert "leftover" not in readme.read_text(encoding="utf-8")
         out = resume_build(ctx, "retry")
         assert out.paused and out.interrupt and out.interrupt["feature"] == "P2"
         assert out.interrupt["thread"].endswith("-p2-a2")
@@ -555,14 +565,24 @@ def test_cli_build_status_and_report(
     assert main(["status", "--product", target]) == 0
     status = capsys.readouterr().out
     assert "milestones: 0 done" in status and "P1 [todo]" in status
-    assert main(["build", "--product", target, "--decision", "merge"]) == 0
+    # "merge and stop": the milestone is recorded, the thread ends, nothing more is spent
+    assert main(["build", "--product", target, "--decision", "merge and stop"]) == 0
     out = capsys.readouterr().out
-    assert "milestones done M1" in out and "current M2" in out
+    assert "milestones done M1" in out and "phase=done" in out and "current -" in out
     assert main(["status", "--product", target]) == 0
     status = capsys.readouterr().out
     assert "milestones: 1 done" in status and "M1 [done]" in status and "P3 [todo]" in status
-    assert main(["report", "--thread", f"build-{PRODUCT}", "--out", str(tmp_path / "reports")]) == 0
+    thread = f"build-{PRODUCT}-m1"
+    assert main(["report", "--thread", thread, "--out", str(tmp_path / "reports")]) == 0
     report = capsys.readouterr().out
-    assert f"# Product build build-{PRODUCT}" in report and "| P2 | 1 |" in report
-    data = json.loads((tmp_path / "reports" / f"build-{PRODUCT}.json").read_text(encoding="utf-8"))
-    assert data["milestones_done"] == ["M1"] and data["current_milestone"] == "M2"
+    assert f"# Product build {thread}" in report and "| P2 | 1 |" in report
+    data = json.loads((tmp_path / "reports" / f"{thread}.json").read_text(encoding="utf-8"))
+    assert data["milestones_done"] == ["M1"] and data["current_milestone"] is None
+    # a feature thread inside the build is a task thread, whatever its name (I-066)
+    assert main(["report", "--thread", f"{thread}-p2-a1", "--out", str(tmp_path / "reports")]) == 0
+    assert f"# Run {thread}-p2-a1: P2: Add and list todos" in capsys.readouterr().out
+    # the next scio build starts a new thread for M2 (the m1 thread has ended)
+    assert main(["build", "--product", target]) == 0
+    out = capsys.readouterr().out
+    assert f"build thread build-{PRODUCT}-m2" in out and "current M2" in out
+    assert "P3 a1 T1 passed" in out and "PAUSED" in out

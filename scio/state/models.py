@@ -534,6 +534,9 @@ class ProductBuildState(BaseModel):
     pr: MilestonePR | None = None
     merged_commit: str | None = None
     """``main`` after the milestone merge (local merge offline, pulled from origin on GitHub)."""
+    stop_after_merge: bool = False
+    """The human answered ``merge and stop``: record the milestone, then end the thread instead
+    of planning the next milestone (``scio build`` starts a new thread for it)."""
     milestones_done: list[str] = Field(default_factory=list)
     exit_reason: str | None = None
     """None while running or on success; ``feature_failed``, ``integration_failed``,
