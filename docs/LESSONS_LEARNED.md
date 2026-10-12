@@ -274,7 +274,7 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - Pre-flight 12 (apply a new indirection at every call site in the same change): a read-only research pass produced the full inventory of Python-specific literals before any code was written: two command builders, one lint builder, one script runner, five prompt strings, two file-count helpers, the signature parser, the drift and impact file rules, two cache lists, and the settings fields nobody read. Every item became an edit or a test.
 - I-050 and I-053 (a hint is not a pin): `scio run --tier` now pins the route with the same `tier_pin` the evals use, and a budget that was only a default follows the tier the classifier picks.
 - Pre-flight 6 and 10: all edits went through the file tools; every check chain started with `set -o pipefail`.
-- The live-trial rule: one kept t001 trial was attempted before claiming "no behaviour change" (see what failed).
+- The live-trial rule: one kept t001 trial ran on the refactored code before claiming "no behaviour change": pass, $0.11, 1 iteration, 4 tool calls, the same shape and cost as the nightly rows before M6.
 
 ### What succeeded
 - The `python` profile reproduces the pre-M6 commands byte for byte, and `test_toolchain.py` says so with the old literals copied into the test, not re-derived. The regression suite passed at pass^5 = 1.00 with no fixture or script change, which is the milestone's definition of "no behaviour change".
@@ -282,7 +282,7 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - The I-054 sweep found four more declared-but-unread settings (I-059). Grepping every field of a settings model for a reader is cheap and should be a standing check.
 
 ### What failed
-- The live t001 trial could not run: the `ant auth login` profile's refresh token had died (`invalid_grant`, I-060), after serving ten live trials earlier the same day. The milestone's live acceptance is pending the owner's re-login; nothing in SCIO can refresh the profile.
+- The first live t001 attempt failed before reaching the model: the `ant auth login` profile's refresh token had died (`invalid_grant`, I-060) after serving ten live trials earlier the same day. Nothing in SCIO can refresh the profile; the owner logged in again and the retry passed. Budget the re-login into any day with more than a handful of live runs.
 - A `Protocol` with plain attribute annotations does not accept a frozen dataclass (mypy: "expected settable variable, got read-only attribute"). Protocol members that profiles implement as dataclass fields must be declared as read-only properties.
 - `projections.py` imports from `assembler.py`, so the profile-derived prompt constants had to live in the assembler, the lower module, not where they were first written (a circular import caught at the first run).
 
@@ -292,7 +292,6 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - PROMPT.md non-goal narrowed; ARCHITECTURE F-8 superseded; README ADR list; CHANGELOG; ledger I-059, I-060.
 
 ### Carried into M7
-- I-060: re-run the kept live t001 trial after `ant auth login`; record cost and iterations here.
 - Stack detection for existing repositories and the `node-ts` profile are M10; until then `SCIO_TOOLCHAIN=python` is the only accepted value.
 - The sandbox still carries SCIO's own Python runtime facts (`python` argv rewrite, `PYTHONUTF8`, `PIP_NO_INDEX`); M9's two-phase network design decides whether those move into the profile or stay with the sandbox.
 

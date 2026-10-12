@@ -494,6 +494,6 @@ Template:
 - Found: 2026-10-12 · M6 (#39) · first live trial of t001 on the toolchain-profile code: `WorkloadIdentityError: user_oauth refresh failed (HTTP 400): invalid_grant, Refresh token not found or invalid` at the first `route` call, $0.00 spent
 - Symptom: every live call fails before the model is reached; the Fake-provider suite is unaffected. Earlier in the same day the profile served ten live trials (t008 to t010, about $2.40)
 - Root cause: the profile's refresh token rotated and the stored one is no longer valid; CLAUDE.md names this exact error as "the profile is dead and the user must run `ant auth login` again". Nothing in SCIO can refresh it
-- Fix: the owner re-runs `ant auth login`; the M6 live acceptance (one kept t001 trial at the usual cost) is re-run afterwards and this entry is completed with the result
+- Fix: the owner re-ran `ant auth login`; the kept t001 trial then passed on the toolchain-profile code ($0.11, 1 iteration, 4 tool calls), the same shape and cost as the nightly rows before M6
 - Sweep: `grep -rn invalid_grant scio` shows the error is surfaced as `FatalError` by `scio/harness/providers/anthropic.py`, not retried (correct: retrying a dead token burns nothing but cannot succeed). Guard: `scripts/nightly_live.py` already reports this case; no further code change
-- Resolved: pending re-login · Status: open
+- Resolved: 2026-10-12 · Status: resolved
