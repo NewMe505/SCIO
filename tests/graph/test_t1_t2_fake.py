@@ -255,3 +255,21 @@ def test_t0_docs_task_via_router(tmp_path: Path) -> None:
 @pytest.mark.parametrize("reason", [ExitReason.ADVISOR_CAP])
 def test_advisor_cap_exit_is_covered(reason: ExitReason) -> None:
     assert reason is ExitReason.ADVISOR_CAP  # see test_advisor_cap_halts_for_a_human
+
+
+def test_t1_passing_high_impact_diff_gets_one_advisor_review(tmp_path: Path) -> None:
+    """t010 / ADR 0008: a wide rename passes verify but trips the impact detector; the run
+    consults the advisor once before committing and commits on `continue` (issue #37)."""
+    ctx, outcome = _run(tmp_path, "t010_wide_rename", "T1", ScriptedResponder())
+    s = _finish(ctx, outcome).state
+    assert s.exit_reason is ExitReason.SUCCESS
+    assert len(s.escalations) == 1
+    e = s.escalations[0]
+    assert e.trigger is EscalationTrigger.HIGH_IMPACT and e.verdict is Verdict.CONTINUE
+    assert e.outcome == "resolved" and e.usd > 0
+    assert s.high_impact_reviewed and s.budgets.advisor_calls_used == 1
+    assert s.progress.iterations == 1  # no extra coder turn after the approval
+    assert not any(k.startswith("debugger:") for k in s.artifacts)
+    assert _hidden_pass(ctx, "t010_wide_rename", "test_rename_hidden.py")
+    body = Path(s.artifacts["pr_body"].path).read_text(encoding="utf-8")
+    assert "high_impact" in body and "continue" in body

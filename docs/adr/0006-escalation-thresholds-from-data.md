@@ -37,6 +37,8 @@ The sweep's own rule ("cheapest cell with pass rate 1.0") picks `repeat_threshol
 ## Live data (2026-10-12, issue #31)
 The first live debugger run (t009, `sonnet_opus_advisor`, pinned T1) is the data point decision 1 reserved budget for: verify failed on a lint-only error in a module no test imports, the debugger fixed it in one turn (9 calls, $0.06 of a $0.34 run, with a repository sweep), and the second verify passed. No escalation signal fired. This supports keeping `repeat_threshold = 3`: the first debug turn did fix a clear, local failure, which the Fake debugger structurally could not. It is one run on one failure kind; decision 4 still stands, and a live sweep still needs a scenario in which the debugger fails repeatedly (the capability tasks are `providers: [fake]`), which no live task produces yet.
 
+Update (issue #37, ADR 0008): the first live advisor calls happened in one t010 run. One was the new pre-commit review of a passing high-impact diff (verdict `continue`), which is not failure data. The other was a natural failure-path escalation: step S2 failed verify on a planned `test_filter` that matched no test, `low_confidence, plan_drift` routed to `advise`, Opus answered `continue`, and the next verify resolved it. That is the first live resolution-rate data point (1 of 1); decision 4 still waits for repeated-error data, which needs a debugger that fails three times on one signature.
+
 ## Consequences
 - The sweep is reproducible from `evals/tune.py` and its JSON/Markdown reports live under `evals/results/` (git-ignored; the nightly workflow uploads them as artifacts).
 - A future live sweep must include a scenario where the debugger *can* succeed, or it will reproduce the same bias toward early escalation.

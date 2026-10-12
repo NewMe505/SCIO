@@ -116,6 +116,26 @@ def decide(state: SCIOState, cfg: EscalationConfig, *, root: str | None = None) 
     )
 
 
+def review_decision(state: SCIOState, cfg: EscalationConfig) -> TriageDecision | None:
+    """Where a *passing* verify goes when the diff is high impact (ADR 0008).
+
+    A diff that trips the impact detector (more than N files, dependency or schema files, a
+    removed public symbol) gets one advisor review before it is committed, if the caps
+    allow. Nothing else about a passing verify can escalate; a refused review commits as
+    usual, which is why this returns None instead of a halt.
+    """
+    if state.exit_reason is not None or state.high_impact_reviewed or not state.high_impact_flags:
+        return None
+    step_id = state.progress.current_step_id or "S?"
+    if not state.budgets.advisor_allowed(step_id):
+        return None
+    return TriageDecision(
+        route="advise",
+        triggers=[EscalationTrigger.HIGH_IMPACT],
+        reason="high-impact diff reviewed before commit: " + "; ".join(state.high_impact_flags),
+    )
+
+
 def exit_for(decision: TriageDecision) -> ExitReason | None:
     """The exit reason a ``halt`` triage implies (set by the node that stores the decision)."""
     if decision.route == "halt" and decision.triggers:
