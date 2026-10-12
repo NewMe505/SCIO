@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `scio new --prompt "<idea>" --dir <path> [--gh owner/name]` (Product Mode M7, ADR 0010): a product graph that interviews the user (two to four Opus questions), writes a normalised `PRODUCT.md`, stops for approval, then bootstraps a repository with the profile's scaffold (package with `--version`, smoke test, CI, README, CHANGELOG, LICENSE, `.gitignore`, `NOTES.md`, `.scio/product/progress.json`), runs lint and tests as ground truth and commits with a `[scio:bootstrap]` marker. Every human stop is an interrupt resumed with `scio new --thread ID --decision "<text>"`; bootstrap steps are idempotent effects. New roles `interviewer` and `product_planner`; new state `ProductState`.
 ### Changed
 - Toolchain profiles (ADR 0009, Product Mode M6): every stack-specific command and parser (pytest argv and exit codes, ruff lint, syntax check, test-path rules, cache excludes, dependency files, error signatures, the prompt phrases that name tests) moved behind `scio.toolchain.Toolchain`, with the `python` profile in `configs/profiles/python.yaml` reproducing the pre-M6 behaviour byte for byte. `Settings.toolchain` selects the profile; `test_toolchain.py` guards the boundary.
 - `scio run --tier` pins the route as well as the budget (I-053); without `--tier` the router decides and a default budget is resized for the tier it picks (`RunContext.apply_tier_budgets`); explicit eval budgets are untouched.

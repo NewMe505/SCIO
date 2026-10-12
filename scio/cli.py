@@ -16,6 +16,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 from scio.graph.nodes.common import acceptance_from_issue_body
 from scio.graph.run import RunOutcome, resume_graph, run_graph
@@ -51,6 +52,64 @@ def _print(outcome: RunOutcome) -> None:
         print(f"resume with: scio resume --thread {s.thread_id} --decision <text>")
 
 
+def _print_product(outcome: Any) -> None:
+    s = outcome.state
+    print(f"product thread {s.thread_id} phase={s.phase} exit={s.exit_reason}")
+    print(f"tokens {s.budgets.tokens_used} usd {s.budgets.usd_used:.4f} dir {s.target_dir}")
+    if s.spec:
+        print(f"  {s.spec.name}: {len(s.spec.features)} features, stack {s.spec.stack}")
+    if s.bootstrap_commit:
+        print(f"  bootstrap commit {s.bootstrap_commit[:12]}")
+    if s.repo_url:
+        print(f"  published {s.repo_url}")
+    if outcome.interrupt:
+        print("PAUSED for a human:")
+        print(json.dumps(outcome.interrupt, indent=2, default=str))
+        print(f'resume with: scio new --thread {s.thread_id} --decision "<text>"')
+
+
+def _new(args: argparse.Namespace) -> int:
+    """``scio new``: start or resume a product thread (ADR 0010)."""
+    from scio.product import resume_product, run_product
+
+    settings = get_settings()
+    harness = None
+    if settings.provider_override == "fake" and os.environ.get("SCIO_FAKE_SCRIPT") == "1":
+        from evals.fake_scripts import ScriptedResponder
+        from scio.harness.providers.fake import FakeProvider
+
+        harness = Harness.from_settings(settings)
+        harness.providers.register("fake", FakeProvider(responder=ScriptedResponder()))
+    # A prompt starts a product thread (optionally under a chosen --thread id); no prompt
+    # means resume the thread named by --thread (I-061).
+    resuming = args.prompt is None
+    if resuming and args.thread is None:
+        print("scio new needs --prompt and --dir to start, or --thread to resume", file=sys.stderr)
+        return 2
+    if not resuming and args.dir is None:
+        print("scio new --prompt also needs --dir (the target directory)", file=sys.stderr)
+        return 2
+    thread = args.thread or f"new-{uuid.uuid4().hex[:8]}"
+    target = args.dir or Path(".scio") / "products" / thread
+    ctx = RunContext.create(
+        thread_id=thread,
+        sandbox_root=target,
+        tier="T1",  # two Opus calls and a scaffold; T1 caps are ample runaway guards
+        tier_pin="T1",
+        settings=settings,
+        harness=harness,
+    )
+    try:
+        if resuming:
+            outcome = resume_product(ctx, args.decision)
+        else:
+            outcome = run_product(ctx, prompt=args.prompt, gh_repo=args.gh)
+    finally:
+        ctx.close()
+    _print_product(outcome)
+    return 0 if outcome.state.exit_reason is None else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="scio")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -76,7 +135,15 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--thread", required=True)
     rep.add_argument("--sandbox", type=Path, default=None)
     rep.add_argument("--out", type=Path, default=Path(".scio") / "reports")
+    new = sub.add_parser("new", help="product mode: a prompt becomes a bootstrapped repository")
+    new.add_argument("--prompt", default=None, help="the product idea (omit when resuming)")
+    new.add_argument("--dir", type=Path, default=None, help="target directory (created if absent)")
+    new.add_argument("--gh", default=None, help="owner/name to publish to, after confirmation")
+    new.add_argument("--thread", default=None, help="resume this product thread")
+    new.add_argument("--decision", default=None, help="answer to the pending question")
     args = ap.parse_args(argv)
+    if args.cmd == "new":
+        return _new(args)
 
     settings = get_settings()
     harness = None

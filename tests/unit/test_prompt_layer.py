@@ -19,6 +19,7 @@ from scio.prompt.wire_schema import WireSchemaError, wire_schema
 EXPECTED_ROLES = {
     "router", "compactor", "scoper", "planner", "advisor", "gate",
     "explorer", "coder", "tester", "debugger", "reviewer", "documenter",
+    "interviewer", "product_planner",  # product mode (ADR 0010)
 }  # fmt: skip
 
 

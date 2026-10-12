@@ -53,6 +53,20 @@ Set `SCIO_GH_REPO=owner/name` to push the branch and open the draft PR; without 
 offline and the PR body is written to `.scio/artifacts/<thread>/pr-body.txt`.
 `SCIO_FAKE_SCRIPT=1` with the Fake provider drives the scripted eval behaviour from the CLI.
 
+Product mode (M7, ADR 0010): a prompt becomes a bootstrapped repository. The run stops twice for
+you, after the interview questions and on the `PRODUCT.md` draft; a third stop asks before a
+GitHub repository is created when `--gh` is given. A prompt starts a thread, no prompt resumes one.
+
+```bash
+uv run scio new --prompt "A CLI todo app with tags and JSON export" --dir ./todo [--gh you/todo]
+uv run scio new --thread new-ab12cd34 --dir ./todo --decision "1: developers; 2: add and list; 3: no sync"
+uv run scio new --thread new-ab12cd34 --dir ./todo --decision approve      # or revision notes
+```
+
+The result is a git repository on `main` with `PRODUCT.md`, `NOTES.md`, `.scio/product/progress.json`,
+a package that answers `--version`, one smoke test, CI that runs the profile's lint and tests, README,
+CHANGELOG, LICENSE and `.gitignore`; lint and tests ran green before the bootstrap commit.
+
 After a run, `uv run scio report --thread <id>` writes `.scio/reports/<id>.md` and `.json`:
 tokens and dollars by role, every escalation with its outcome, and the ledger timeline.
 

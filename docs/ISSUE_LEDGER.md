@@ -497,3 +497,11 @@ Template:
 - Fix: the owner re-ran `ant auth login`; the kept t001 trial then passed on the toolchain-profile code ($0.11, 1 iteration, 4 tool calls), the same shape and cost as the nightly rows before M6
 - Sweep: `grep -rn invalid_grant scio` shows the error is surfaced as `FatalError` by `scio/harness/providers/anthropic.py`, not retried (correct: retrying a dead token burns nothing but cannot succeed). Guard: `scripts/nightly_live.py` already reports this case; no further code change
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-061 · `scio new --thread` on a fresh start resumed a thread that did not exist
+- Found: 2026-10-12 · M7 (#42) · first live run of `scio new`: `EmptyInputError: Received no input for __start__`, then a second call failed validating an empty checkpoint (`ProductState` missing thread_id, prompt, target_dir, budgets)
+- Symptom: `scio new --prompt ... --dir ... --thread new-live1` went straight to `resume_product`; the first invoke left an empty checkpoint, so the real resume then failed too. Nothing was spent and no directory was created
+- Root cause: `_new` treated `--thread` as the resume signal. The Fake end-to-end tests call the library (`run_product` / `resume_product`) and never went through the CLI, so the contract was untested (pre-flight: a fake reproduces the shapes you thought of)
+- Fix: the absence of `--prompt` means resume; `--thread` only names the thread. `test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt` drives the three CLI calls on the Fake and the two usage errors
+- Sweep: `scio run` / `scio resume` are separate subcommands and have no such ambiguity. Guard: the CLI test above; README documents the two forms
+- Resolved: 2026-10-12 · Status: resolved

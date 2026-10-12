@@ -1,7 +1,7 @@
 # Product Mode: from "add a test" to "build with it"
 
-- **Status:** planned (M6–M11). Decision record: [ADR 0007](adr/0007-product-mode.md).
-- **Date:** 2026-10-11
+- **Status:** in progress. M6 Foundations done (PR #41, [ADR 0009](adr/0009-toolchain-profiles.md)); M7 Greenfield bootstrap done ([ADR 0010](adr/0010-product-graph-and-bootstrap.md), `scio new`); M8 next. Decision record: [ADR 0007](adr/0007-product-mode.md). Tracking: [milestones](https://github.com/NewMe505/SCIO/milestones), [project board](https://github.com/users/NewMe505/projects/1).
+- **Date:** 2026-10-11 (plan), 2026-10-12 (M6, M7)
 
 ## Why
 Today (M0–M5, v0.2.0) SCIO reliably takes **one task on one existing Python repository to one pull request**. Evidence: t001 passes 5 of 5 live trials at $0.13, and the nightly regression suite has pass^3 = 1.00 (see [EVAL_HISTORY.md](EVAL_HISTORY.md)). Product Mode extends this so a **prompt becomes product-ready software, in any stack**. A human approves each product milestone, and there is no dollar ceiling for the product as a whole.

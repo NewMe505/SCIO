@@ -48,6 +48,8 @@ class Role(StrEnum):
     ADVISOR = "advisor"
     GATE = "gate"
     COMPACTOR = "compactor"
+    INTERVIEWER = "interviewer"  # product mode (ADR 0010)
+    PRODUCT_PLANNER = "product_planner"
     HUMAN = "human"
     SYSTEM = "system"
 
@@ -355,6 +357,81 @@ class TriageDecision(BaseModel):
     route: Literal["debug", "advise", "halt"]
     triggers: list[EscalationTrigger] = Field(default_factory=list)
     reason: str = ""
+
+
+# ---------- product mode (ADR 0007, ADR 0010) ----------
+
+
+class ProductFeature(BaseModel):
+    id: str
+    description: str = Field(max_length=400)
+    acceptance: list[str] = Field(min_length=1)
+    """Testable criteria; the normaliser rejects a feature without one."""
+
+
+class ProductSpec(BaseModel):
+    """The normalised content of PRODUCT.md."""
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,39}$")
+    """Package and repository slug."""
+    title: str = Field(max_length=120)
+    vision: str = Field(max_length=1200)
+    users: list[str] = Field(min_length=1, max_length=6)
+    features: list[ProductFeature] = Field(min_length=1, max_length=24)
+    quality_bar: list[str] = Field(min_length=1, max_length=12)
+    stack: str = "python"
+    """Toolchain profile name (ADR 0009)."""
+    dependencies: list[str] = Field(default_factory=list)
+    """Approved third-party dependencies; empty for a walking skeleton."""
+
+
+class InterviewOutput(BaseModel):
+    """The interviewer's questions for the human (schema marker: ``interview_questions``)."""
+
+    interview_questions: list[str] = Field(min_length=2, max_length=4)
+    rationale: str = Field(max_length=600)
+
+
+class ProductSpecOutput(BaseModel):
+    """The product planner's spec draft (schema marker: ``product_name``)."""
+
+    product_name: str = Field(max_length=60)
+    title: str = Field(max_length=120)
+    vision: str = Field(max_length=1200)
+    users: list[str] = Field(min_length=1, max_length=6)
+    features: list[ProductFeature] = Field(min_length=1, max_length=24)
+    quality_bar: list[str] = Field(min_length=1, max_length=12)
+    stack: str = Field(max_length=40)
+    dependencies: list[str] = Field(default_factory=list, max_length=20)
+
+
+ProductPhase = Literal[
+    "interview", "answers", "specify", "approval", "bootstrap", "publish", "done", "halted"
+]
+
+
+class ProductState(BaseModel):
+    """State of the product graph (``scio new``). Checkpointed per thread like SCIOState."""
+
+    thread_id: str
+    prompt: str
+    target_dir: str
+    gh_repo: str | None = None
+    phase: ProductPhase = "interview"
+    questions: list[str] = Field(default_factory=list)
+    answers: str | None = None
+    spec: ProductSpec | None = None
+    product_md: str | None = None
+    revision_notes: list[str] = Field(default_factory=list)
+    """Human feedback on rejected spec drafts; each entry triggers one revision."""
+    approved: bool = False
+    bootstrap_commit: str | None = None
+    repo_url: str | None = None
+    exit_reason: str | None = None
+    """None while running or on success; otherwise ``rejected``, ``bootstrap_failed`` or
+    ``budget``."""
+    ledger: Annotated[list[LedgerEntry], operator.add] = Field(default_factory=list)
+    budgets: Budget
 
 
 # ---------- the graph state ----------

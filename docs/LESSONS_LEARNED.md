@@ -295,6 +295,32 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - Stack detection for existing repositories and the `node-ts` profile are M10; until then `SCIO_TOOLCHAIN=python` is the only accepted value.
 - The sandbox still carries SCIO's own Python runtime facts (`python` argv rewrite, `PYTHONUTF8`, `PIP_NO_INDEX`); M9's two-phase network design decides whether those move into the profile or stay with the sandbox.
 
+## M7: Greenfield bootstrap (2026-10-12, issue #42, ADR 0010)
+
+### Lessons applied
+- A read-only research pass before any code (as in M6) listed the mechanics to reuse: `interrupt` payload shapes and `Command(resume=...)`, the structured-output and role pattern, static prompt templates, the Fake responder's schema markers, the serializer allow-list, `run_effect` with world probes, and the CLI's dispatch. Every one was reused rather than reinvented; the product graph is 400 lines because of it.
+- I-039 and I-046: the planner's draft goes through a normaliser (`scio/product/spec.py`) before a human sees it, and the notes about what was changed are in the ledger and the approval payload.
+- The live-trial rule: one kept `scio new` run from an empty directory, read before claiming done.
+
+### What succeeded
+- The whole path ran on the Fake on the first attempt after lint and types were clean: interview pause, answers, spec pause, approval, bootstrap, green local CI, crash-style resume with no duplicate commit, three rejections halting, the CLI contract. Twelve tests, then a thirteenth for the CLI.
+- The live run from an empty directory: Opus asked four questions that were all about things the prompt left open (who installs it, the day-one command sequence, runtime and storage, what the export is for), wrote a ten-feature spec whose criteria are black-box assertions (exact outputs, exit codes, file paths), the scaffold's lint and tests were green, and the bootstrap commit carried the marker. Cost $0.15: interviewer $0.025, planner $0.127, no other roles.
+- Ground truth before commit: the profile's lint and test commands ran on the scaffold and a failure would have halted with `bootstrap_failed`; no model verdict is involved in the bootstrap.
+
+### What failed
+- The first live run never reached a model: `scio new --prompt ... --thread new-live1` resumed a thread that did not exist (I-061). The Fake tests drove the library, not the CLI, so the contract was untested; the CLI test now drives all three calls.
+- The first lint and type run after writing the graph found eight findings each: an unused import, three list concatenations, four long lines in the licence text, a `Protocol`-typed LangGraph call the task graph avoids by typing its compiled graph as `Any`, and `BudgetExceeded` imported from the wrong module. All caught by the chain in the same step, none reached a commit.
+- The planner's `P1` ("`todo --version` prints `todo 0.1.0`", a console command named `todo`) is not what the scaffold builds (`python -m tagtodo --version` prints `0.1.0`), yet `progress.json` marks P1 done because the scaffold's own smoke test passed. The skeleton the planner describes and the skeleton the scaffold ships are two different things.
+
+### Actions
+- `scio/product/` (graph, spec normaliser and renderer, scaffolds), `ProductState` and the two output schemas in `scio/state/models.py`, roles `interviewer` and `product_planner` with templates, `scio new` in the CLI, Fake markers `interview_questions` and `product_name`.
+- `tests/graph/test_product_new_fake.py` (end to end, resume, rejection cap, normaliser invariants, CLI contract); ADR 0010; README usage; CHANGELOG; ledger I-061.
+
+### Carried into M8
+- P1 ownership: either the scaffold must satisfy the planner's P1 criteria (install a console script named after the product and print `<name> <version>`), or P1 must be run as the first feature task against the scaffold instead of being marked done. Decide in M8 before the milestone loop trusts `progress.json`.
+- `scio report` has no product-thread view; add one when the milestone loop produces escalations and costs worth reporting.
+- Publishing (`--gh`) is implemented behind a confirmation interrupt but has no Fake coverage: `gh repo create` needs an injected runner like `GitHubClient` has.
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.
