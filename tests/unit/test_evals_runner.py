@@ -14,6 +14,8 @@ def test_tasks_load() -> None:
         "t003_update_docs",
         "t004_two_features",
         "t005_cli_json_flag",
+        "t006_multi_file_remove",
+        "t007_red_ci",
     ]
     assert all(t.grader == "tests" and t.hidden_tests for t in tasks)
     assert all(t.trials >= 5 for t in tasks)

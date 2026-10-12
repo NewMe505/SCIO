@@ -1,0 +1,8 @@
+id: t007_red_ci
+suite: regression
+title: Make CI green again
+tier_hint: T1
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_ci_hidden.py

@@ -137,6 +137,52 @@ CLI_NEW = (
 CLI_TESTS = "import json\n\nfrom tool.cli import main\n\n\ndef test_json_flag(capsys):\n    assert main(['--json', 'Ada']) == 0\n    assert json.loads(capsys.readouterr().out)['name'] == 'Ada'\n"
 
 
+STORE_ITEMS = "    def items(self):\n        return dict(sorted(self._items.items()))\n"
+STORE_REMOVE = (
+    STORE_ITEMS
+    + "\n    def remove(self, name, qty=None):\n"
+    + "        if name not in self._items:\n            raise KeyError(name)\n"
+    + "        have = self._items[name]\n        if qty is None:\n            qty = have\n"
+    + "        if qty <= 0 or qty > have:\n"
+    + '            raise ValueError("qty must be between 1 and the stock")\n'
+    + "        left = have - qty\n        if left:\n            self._items[name] = left\n"
+    + "        else:\n            del self._items[name]\n"
+)
+STORE_REMOVE_TESTS = (
+    "import pytest\n\nfrom inventory.store import Store\n\n\ndef test_remove_store():\n"
+    "    s = Store()\n    s.add('bolt', 3)\n    s.remove('bolt', 1)\n"
+    "    assert s.items() == {'bolt': 2}\n    s.remove('bolt')\n    assert s.items() == {}\n"
+    "    with pytest.raises(KeyError):\n        s.remove('bolt')\n"
+)
+CLI_LIST_PARSER = "    sub.add_parser('list')\n"
+CLI_REMOVE_PARSER = (
+    CLI_LIST_PARSER + "    rm = sub.add_parser('remove')\n    rm.add_argument('name')\n"
+    "    rm.add_argument('--qty', type=int)\n"
+)
+CLI_LIST_BRANCH = "    elif args.cmd == 'list':\n"
+CLI_REMOVE_BRANCH = (
+    "    elif args.cmd == 'remove':\n        store.remove(args.name, args.qty)\n"
+    "        print(f'removed {args.name}' if args.qty is None "
+    "else f'removed {args.qty} {args.name}')\n" + CLI_LIST_BRANCH
+)
+CLI_REMOVE_TESTS = (
+    "from inventory.cli import main\nfrom inventory.store import Store\n\n\n"
+    "def test_remove_cli(capsys):\n    s = Store()\n    s.add('bolt', 3)\n"
+    "    assert main(['remove', 'bolt', '--qty', '2'], store=s) == 0\n"
+    "    assert main(['remove', 'bolt'], store=s) == 0\n"
+    "    assert capsys.readouterr().out == 'removed 2 bolt\\nremoved bolt\\n'\n"
+)
+
+WITHDRAW_OLD = (
+    '            raise ValueError("insufficient funds")\n        self.balance += amount\n'
+)
+WITHDRAW_NEW = (
+    '            raise ValueError("insufficient funds")\n        self.balance -= amount\n'
+)
+LEDGER_IMPORT_OLD = '"""ledger: a minimal account balance."""\n\nimport os\n\n\nclass Account:\n'
+LEDGER_IMPORT_NEW = '"""ledger: a minimal account balance."""\n\n\nclass Account:\n'
+
+
 def changelog(line: str) -> Edit:
     return Edit("CHANGELOG.md", "## [Unreleased]\n", f"## [Unreleased]\n### Added\n- {line}\n")
 
@@ -281,6 +327,68 @@ SCRIPTS: list[TaskScript] = [
             "Where is the CLI entry point and how are arguments parsed?",
             "How are the existing CLI tests written?",
         ],
+    ),
+    TaskScript(
+        key="inventory",
+        tier="T1",
+        features=[
+            ("F1", "Store.remove", "remove_store"),
+            ("F2", "CLI remove subcommand", "remove_cli"),
+        ],
+        steps=[
+            Step(
+                "S1",
+                "add Store.remove with tests",
+                ["F1"],
+                ["inventory/store.py"],
+                edits=[
+                    Edit("inventory/store.py", STORE_ITEMS, STORE_REMOVE),
+                    Edit("tests/test_remove_store.py", "", STORE_REMOVE_TESTS),
+                ],
+                test_filter="remove_store",
+            ),
+            Step(
+                "S2",
+                "add the remove subcommand to the CLI with tests",
+                ["F2"],
+                ["inventory/cli.py"],
+                edits=[
+                    Edit("inventory/cli.py", CLI_LIST_PARSER, CLI_REMOVE_PARSER),
+                    Edit("inventory/cli.py", CLI_LIST_BRANCH, CLI_REMOVE_BRANCH),
+                    Edit("tests/test_remove_cli.py", "", CLI_REMOVE_TESTS),
+                ],
+                test_filter="remove_cli",
+            ),
+        ],
+        docs=[changelog("`remove` in the store and the `remove` CLI subcommand.")],
+    ),
+    TaskScript(
+        key="ci green",
+        tier="T1",
+        features=[
+            ("F1", "withdraw reduces the balance", "withdraw"),
+            ("F2", "ruff clean under the repo config", "tests/test_ledger.py"),
+        ],
+        steps=[
+            Step(
+                "S1",
+                "fix withdraw to subtract",
+                ["F1"],
+                ["ledger/__init__.py"],
+                edits=[Edit("ledger/__init__.py", WITHDRAW_OLD, WITHDRAW_NEW)],
+                test_filter="withdraw",
+            ),
+            Step(
+                "S2",
+                "remove the unused import that fails ruff",
+                ["F2"],
+                ["ledger/__init__.py"],
+                edits=[Edit("ledger/__init__.py", LEDGER_IMPORT_OLD, LEDGER_IMPORT_NEW)],
+                test_filter="tests/test_ledger.py",
+                tests_added=["tests/test_ledger.py"],
+            ),
+        ],
+        docs=[changelog("fix: `withdraw` subtracts; unused import removed so CI lint passes.")],
     ),
 ]
 

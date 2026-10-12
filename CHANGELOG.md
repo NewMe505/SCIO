@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Added
+- Two realistic regression tasks: t006 (a change spanning the store module, the CLI and their tests) and t007 (a fixture whose own CI is red on `ruff` with the repo config and on `pytest`); hidden tests run the fixture's own lint rules.
 - Suite cost cap: `evals/runner --max-usd`; the report records spend, cap and skipped tasks.
 - Nightly live suite: `scripts/nightly_live.py` (profile auth, cost cap, rows in `docs/EVAL_HISTORY.md`) registered as a Windows scheduled task on the dev machine; the GitHub nightly workflow gained the cap, parallel trials and auth-token secret support.
 
