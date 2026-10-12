@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-10-12
 ### Added
 - `scio new --prompt "<idea>" --dir <path> [--gh owner/name]` (Product Mode M7, ADR 0010): a product graph that interviews the user (two to four Opus questions), writes a normalised `PRODUCT.md`, stops for approval, then bootstraps a repository with the profile's scaffold (package with `--version`, smoke test, CI, README, CHANGELOG, LICENSE, `.gitignore`, `NOTES.md`, `.scio/product/progress.json`), runs lint and tests as ground truth and commits with a `[scio:bootstrap]` marker. Every human stop is an interrupt resumed with `scio new --thread ID --decision "<text>"`; bootstrap steps are idempotent effects. New roles `interviewer` and `product_planner`; new state `ProductState`.
 ### Changed
