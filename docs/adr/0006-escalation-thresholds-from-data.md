@@ -40,3 +40,4 @@ The first live debugger run (t009, `sonnet_opus_advisor`, pinned T1) is the data
 ## Consequences
 - The sweep is reproducible from `evals/tune.py` and its JSON/Markdown reports live under `evals/results/` (git-ignored; the nightly workflow uploads them as artifacts).
 - A future live sweep must include a scenario where the debugger *can* succeed, or it will reproduce the same bias toward early escalation.
+- Status 2026-10-12: decision 4 is still pending, now for a different reason than the key. Across 31 live task rows (three nightly regression suites and the first trials of t006 and t007) no run made an advisor call, so the sweep has nothing to measure; it waits for a live task that fails verify at least twice (`docs/IDEAS_TRIAGE.md`, status note).
