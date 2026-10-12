@@ -12,7 +12,8 @@ cannot set the conditions, and without them the scheduler refuses the task when 
 machine was asleep or on battery at 03:17 (result 0x800710E0, ledger I-045)::
 
     $action = New-ScheduledTaskAction -Execute cmd -Argument ('/c cd /d "<repo>" && ' +
-      'set UV_SYSTEM_CERTS=1 && uv run python scripts/nightly_live.py >> .scio\\nightly.log 2>&1')
+      'set UV_SYSTEM_CERTS=1 && uv run python scripts/nightly_live.py --max-usd 12 ' +
+      '>> .scio\\nightly.log 2>&1')
     $trigger = New-ScheduledTaskTrigger -Daily -At 03:17
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
       -DontStopIfGoingOnBatteries -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 6)
