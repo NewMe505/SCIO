@@ -113,6 +113,7 @@ def document(ctx: RunContext) -> Node:
         toolbox = ToolBox(sb, DOCUMENTER_TOOLS, human_gate=False, max_calls=12, role="documenter")
         loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "documenter")
         docs_check: str | None = None
+        logs: dict[str, Any] = {}
         for round_ in (1, 2):
             msg = documenter_message(
                 state.task,
@@ -123,7 +124,7 @@ def document(ctx: RunContext) -> Node:
                 docs_check=docs_check,
             )
             try:
-                loop.run(msg, tags={"thread": ctx.thread_id, "round": str(round_)})
+                result = loop.run(msg, tags={"thread": ctx.thread_id, "round": str(round_)})
             except BudgetExceeded as exc:
                 entry = fact(f"budget exhausted during document: {exc.message}", source=Role.SYSTEM)
                 return {
@@ -131,6 +132,13 @@ def document(ctx: RunContext) -> Node:
                     "task_ledger": [entry],
                     **ctx.budget_update(),
                 }
+            # Kept like the coder's transcripts: the run report reads tool signals from it.
+            logs[f"documenter:{round_}"] = ctx.artifacts.put(
+                "log",
+                result.transcript(),
+                produced_by=Role.DOCUMENTER,
+                name=f"documenter-{round_:02d}",
+            )
             docs_check = run_docs_check(ctx)
             if docs_check is None:
                 break
@@ -202,7 +210,7 @@ def document(ctx: RunContext) -> Node:
             )
         return {
             "github": github,
-            "artifacts": {**state.artifacts, "pr_body": body_ref},
+            "artifacts": {**state.artifacts, **logs, "pr_body": body_ref},
             "task_ledger": entries,
             "phase": "gate",
             **ctx.budget_update(),

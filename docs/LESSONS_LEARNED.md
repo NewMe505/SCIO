@@ -211,7 +211,7 @@ Lessons:
 - Never run a fixture's tests inside `evals/tasks/*/repo`. Copy it out first (`make_origin` now drops caches either way). The fixtures are the agent's starting state, and anything on disk there ships with it.
 
 ### Carried forward (post-0.1.0)
-- I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates.
+- I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.
 - I-008, I-009: cosmetic pdoc warning; branch protection needs GitHub Pro or a public repository.
 - Open question 3 (patch sampling): the sampling step is wired but off; measure before enabling.
