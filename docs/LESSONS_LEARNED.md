@@ -420,3 +420,20 @@ Lessons:
 - The same task costs about four times its API estimate when run through Claude Code ($0.57 versus $0.11 to $0.15 for t001 on the API), because every `claude -p` process carries Claude Code's own system prompt and tool set as cache writes and reads (60k cache-write tokens on the coder's first turn). On a subscription this is usage-window consumption, not dollars; the estimate is still the right number to cap turns with.
 - The documenter's two rounds are four processes; `--resume` keeps the second round's context but each round pays the session start. A single-round documenter would halve its cost on this backend.
 - Print mode's read-only command set (`ls`, `cat`) runs without an `--allowedTools` entry, so the coder explores with Bash even though only the test and lint commands were allowed; `acceptEdits` plus `--permission-prompts none` never blocked the run.
+
+### Live milestone through the backend (2026-10-12, Max login, no Console API usage)
+`scio new` (interviewer and product planner through `claude -p`, $0.04 estimate; the approval applied to the draft shown, the I-065 fix holding live) bootstrapped `todo_tags` (8 features, P1 needing only `python -m`), then `scio build` ran M1 "Walking skeleton with storage, add and list" with every role through Claude Code:
+
+| feature | tier | result | runs (`claude -p`) | estimate | what happened |
+|---|---|---|---:|---:|---|
+| P1 walking skeleton | T0 | pass | 7 | $0.50 | first attempt died at the documenter's `--max-budget-usd` (I-069); resumed after the budget fix, passed |
+| P2 JSON storage | T1 | pass | 18 | $1.93 | plan, localize, a coder that needed four verify iterations, reviewer, documenter, gate; no escalation |
+| P3 `add` with tags | T0 | pass | 7 | $0.62 | one coder turn |
+| P4 `list` | T0 | pass | 9 | $1.05 | documenter summary over 800 characters crashed the build once (I-070); resumed after the trim fix, passed |
+| orchestrator | | | 3 | $0.16 | planner (twice: the first attempt's call plus the resume), gate pass |
+| total | | 4 of 4 | 44 | $4.26 estimated, $0.00 billed | integration green (25 tests, lint clean), milestone gate pass, merged locally with `merge and stop`; the product's own suite and lint pass on `main` |
+
+Lessons:
+- Three defects surfaced only live, each in the seam between SCIO's guards and the binary's behaviour: an unexplained transient error (I-068), a dollar cap sized for API prices (I-069), and a prose cap the binary cannot see (I-070). All three were fixed between resumes and the same build thread carried on from its checkpoint each time, which is what the crash-safety work in M8 was for.
+- Cost shape on this backend: the T1 feature (P2) cost four times the T0 ones, dominated by nine coder runs; each `claude -p` process re-sends Claude Code's prompt, so iterations are the lever, as on the API, but with a higher constant. A milestone of this size is about $4 of estimate, or roughly a tenth of a Max 5x usage window by the same yardstick.
+- The documenter is the most expensive role per feature after the coder (two rounds, each a session plus a summary); M9 should give it one round with the docs check folded into the turn.
