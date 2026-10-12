@@ -77,3 +77,23 @@ def test_history_row_format(tmp_path: Path, monkeypatch) -> None:  # type: ignor
         "| 2026-10-11 03:17 | regression | anthropic+sonnet_opus_advisor | 3 | 1.00 | 1.00 |" in row
     )
     assert "$0.30 of $6 | yes: t9 |" in row
+
+
+def test_history_skips_suite_with_no_tasks(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """I-047: a suite whose tasks are all not applicable writes no 0.00 row."""
+    nl = _load_nightly()
+    monkeypatch.setattr(nl, "HISTORY", tmp_path / "EVAL_HISTORY.md")
+    now = datetime(2026, 10, 12, 1, 42, tzinfo=UTC)
+    report = SuiteReport(
+        suite="capability",
+        provider="anthropic+sonnet_opus_advisor",
+        started_at=now,
+        finished_at=now,
+        k=3,
+        tasks=[],
+        usd_cap=4.0,
+        not_applicable=["c001", "c002", "c003"],
+    )
+    note = nl.append_history(report, "sonnet_opus_advisor")
+    assert note.startswith("2026-10-12 01:42 capability: no applicable tasks") and "c003" in note
+    assert not (tmp_path / "EVAL_HISTORY.md").exists()

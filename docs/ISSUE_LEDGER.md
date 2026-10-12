@@ -273,6 +273,14 @@ Template:
 - Sweep: only one scheduled task exists for this project. `.github/workflows/nightly-evals.yml` is unaffected (GitHub cron). Guard: the history table in `docs/EVAL_HISTORY.md` is the signal; a missing row for a date means the task did not run
 - Resolved: 2026-10-11 · Status: resolved (verify with tomorrow's row)
 
+### I-047 · Nightly history row written for a suite with no applicable tasks
+- Found: 2026-10-12 · first nightly run after PR #19, run early by hand
+- Symptom: `docs/EVAL_HISTORY.md` gained `capability … 0.00 | 0.00 | $0.00 of $4`, which reads as a total failure; the suite ran zero tasks because all three scenario tasks are Fake-only (I-042)
+- Root cause: `append_history` wrote metrics unconditionally; `SuiteReport.pass_at_1` is 0.0 for an empty task list
+- Fix: `append_history` returns a one-line note and writes nothing when `report.tasks` is empty; the misleading row removed. `test_history_skips_suite_with_no_tasks`
+- Sweep: `SuiteReport.to_markdown` already prints `not applicable here: …`; `evals.runner --min-pass-pow-k` on an empty suite would also fail (pass^k 0.0), left as is because an empty regression suite is a real failure. The GitHub nightly workflow runs on the Fake provider where all tasks apply
+- Resolved: 2026-10-12 · Status: resolved
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
