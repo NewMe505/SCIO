@@ -21,7 +21,7 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class ProviderConfig(BaseModel):
-    adapter: Literal["anthropic", "openai", "fake"]
+    adapter: Literal["anthropic", "openai", "fake", "claude_code"]
 
 
 class ModelConfig(ModelPricing):
@@ -117,6 +117,12 @@ class ProviderRegistry:
             adapter = self._config.providers[name].adapter
         except KeyError as exc:
             raise KeyError(f"unknown provider {name!r}") from exc
+        if adapter == "claude_code":
+            from scio.harness.providers.claude_code import ClaudeCodeProvider
+
+            return ClaudeCodeProvider(
+                binary=self._settings.claude_code_bin, timeout_s=self._settings.request_timeout_s
+            )
         if adapter == "anthropic":
             from scio.harness.providers.anthropic import AnthropicProvider
 

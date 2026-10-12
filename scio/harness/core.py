@@ -22,7 +22,14 @@ from scio.harness.failures import RefusalError
 from scio.harness.provider import ModelProvider
 from scio.harness.retry import RetryPolicy, with_retry
 from scio.harness.telemetry import configure_tracing, invoke_agent_span, record_response
-from scio.harness.types import CompletionRequest, CompletionResponse, Message, StopReason, ToolSpec
+from scio.harness.types import (
+    CompletionRequest,
+    CompletionResponse,
+    Message,
+    StopReason,
+    ToolSpec,
+    Usage,
+)
 from scio.settings import Settings, get_settings
 
 if TYPE_CHECKING:
@@ -183,6 +190,34 @@ class Harness:
                 category=response.refusal_category,
             )
         return response
+
+    def account(
+        self,
+        *,
+        role: str,
+        model: str,
+        provider: str,
+        usage: Usage,
+        latency_ms: int = 0,
+        request_id: str | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> float:
+        """Record a call that happened outside ``_call`` (a Claude Code turn, ADR 0012) in
+        the ledger and the budget at this harness's prices. Returns the USD estimate."""
+        usd = self.config.model(model).pricing.cost_of(usage)
+        self.ledger.record(
+            role=role,
+            model=model,
+            provider=provider,
+            usage=usage,
+            usd=usd,
+            latency_ms=latency_ms,
+            request_id=request_id,
+            attempts=1,
+            tags=tags,
+        )
+        self.budget.record(usage, usd)
+        return usd
 
     def summary(self) -> dict[str, Any]:
         return {"budget": self.budget.snapshot().model_dump(), "costs": self.ledger.to_dict()}

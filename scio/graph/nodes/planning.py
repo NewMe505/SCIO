@@ -27,7 +27,7 @@ from scio.graph.nodes.common import fact, git_out
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
-from scio.loop.agent_loop import AgentLoop
+from scio.loop.backends import make_worker
 from scio.state.models import (
     ExitReason,
     ExplorerSummary,
@@ -110,7 +110,7 @@ def fan_out_explore(state: SCIOState) -> list[Send] | str:
 def _explore_once(ctx: RunContext, question: str, *, tag: str) -> Any:
     # Read-only context gathering must stay cheap: every turn resends the transcript (I-033).
     toolbox = ToolBox(ctx.sandbox, EXPLORER_TOOLS, human_gate=False, max_calls=8, role="explorer")
-    loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "explorer", max_model_calls=6)
+    loop = make_worker(ctx, toolbox, "explorer", max_model_calls=6)
     result = loop.run_typed(
         explore_message(question, repo_root=ctx.sandbox.root),
         ExplorerSummary,

@@ -1,0 +1,300 @@
+"""``ClaudeCodeWorker``: one worker turn delegated to the unmodified ``claude`` binary
+(ADR 0012), with the same surface as :class:`scio.loop.agent_loop.AgentLoop`.
+
+Shape of a turn:
+
+1. ``claude -p`` in the sandbox root with the role's static system prompt (plus a note that
+   Claude Code's own tools replace SCIO's), the task projection on stdin, the role's allowed
+   tools, ``acceptEdits`` permissions with nobody to answer prompts, a turn cap from the loop
+   limits and a dollar cap from the remaining budget; ``stream-json`` output is rendered into
+   the same transcript shape ``AgentLoop`` produces, so ``scio report`` reads it unchanged.
+2. One ``--resume`` call on that session, one turn, no tools, ``--json-schema`` for the
+   typed closing output (``WorkerOutput`` by default).
+
+Verify stays SCIO's ground truth; the ACI's per-edit lint gate does not apply inside a
+Claude Code turn. Cost is Claude Code's own estimate, folded into the harness ledger and
+budget through :meth:`scio.harness.core.Harness.account`.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ValidationError
+
+from scio.aci.sandbox.base import Sandbox
+from scio.harness.core import Harness
+from scio.harness.failures import FatalError
+from scio.harness.providers.claude_code import (
+    PROVIDER_NAME,
+    ClaudeRunResult,
+    Runner,
+    claude_runner,
+    parse_result,
+    served_model,
+    usage_from_result,
+)
+from scio.harness.types import Message, Part, TextPart, ToolResultPart, ToolUsePart, Usage
+from scio.loop.agent_loop import SUMMARY_PROMPT, LoopResult, StopKind
+from scio.prompt.registry import PromptRegistry
+from scio.prompt.wire_schema import wire_schema
+from scio.state.models import WorkerOutput
+from scio.toolchain import Toolchain
+
+READ_TOOLS = ("Read", "Glob", "Grep")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
+DEFAULT_MAX_TURNS = 30
+
+BACKEND_NOTE = (
+    "\n\nThis turn runs inside Claude Code. Its built-in tools replace the ones named above: "
+    "Grep and Glob for repo_search, Read for view_file, Edit and Write for edit_file, and "
+    "Bash for run_tests ({test_cmd}). Keep every path inside the repository root, never run "
+    "git commands that change history, and stop when the tests you were asked for pass."
+)
+
+
+def allowed_tools_for(tool_names: tuple[str, ...], toolchain: Toolchain) -> list[str]:
+    """Claude Code permission rules equivalent to a SCIO toolbox."""
+    rules: list[str] = []
+    if {"repo_search", "view_file"} & set(tool_names):
+        rules += READ_TOOLS
+    if "edit_file" in tool_names:
+        rules += EDIT_TOOLS
+    if "run_tests" in tool_names:
+        test_bin = toolchain.test_argv(filter=None, path=None)[0]
+        rules += [f"Bash({test_bin} *)", f"Bash(python -m {toolchain.test_runner} *)"]
+        rules += [f"Bash({toolchain.lint_argv('.')[0]} *)"]
+    return list(dict.fromkeys(rules))
+
+
+@dataclass
+class StreamTurn:
+    """What one ``stream-json`` run produced."""
+
+    messages: list[Message] = field(default_factory=list)
+    tool_calls: int = 0
+    result: dict[str, Any] = field(default_factory=dict)
+    turns: int = 0
+
+
+def parse_stream(stdout: str) -> StreamTurn:
+    """Render ``stream-json`` lines into SCIO messages; the last ``result`` line is kept."""
+    turn = StreamTurn()
+    for raw in stdout.splitlines():
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        kind = event.get("type")
+        if kind == "result":
+            turn.result = event
+            turn.turns = int(event.get("num_turns") or 0)
+            continue
+        if kind not in ("assistant", "user"):
+            continue
+        if event.get("parent_tool_use_id"):
+            continue  # subagent traffic is not this worker's transcript
+        content = (event.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        parts: list[Part] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text" and block.get("text"):
+                parts.append(TextPart(text=str(block["text"])))
+            elif btype == "tool_use":
+                turn.tool_calls += 1
+                parts.append(
+                    ToolUsePart(
+                        id=str(block.get("id") or f"call-{turn.tool_calls}"),
+                        name=str(block.get("name") or "tool"),
+                        input=dict(block.get("input") or {}),
+                    )
+                )
+            elif btype == "tool_result":
+                inner = block.get("content")
+                if isinstance(inner, list):
+                    text = "\n".join(str(b.get("text", "")) for b in inner if isinstance(b, dict))
+                else:
+                    text = str(inner or "")
+                parts.append(
+                    ToolResultPart(
+                        tool_use_id=str(block.get("tool_use_id") or ""),
+                        content=text[:4000],
+                        is_error=bool(block.get("is_error")),
+                    )
+                )
+        if parts:
+            turn.messages.append(
+                Message(role="assistant" if kind == "assistant" else "user", parts=parts)
+            )
+    return turn
+
+
+class ClaudeCodeWorker:
+    def __init__(
+        self,
+        harness: Harness,
+        sandbox: Sandbox,
+        prompts: PromptRegistry,
+        role: str,
+        *,
+        toolchain: Toolchain,
+        tool_names: tuple[str, ...],
+        max_turns: int | None = None,
+        binary: str = "claude",
+        runner: Runner | None = None,
+        timeout_s: float = 1800.0,
+    ) -> None:
+        self.harness = harness
+        self.sandbox = sandbox
+        self.prompts = prompts
+        self.role = role
+        self.toolchain = toolchain
+        self.tool_names = tool_names
+        self.max_turns = max_turns or DEFAULT_MAX_TURNS
+        self.binary = binary
+        self._run = runner or claude_runner(binary)
+        self.timeout_s = timeout_s
+        self.calls: list[list[str]] = []
+
+    def run(self, user_message: str, *, tags: dict[str, str] | None = None) -> LoopResult:
+        return self.run_typed(user_message, WorkerOutput, tags=tags)
+
+    def run_typed[T: BaseModel](
+        self,
+        user_message: str,
+        output_model: type[T],
+        *,
+        summary_prompt: str = SUMMARY_PROMPT,
+        tags: dict[str, str] | None = None,
+    ) -> LoopResult:
+        model = self.harness.config.role(self.role).model
+        test_cmd = " ".join(self.toolchain.test_argv(filter=None, path=None))
+        system = self.prompts.get(self.role).render() + BACKEND_NOTE.format(test_cmd=test_cmd)
+        snap = self.harness.budget.snapshot()
+        remaining = snap.usd_max - snap.usd_used
+        with tempfile.TemporaryDirectory(prefix="scio-claude-") as tmp:
+            system_path = Path(tmp) / "system.md"
+            system_path.write_text(system, encoding="utf-8", newline="\n")
+            argv = [
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--model",
+                model,
+                "--system-prompt-file",
+                str(system_path),
+                "--allowedTools",
+                ",".join(allowed_tools_for(self.tool_names, self.toolchain)),
+                "--permission-mode",
+                "acceptEdits",
+                "--permission-prompts",
+                "none",
+                "--max-turns",
+                str(self.max_turns),
+                "--max-budget-usd",
+                f"{max(remaining, 0.01):.2f}",
+                "--name",
+                f"scio-{self.role}",
+            ]
+            self.calls.append(list(argv))
+            res = self._run(
+                argv, cwd=self.sandbox.root, stdin=user_message, timeout_s=self.timeout_s
+            )
+        turn = parse_stream(res.stdout)
+        if not turn.result:
+            raise FatalError(
+                f"claude -p ({self.role}) produced no result: exit {res.code}, "
+                f"{(res.stderr or res.stdout).strip()[:400]!r}"
+            )
+        result = parse_result(ClaudeRunResult(res.code, json.dumps(turn.result), res.stderr))
+        session_id = str(result.get("session_id") or "")
+        self._account(result, model, tags)
+        messages = [Message.user(user_message), *turn.messages]
+        stop: StopKind = "tool_cap" if turn.turns >= self.max_turns else "end_turn"
+
+        # The typed closing output: one more turn on the same session, no tools.
+        schema = wire_schema(output_model)
+        output, summary_text, calls = self._summary(
+            session_id, schema, output_model, summary_prompt, model, tags
+        )
+        messages.append(Message.assistant(summary_text))
+        return LoopResult(
+            output=output,
+            stop=stop,
+            tool_calls=turn.tool_calls,
+            model_calls=max(turn.turns, 1) + calls,
+            messages=messages,
+        )
+
+    def _summary[T: BaseModel](
+        self,
+        session_id: str,
+        schema: dict[str, Any],
+        output_model: type[T],
+        prompt: str,
+        model: str,
+        tags: dict[str, str] | None,
+    ) -> tuple[T, str, int]:
+        last_error = ""
+        for attempt in range(1, 3):
+            ask = (
+                prompt
+                if attempt == 1
+                else f"{prompt}\n\nYour previous reply was invalid: {last_error}"
+            )
+            argv = [
+                "-p",
+                "--output-format",
+                "json",
+                "--resume",
+                session_id,
+                "--tools",
+                "",
+                "--max-turns",
+                "1",
+                "--model",
+                model,
+                "--json-schema",
+                json.dumps(schema),
+            ]
+            self.calls.append(list(argv))
+            res = self._run(argv, cwd=self.sandbox.root, stdin=ask, timeout_s=self.timeout_s)
+            data = parse_result(res)
+            self._account(data, model, tags)
+            payload = data.get("structured_output")
+            text = json.dumps(payload) if payload is not None else str(data.get("result") or "")
+            try:
+                value = output_model.model_validate(
+                    payload if payload is not None else json.loads(text)
+                )
+                return value, text, attempt
+            except (ValidationError, json.JSONDecodeError) as exc:
+                last_error = str(exc)[:600]
+        raise FatalError(
+            f"claude -p ({self.role}) summary never matched {output_model.__name__}: {last_error}"
+        )
+
+    def _account(self, data: dict[str, Any], model: str, tags: dict[str, str] | None) -> Usage:
+        usage = usage_from_result(data)
+        self.harness.account(
+            role=self.role,
+            model=served_model(data, model),
+            provider=PROVIDER_NAME,
+            usage=usage,
+            latency_ms=int(data.get("duration_api_ms") or 0),
+            request_id=str(data.get("session_id") or "") or None,
+            tags=tags,
+        )
+        return usage

@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     gh_repo: str | None = None
     """``owner/name`` the GitHubClient acts on. None disables GitHub writes."""
 
+    # --- ADR 0012: the Claude Code backend (a Claude subscription instead of API billing) ---
+    worker_backend: Literal["aci", "claude_code"] = "aci"
+    """``aci``: SCIO's own tool loop over its sandbox tools. ``claude_code``: every
+    tool-using turn (coder, debugger, documenter, explorer) is one ``claude -p`` run in the
+    sandbox root. Pair with ``SCIO_PROVIDER_OVERRIDE=claude_code`` to keep the tool-less
+    roles off the API as well."""
+    claude_code_bin: str = "claude"
+    """The unmodified Claude Code binary (on PATH, or an absolute path)."""
+
 
 def get_settings() -> Settings:
     """Build settings from the environment. Not cached so tests can override env."""

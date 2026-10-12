@@ -14,7 +14,7 @@ from scio.graph.nodes.planning import normalize_steps, summaries_text
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
-from scio.loop.agent_loop import AgentLoop
+from scio.loop.backends import make_worker
 from scio.loop.impact import assess
 from scio.state.models import (
     AdvisorOutput,
@@ -111,7 +111,7 @@ def implement(ctx: RunContext) -> Node:
         last_ref = state.artifacts.get("verify:last")
         last_verify = ctx.artifacts.head(last_ref, 3000) if last_ref else None
         toolbox = ToolBox(ctx.sandbox, WRITER_TOOLS, human_gate=False, role="coder")
-        loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "coder")
+        loop = make_worker(ctx, toolbox, "coder")
         msg = step_message(
             state.task,
             step,
@@ -145,7 +145,7 @@ def debug(ctx: RunContext) -> Node:
         last_ref = state.artifacts.get("verify:last")
         failing = ctx.artifacts.head(last_ref, 4000) if last_ref else "(no verify output)"
         toolbox = ToolBox(ctx.sandbox, WRITER_TOOLS, human_gate=False, role="debugger")
-        loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "debugger")
+        loop = make_worker(ctx, toolbox, "debugger")
         msg = debug_message(
             state.current_step(),
             repo_root=ctx.sandbox.root,

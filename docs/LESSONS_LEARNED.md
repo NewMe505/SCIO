@@ -381,3 +381,23 @@ Lessons:
 - `integrate` runs tests and lint only; the build, smoke against a running app, dependency audit and the coverage floor arrive with M9's runtime commands (`install_deps`, `run_app`) and the Docker default.
 - A pre-flight credential probe for live product commands (one cheap call before the interview) would turn I-060/I-064 into a one-line message instead of a traceback.
 - Repositories bootstrapped by 0.5.0 carry the old `progress.json` shape (P1 `done`, one milestone); `ProgressFile.sync_features` adds missing records but does not reset P1. Re-bootstrap or edit by hand until a migration is worth writing.
+
+## Claude Code backend (2026-10-12, issue #47, ADR 0012)
+
+### Why
+After the M8 live milestone the owner said they had been billed for API usage and want only their Max subscription to pay. Anthropic's terms allow a subscription login only inside the unmodified Claude Code binary; the Max plan's included API credits are the other sanctioned route (and remain the fallback: link the Console org on claude.ai, no card). The backend makes SCIO run its model work through `claude -p`.
+
+### Lessons applied
+- Pre-flight 8: every flag the backend relies on was read from `claude --help` and the headless docs, then exercised live (a restricted `--json-schema` call on the Max login) before any code: `--bare` would have silently switched to API-key auth, and print mode refuses to nest under `CLAUDECODE=1`.
+- The `GitHubClient` pattern (an injectable runner, every argv recorded) made the whole backend testable without the binary or a login: the canned runner in the graph test performs the scripted edits in the sandbox, so SCIO's real verify grades what "Claude Code" wrote.
+- `scripts/check_docs.py` caught model ids written into the new tests; they now come from `models.yaml` through the role table.
+
+### What succeeded
+- Two seams were enough: a `ModelProvider` for tool-less roles and a worker with `AgentLoop`'s surface behind `make_worker`; the four node call sites changed one line each and every existing test passed unchanged on the `aci` backend.
+- `stream-json` rendered into SCIO's transcript shape keeps `scio report`'s tool signals working for Claude Code turns; `Harness.account` keeps budgets, caps and the cost ledger honest with Claude Code's own usage numbers.
+
+### What failed
+- The first live trial script passed an `EvalTask` where the solver wants `to_task_like(task)`; a harness detail, no spend.
+
+### Live trial
+(pending: t001 through the real binary, Max login; results added here.)
