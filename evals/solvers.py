@@ -79,9 +79,15 @@ class PlaceholderSolver:
         return TrialOutcome(passed=result.value.step_id != "", notes=f"attempts={result.attempts}")
 
 
+CACHE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+
+
 def make_origin(fixture: Path, dest: Path) -> Path:
     """Copy the fixture repository and turn it into a git repo with one commit on main."""
-    shutil.copytree(fixture, dest)
+    # Caches left by running the fixture's tests in place would be committed as fixture
+    # content; tracked .pyc files then change on every test run and end up in the agent's
+    # commits (ledger I-048). The repo-local exclude only covers untracked files.
+    shutil.copytree(fixture, dest, ignore=shutil.ignore_patterns(*CACHE_PATTERNS))
     git = ["git", "-c", "core.autocrlf=false", "-c", "user.name=fixture", "-c", "user.email=f@x"]
     subprocess.run([*git, "init", "-q", "-b", "main"], cwd=dest, check=True)
     subprocess.run([*git, "add", "-A"], cwd=dest, check=True)

@@ -202,6 +202,14 @@ Lessons:
 - The planner is a model too. Given a task that says "the entry point is not documented", Opus planned an exploration step, which a verify built on "the tree must change" can never pass (I-039). Every structured output that drives control flow (plans, routings, verdicts) needs a normaliser that enforces the invariants the graph assumes, and the prompt should state those invariants in the model's terms ("every step changes code or tests and is provable by tests").
 - Live T1 runs are three to five times the cost of T0 runs on the same task (t003: $0.64 vs $0.13 for a T0 docs task of similar size), almost all of it in coder turns that resend their transcript. Context growth per turn, not the number of model roles, is the cost driver to work on next (I-038).
 
+### Realistic tasks (2026-10-12, issue #25)
+Two regression tasks were added for the realism gaps in `docs/IDEAS_TRIAGE.md` item 7: t006, a change that spans the store module, the CLI and their tests, and t007, a fixture whose own CI (`ruff` with the repo's rule set, then `pytest`) is red. Both passed their first live trial ($0.35 and $0.40, two iterations each, no escalation).
+
+Lessons:
+- Hidden tests can run the fixture's own CI: t007's hidden test shells out to `ruff check .` in the repo root, so the agent is graded on the rules the repository selected, not on verify's narrow syntax-and-undefined-names lint. The live coder removed the unused import without a lint tool, from reading `pyproject.toml` and the workflow.
+- Read the gate's non-blocking caveats on every first live run. Both runs passed, and both gates mentioned committed bytecode; that was a real defect in the eval harness (I-048), not a model quirk.
+- Never run a fixture's tests inside `evals/tasks/*/repo`. Copy it out first (`make_origin` now drops caches either way). The fixtures are the agent's starting state, and anything on disk there ships with it.
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates.
 - I-016: Docker and E2B live checks on a machine that has them.
