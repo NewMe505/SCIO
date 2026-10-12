@@ -449,3 +449,12 @@ Template:
 - Fix: open
 - Sweep: open
 - Resolved: · Status: open
+
+### I-055 · A commit landed on local `main` because another session switched the shared checkout
+- Found: 2026-10-11 · Product Mode docs (#34) · `git push` rejected (non-fast-forward); `git status -sb` showed `main` instead of `docs/34-product-mode`
+- Symptom: the docs commit was on local `main`; the push of `main` was rejected, so nothing reached the remote
+- Root cause: two AI sessions shared one working checkout. Between `git switch -c docs/34-product-mode` and `git commit`, the other session (which was cutting `release/0.3.0`) ran `git checkout main` in this checkout (reflog `HEAD@{1}`); the commit command did not check the branch first
+- Fix: moved the commit to `docs/34-product-mode`, reset local `main` to `origin/main`, rebased onto `origin/main` (clean)
+- Sweep: `git branch -vv` and `git worktree list` showed one other worktree (`release/0.3.0`) and no other stray commits; the ruleset on `main` (I-009) would also have rejected a direct push
+- Guard: CONTRIBUTING rule: one session per checkout (others use `git worktree add`), and every commit command starts with a branch assertion (`test "$(git branch --show-current)" = "<branch>"`)
+- Resolved: 2026-10-11 · Status: resolved
