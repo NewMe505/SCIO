@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
 - Two realistic regression tasks: t006 (a change spanning the store module, the CLI and their tests) and t007 (a fixture whose own CI is red on `ruff` with the repo config and on `pytest`); hidden tests run the fixture's own lint rules. One live trial each passed ($0.35 and $0.40).
 ### Fixed

@@ -17,4 +17,4 @@ LangGraph checkpoints state between nodes. A crash inside a node re-runs that no
 ## Consequences
 - Every node that has a side effect must name an `intent` and, where the effect is externally visible, supply a `probe`. M3 node templates make this the default shape.
 - The effect log is a second durable store next to the checkpointer. Both live under `.scio/` in dev; in prod the log can move to Postgres with the same schema (one table).
-- Docker and E2B correctness is verified by command and call construction only until a machine with Docker and an E2B key runs the gated live tests (ledger I-016).
+- Docker correctness is verified live in CI on every PR (`tests/live/test_docker_live.py`, ledger I-016). E2B correctness is verified by call construction only: the project has no E2B account and will not open one (ledger I-029, wontfix). The local backend is the default for the project's own eval fixtures; Docker is the tier for untrusted repositories.
