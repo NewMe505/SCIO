@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-10-12
 ### Changed
 - E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added

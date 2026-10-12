@@ -433,3 +433,11 @@ Template:
 - Fix: the owner made the repository public on 2026-10-10; ruleset `protect-main` (active) now requires a pull request and the `checks` status for the default branch and blocks force-pushes and deletion
 - Sweep: the only other repository SCIO wrote to (the throwaway evaluation repository) has been deleted; `GitHubClient` already refuses default-branch writes on its side
 - Resolved: 2026-10-10 · Status: resolved
+
+### I-055 · Package version stayed at 0.1.0 through the 0.2.0 release
+- Found: 2026-10-12 · release 0.3.0 cut · `grep -n '^version' pyproject.toml` showed `0.1.0` while `v0.2.0` was tagged
+- Symptom: `pyproject.toml` and `scio.__version__` said 0.1.0 after the 0.2.0 release; the changelog and the tag were the only places the version moved
+- Root cause: the 0.2.0 release PR (#16) cut the changelog only; nothing in the release procedure or `scripts/release_notes.py` touches the package version
+- Fix: both files bumped to 0.3.0 in this release; the release procedure in the auto-version-control rule now includes the two version fields
+- Sweep: `grep -rn "0.1.0\|__version__" scio tests` finds no other copy of the version and no test pinning it. Guard: `test_package_version_matches_changelog` asserts `scio.__version__` equals the newest released section of `CHANGELOG.md`
+- Resolved: 2026-10-12 · Status: resolved
