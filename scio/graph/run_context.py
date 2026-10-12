@@ -40,6 +40,8 @@ class RunContext:
     github: GitHubClient | None = None
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     tier: str = "T0"
+    tier_pin: str | None = None
+    """When set, ``route`` skips the classifier and runs this tier (eval tasks, I-050)."""
 
     @classmethod
     def create(
@@ -54,6 +56,7 @@ class RunContext:
         github: GitHubClient | None = None,
         work_dir: Path | str | None = None,
         budget_limits: BudgetLimits | None = None,
+        tier_pin: str | None = None,
     ) -> RunContext:
         settings = settings or get_settings()
         budgets = BudgetsConfig.load(settings.budgets_path)
@@ -100,7 +103,15 @@ class RunContext:
             github=github,
             escalation=EscalationConfig(**budgets.escalation.model_dump()),
             tier=tier,
+            tier_pin=tier_pin,
         )
+
+    def close(self) -> None:
+        """Release the run's file handles (the effect log's SQLite connection).
+
+        Without this a finished trial's directory cannot be deleted on Windows (I-049).
+        """
+        self.effects.close()
 
     def budget_update(self) -> dict[str, object]:
         """State patch reflecting the harness's spend so far."""

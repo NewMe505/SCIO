@@ -2,6 +2,7 @@ id: t008_snapshot_coupling
 suite: regression
 title: Right-align numeric cells in render_table
 tier_hint: T1
+tier_pin: T1  # the router rates this T0 and skips plan/verify/debug, which the task exists to test (I-050)
 trials: 5
 budget: { tokens: 300000, usd: 3.0 }
 grader: tests

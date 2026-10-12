@@ -45,6 +45,10 @@ class EvalTask(BaseModel):
     title: str
     spec_file: str = "spec.md"
     tier_hint: str | None = None
+    tier_pin: str | None = None
+    """Run this tier without consulting the router. For tasks built to exercise one tier's
+    path (t008 and the debugger): the classifier under-tiers them and skips those nodes
+    (ledger I-050). Also sizes the budget, so set ``tier_hint`` to the same value."""
     trials: int = 5
     budget: TaskBudget = Field(default_factory=TaskBudget)
     grader: Literal["placeholder", "tests"] = "placeholder"
@@ -94,7 +98,8 @@ def to_task_like(task: EvalTask) -> EvalTaskLike:
         hidden_tests=task.hidden_tests,
         tokens=task.budget.tokens,
         usd=task.budget.usd,
-        tier=task.tier_hint or "T0",
+        tier=task.tier_pin or task.tier_hint or "T0",
+        tier_pin=task.tier_pin,
         scenario=task.scenario,
         expect_pass=task.expect_pass,
     )

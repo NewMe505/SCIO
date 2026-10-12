@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from evals.report import TrialResult, summarize
 from evals.runner import PlaceholderSolver, load_tasks, main, run_suite
 
@@ -43,6 +45,25 @@ def test_make_origin_leaves_caches_behind(tmp_path: Path) -> None:
     assert not (origin / "pkg" / "__pycache__").exists()
 
 
+def test_remove_tree_deletes_read_only_git_objects(tmp_path: Path) -> None:
+    """I-049: ``rmtree(ignore_errors=True)`` left one directory per trial behind on Windows
+    because git object files are read-only; the solver's cleanup must clear them."""
+    import os
+    import stat
+
+    from evals.solvers import remove_tree
+
+    tree = tmp_path / "trial"
+    obj = tree / "origin" / ".git" / "objects" / "ab"
+    obj.mkdir(parents=True)
+    blob = obj / "cdef"
+    blob.write_bytes(b"x")
+    os.chmod(blob, stat.S_IREAD)
+    remove_tree(tree)
+    assert not tree.exists()
+    remove_tree(tree)  # idempotent on a missing path
+
+
 def test_metrics() -> None:
     rs = [
         TrialResult(
@@ -69,7 +90,10 @@ def test_regression_suite_on_fake_is_fully_passing(tmp_path: Path) -> None:
     assert json_path.exists() and "pass^2" in md_path.read_text(encoding="utf-8")
 
 
-def test_cli_exit_codes(tmp_path: Path) -> None:
+def test_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # trial dirs land here
     assert (
         main(
             [
@@ -85,3 +109,5 @@ def test_cli_exit_codes(tmp_path: Path) -> None:
         )
         == 0
     )
+    # I-049: every trial directory is removed once the run has released its handles.
+    assert sorted(tmp_path.glob("scio-*")) == []
