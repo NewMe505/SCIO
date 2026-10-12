@@ -289,6 +289,22 @@ Template:
 - Sweep: `find evals/tasks -name __pycache__` now empty; `grep -rn "copytree" evals scio tests scripts` finds one call, `make_origin`, so every sandbox (local, Docker mount, E2B upload) starts from the filtered clone. The scratch diagnostics copy whole task directories but hand the repo to `make_origin`
 - Resolved: 2026-10-12 · Status: resolved
 
+### I-049 · Every eval trial leaked its temp directory on Windows (636 directories, 51 MB)
+- Found: 2026-10-12 · issue #29 · `ls $TEMP/scio-*` after the first live trial of t008 showed three t008 directories where one was kept on purpose
+- Symptom: `scio-<task>-<rand>` directories accumulate under `%TEMP%`, each holding `origin/.git/objects` and `.scio/effects.sqlite`; nothing reported a failure
+- Root cause: two defects hidden by one flag. `GraphSolver.solve` cleaned up with `shutil.rmtree(tmp, ignore_errors=True)`. (1) git object files are read-only, and `rmtree` cannot delete them on Windows without clearing the bit. (2) `RunContext` never closed the effect log's SQLite connection, so `effects.sqlite` was still open (`WinError 32`) when the cleanup ran. `ignore_errors` swallowed both
+- Fix: `evals.solvers.remove_tree` deletes with an `onexc` handler that clears the read-only bit and retries; `RunContext.close()` closes the effect log and `GraphSolver._solve` calls it in a `finally`; the solver logs a warning instead of silently ignoring a cleanup failure. The 636 leaked directories were removed with the new helper
+- Sweep: `grep -rn "rmtree\|TemporaryDirectory\|mkdtemp" scio evals tests scripts` finds one other temp site, `evals/tune.py` (one small YAML file per sweep, no handles; left as is). `grep -rn "sqlite3.connect" scio` finds two: the checkpointer (closed in its context manager) and the effect log (now closed by `RunContext.close`). Guards: `test_remove_tree_deletes_read_only_git_objects`, and `test_cli_exit_codes` now points `tempfile.tempdir` at `tmp_path` and asserts no `scio-*` directory survives a suite run
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-050 · The router rated t008 T0, so the task never reached plan, verify or the debugger
+- Found: 2026-10-12 · issue #29 · first live trial of t008 (`sonnet_opus_advisor`): `tier=T0 exit=success iterations=2 tool_calls=17`, $0.19
+- Symptom: the task passed, but through the T0 loop: the coder saw the failing snapshot test in its own full-suite run and fixed it on the next turn. The debugger, the node the task was built to exercise live (ADR 0006 decision 4), was not called
+- Root cause: wrong assumption that `tier_hint: T1` drives the tier. The hint only sizes the budget; the router (Haiku) decides, its prompt says to prefer the cheaper tier when in doubt, and it read the "existing suite passes and the documented example is correct" criteria as "minor verification rather than scope expansion" (confidence 0.70). The router sees the spec and a file count, not the test suite's coupling, so no rewording of the spec makes the route deterministic
+- Fix: `tier_pin:` in `task.yaml` (`EvalTask`, `EvalTaskLike`, `RunContext.tier_pin`); `route` emits that tier with `classifier_model="pinned"` and no model call. t008 pins T1. Second live trial with the pin: routed T1, passed, $0.39, two steps, no debugger either: the coder ran the full suite inside its own turn and regenerated the snapshot before verify saw it (LESSONS_LEARNED, "Snapshot coupling task")
+- Sweep: `grep -rn "tier_hint" evals scio` shows the hint still feeds only budgets and the router message (as a hint); no other task depends on a tier it cannot guarantee (the capability tasks reuse scripts that return the tier on the Fake). Guard: `tests/unit/test_tier_pin.py` (pinned route skips the classifier; t008 is the only pinned task)
+- Resolved: 2026-10-12 · Status: resolved
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only

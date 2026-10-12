@@ -49,6 +49,21 @@ def intake(ctx: RunContext) -> Node:
 
 def route(ctx: RunContext) -> Node:
     def node(state: SCIOState) -> dict[str, Any]:
+        if ctx.tier_pin is not None:
+            # Eval tasks built to exercise one tier's path pin it: the classifier prefers
+            # the cheaper tier when in doubt and rated t008 T0, which skipped plan, verify
+            # and debug, the very nodes the task exists to test (ledger I-050).
+            pinned = Tier(ctx.tier_pin)
+            routing = Routing(
+                tier=pinned,
+                pattern=_PATTERN[pinned],
+                effort_tier=_EFFORT[pinned],
+                rationale="tier pinned by the eval task (tier_pin); classifier not consulted",
+                classifier_model="pinned",
+                confidence=1.0,
+            )
+            entry = fact(f"routed to {pinned.value} (pinned by the task)", source=Role.ROUTER)
+            return {"routing": routing, "task_ledger": [entry], "phase": "prepare"}
         stats = _repo_stats(ctx)
         system = ctx.prompts.get("router").render()
         req = ctx.harness.build_request(

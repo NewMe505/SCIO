@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -29,6 +32,8 @@ from scio.harness.providers.fake import FakeProvider
 from scio.harness.types import Message
 from scio.prompt.registry import PromptRegistry
 from scio.state.models import ExitReason, TaskSpec
+
+log = logging.getLogger(__name__)
 
 
 class TrialOutcome(BaseModel):
@@ -54,6 +59,7 @@ class EvalTaskLike(BaseModel):
     tokens: int = 100_000
     usd: float = 1.0
     tier: str = "T0"
+    tier_pin: str | None = None
     scenario: dict[str, Any] = Field(default_factory=dict)
     expect_pass: bool = True
 
@@ -80,6 +86,22 @@ class PlaceholderSolver:
 
 
 CACHE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+
+
+def _make_writable(func: Callable[..., Any], path: str, _exc: BaseException) -> None:
+    """``rmtree`` error handler: clear the read-only bit and retry (git objects on Windows)."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def remove_tree(path: Path) -> None:
+    """Delete a trial's working tree, read-only git objects included.
+
+    ``shutil.rmtree(..., ignore_errors=True)`` silently left every ``origin/.git/objects``
+    tree behind on Windows, one directory per trial (ledger I-049).
+    """
+    if path.exists():
+        shutil.rmtree(path, onexc=_make_writable)
 
 
 def make_origin(fixture: Path, dest: Path) -> Path:
@@ -121,7 +143,10 @@ class GraphSolver:
             return self._solve(task, harness, tmp)
         finally:
             if not self.keep_dirs:
-                shutil.rmtree(tmp, ignore_errors=True)
+                try:
+                    remove_tree(tmp)
+                except OSError as exc:  # a leak must be visible, but never fail the trial
+                    log.warning("could not remove trial directory %s: %s", tmp, exc)
 
     def _solve(self, task: EvalTaskLike, harness: Harness, tmp: Path) -> TrialOutcome:
         origin = make_origin(task.path / "repo", tmp / "origin")
@@ -151,12 +176,16 @@ class GraphSolver:
             harness=harness,
             work_dir=tmp / ".scio",
             budget_limits=limits,
+            tier_pin=task.tier_pin,
         )
-        outcome = run_graph(ctx, task_spec(task, origin))
-        if outcome.paused and outcome.state.phase == "merge_wait":
-            outcome = resume_graph(ctx, "approved (eval)")
-        state = outcome.state
-        graded = self._grade(ctx, task)
+        try:
+            outcome = run_graph(ctx, task_spec(task, origin))
+            if outcome.paused and outcome.state.phase == "merge_wait":
+                outcome = resume_graph(ctx, "approved (eval)")
+            state = outcome.state
+            graded = self._grade(ctx, task)
+        finally:
+            ctx.close()  # an open effect-log handle blocks the cleanup on Windows (I-049)
         succeeded = state.exit_reason is ExitReason.SUCCESS and graded[0]
         passed = succeeded if task.expect_pass else (not succeeded and outcome.paused)
         exit_name = state.exit_reason.value if state.exit_reason else None

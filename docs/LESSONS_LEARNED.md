@@ -210,6 +210,27 @@ Lessons:
 - Read the gate's non-blocking caveats on every first live run. Both runs passed, and both gates mentioned committed bytecode; that was a real defect in the eval harness (I-048), not a model quirk.
 - Never run a fixture's tests inside `evals/tasks/*/repo`. Copy it out first (`make_origin` now drops caches either way). The fixtures are the agent's starting state, and anything on disk there ships with it.
 
+### Snapshot coupling task (2026-10-12, issue #29)
+t008 asks for a formatting change whose obvious implementation breaks a CLI snapshot test and a README example test that a filtered `run_tests` never executes. It was built so that verify's full-suite step fails and the debugger runs live for the first time (ADR 0006 decision 4 has never had a live data point). Two live trials on `sonnet_opus_advisor`:
+
+| trial | tier | result | iterations | tool calls | cost | debugger called |
+|---|---|---|---:|---:|---:|---|
+| 1 (router) | T0 | pass | 2 | 17 | $0.19 | no (T0 has none) |
+| 2 (`tier_pin: T1`) | T1 | pass | 2 (one per step) | 23 | $0.39 | no |
+
+What happened instead:
+- The router (Haiku) rated the task T0 at confidence 0.70: "the mention of docs and the test suite is minor verification rather than scope expansion". The hint in `task.yaml` only sizes the budget. `tier_pin:` now makes the route deterministic for tasks built around one path (I-050).
+- With the pin, the planner split the work into two steps and the coder, in step S1, ran the whole suite itself before summarizing, saw the snapshot test fail, and regenerated `tests/golden/demo.txt` even though the step's file list did not name it ("outside expected files ... needed for full suite to pass"). Verify then passed first time on both steps. In the T0 trial the coder also ran the full suite, stopped after finding the golden file, and fixed it on the next turn.
+- So the trap was defused by the coder's own habit of running the full suite, not by verify. The debugger is still live-untested. A task that forces it needs a failure the coder cannot see from inside its own turn: a check verify runs and the coder's `run_tests` does not (lint on the repo's rule set, a hidden-but-declared CI step), or a test that only fails on a fresh checkout.
+
+Lessons:
+- A hint is not a pin. Every eval task whose purpose is a specific graph path must state that path in a way the harness enforces; the router is a model and it is told to prefer the cheaper tier.
+- Design a "must fail verify" task from what the worker *cannot observe*, not from what the plan's filter omits. Sonnet runs the full suite unprompted; a filtered-out test is not hidden from it.
+- Read the cost ledger by role before claiming a node ran. `tier=T1 iterations=2` looked like plan, fail, debug; the ledger had no debugger row and the second iteration was the second step.
+- Two causes can hide behind one `ignore_errors=True` (I-049): read-only git objects and an open SQLite handle each blocked the cleanup, and 636 trial directories accumulated silently. Cleanup code logs failures; it never ignores them.
+
+Actions: `tier_pin` (`EvalTask`, `RunContext`, `route`; `tests/unit/test_tier_pin.py`); `remove_tree` and `RunContext.close()` (`test_remove_tree_deletes_read_only_git_objects`, leak assertion in `test_cli_exit_codes`); ledger I-049, I-050; this section. Open: a task that makes verify fail against a full-suite-running coder (candidate: t007's pattern with a lint-only failure in a file the step does not touch).
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.
