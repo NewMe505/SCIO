@@ -19,6 +19,7 @@ def test_tasks_load() -> None:
         "t006_multi_file_remove",
         "t007_red_ci",
         "t008_snapshot_coupling",
+        "t009_verify_only_lint",
     ]
     assert all(t.grader == "tests" and t.hidden_tests for t in tasks)
     assert all(t.trials >= 5 for t in tasks)

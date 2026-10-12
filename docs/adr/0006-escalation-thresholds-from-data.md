@@ -34,6 +34,9 @@ The sweep's own rule ("cheapest cell with pass rate 1.0") picks `repeat_threshol
 3. `advisor_calls_max` stays 3 (T1) and 6 (T2): no scenario needed more than one call per step.
 4. Re-run `python -m evals.tune --provider anthropic` when a key exists and revisit decision 1 with real resolution rates. Until then the thresholds are "spec defaults, confirmed safe by control-flow data", not "optimal".
 
+## Live data (2026-10-12, issue #31)
+The first live debugger run (t009, `sonnet_opus_advisor`, pinned T1) is the data point decision 1 reserved budget for: verify failed on a lint-only error in a module no test imports, the debugger fixed it in one turn (9 calls, $0.06 of a $0.34 run, with a repository sweep), and the second verify passed. No escalation signal fired. This supports keeping `repeat_threshold = 3`: the first debug turn did fix a clear, local failure, which the Fake debugger structurally could not. It is one run on one failure kind; decision 4 still stands, and a live sweep still needs a scenario in which the debugger fails repeatedly (the capability tasks are `providers: [fake]`), which no live task produces yet.
+
 ## Consequences
 - The sweep is reproducible from `evals/tune.py` and its JSON/Markdown reports live under `evals/results/` (git-ignored; the nightly workflow uploads them as artifacts).
 - A future live sweep must include a scenario where the debugger *can* succeed, or it will reproduce the same bias toward early escalation.

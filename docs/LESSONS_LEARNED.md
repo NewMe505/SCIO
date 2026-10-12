@@ -231,6 +231,23 @@ Lessons:
 
 Actions: `tier_pin` (`EvalTask`, `RunContext`, `route`; `tests/unit/test_tier_pin.py`); `remove_tree` and `RunContext.close()` (`test_remove_tree_deletes_read_only_git_objects`, leak assertion in `test_cli_exit_codes`); ledger I-049, I-050; this section. Open: a task that makes verify fail against a full-suite-running coder (candidate: t007's pattern with a lint-only failure in a file the step does not touch).
 
+### Verify-only failure task (2026-10-12, issue #31)
+t009 applies the lesson from t008: the failure must be one the coder cannot observe from inside its own turn. The fixture's `metrics/report.py` uses `DECIMALS` without importing it; no test imports that module, so `run_tests` is green at every filter and only verify's lint step (`ruff --select E9,F63,F7,F82,F821` over the tree) fails. The task itself is an unrelated feature (`stdev`). One live trial on `sonnet_opus_advisor`, pinned T1:
+
+| tier | result | iterations | tool calls | cost | debugger called |
+|---|---|---:|---:|---:|---|
+| T1 | pass, 4 hidden tests | 2 | 14 | $0.34 | yes: 9 calls, $0.06 |
+
+What happened: the coder added `stdev` and its tests in one turn (filters `stats`, `stdev`, `test_stdev` all green, full suite green); verify reported `lint_only`; triage took the default route to debug; the debugger viewed `report.py` and `stats.py`, added `DECIMALS` to the import, searched the repository for the same construct, reran the tests and reported a sweep with the files it ruled out; the second verify passed and the rest of the run (review, docs, gate) was ordinary. The debugger did not delete the module or the rounding (hidden test). First live data point for ADR 0006 decision 4: one debug turn resolved a lint-only failure at about a fifth of the run's cost.
+
+Lessons:
+- The reliable way to force a graph path in an eval is to put the failure outside the worker's tools. Here the coder has `run_tests` and no lint tool, so an undefined name in an unimported module is invisible to it and visible to verify. Build path-specific tasks from the tool gap, then pin the tier (I-050).
+- The debugger prompt's "sweep the repository for the same construct" produced a real sweep (pattern, files checked, files ruled out) on the first live run; keep the structured `sweep` field, it is the evidence that the fix was not local.
+- Hidden tests for a lint-only task must check the *fix*, not just the lint: `format_report([1, 2, 4]) == "mean=2.33 median=2.0"` rules out deleting the module or the rounding, which would also silence F821.
+- Hidden tests under `evals/` are linted by SCIO's own ruff config (I-051): write them to that standard, not the fixture's.
+
+Actions: t009 fixture, hidden tests and fake script (`Step.debug_edits`, so the scripted debugger has something to apply when the step was correct); `test_t1_lint_only_failure_runs_the_debugger` asserts the debugger ran at iteration 2 and was shown a lint failure and no test failure; ledger I-051, I-052; this section.
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.

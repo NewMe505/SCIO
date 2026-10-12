@@ -305,6 +305,22 @@ Template:
 - Sweep: `grep -rn "tier_hint" evals scio` shows the hint still feeds only budgets and the router message (as a hint); no other task depends on a tier it cannot guarantee (the capability tasks reuse scripts that return the tier on the Fake). Guard: `tests/unit/test_tier_pin.py` (pinned route skips the classifier; t008 is the only pinned task)
 - Resolved: 2026-10-12 · Status: resolved
 
+### I-051 · t009 hidden test failed SCIO's own lint (import block order)
+- Found: 2026-10-12 · issue #31 · `uv run ruff check .` on the first run after writing `evals/tasks/t009_verify_only_lint/hidden/test_stdev_hidden.py`
+- Symptom: `I001 Import block is un-sorted or un-formatted`: `import pytest` and `from metrics.stats import stdev` were separated by a blank line
+- Root cause: hidden tests live under `evals/`, so SCIO's ruff config lints them, and it classifies both `pytest` and the fixture package as third-party (one block). t007's hidden test never hit this because it imports no third-party module besides the fixture
+- Fix: the two imports joined into one block
+- Sweep: `uv run ruff check evals/tasks` clean for all nine tasks; the rule is already enforced by the CI chain, so no extra guard
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-052 · Test assumed a per-iteration `verify:<n>` artifact key that verify never writes
+- Found: 2026-10-12 · issue #31 · first run of `test_t1_lint_only_failure_runs_the_debugger`
+- Symptom: `KeyError: 'verify:1'`
+- Root cause: verify stores its output under the single key `verify:last` (the numbered files on disk are the artifact store's own numbering); workers store `<role>:<iteration>`. I assumed the worker convention applied to verify
+- Fix: the test reads the debugger's transcript (`debugger:2`), which embeds the verify output it was shown, and asserts it contains the lint failure and no test failure
+- Sweep: `grep -rn '"verify:' scio tests` shows one writer and no other reader of a numbered verify key
+- Resolved: 2026-10-12 · Status: resolved
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
