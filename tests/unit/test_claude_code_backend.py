@@ -438,3 +438,28 @@ def test_worker_treats_the_turn_cap_as_a_stop_not_an_error(tmp_path: Path) -> No
     result = worker.run("task")
     assert result.stop == "tool_cap" and result.output.summary == "ran out of turns"
     assert harness.budget.snapshot().calls == 2
+
+
+def test_worker_trims_overlong_prose_fields_instead_of_failing(tmp_path: Path) -> None:
+    """I-070: the schema given to --json-schema has no maxLength, so Claude Code may write a
+    1,000-character summary; SCIO's 800 cap is presentation, not correctness: trim and go on."""
+    from scio.loop.claude_code_worker import validate_with_trimming
+
+    settings = Settings(provider_override="fake")
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    long_summary = {
+        "step_id": "S1", "summary": "x" * 1200, "files_touched": [], "confidence": "high",
+        "needs_design_decision": False, "design_question": None, "next_action": "verify",
+        "tests_added": [], "sweep": None,
+    }  # fmt: skip
+    fake = FakeClaude([STREAM, _result(session_id="sess-w", structured_output=long_summary)])
+    worker = ClaudeCodeWorker(
+        harness, LocalSandbox(tmp_path), PromptRegistry(), "documenter",
+        toolchain=python_toolchain(), tool_names=("edit_file",), runner=fake,
+    )  # fmt: skip
+    result = worker.run("task")
+    assert len(result.output.summary) == 800 and result.output.summary.endswith("...")
+    assert len(fake.calls) == 2  # no re-ask was needed
+    with pytest.raises(Exception, match="step_id"):  # a structural error is not trimmed away
+        validate_with_trimming(WorkerOutput, {"summary": "s"})

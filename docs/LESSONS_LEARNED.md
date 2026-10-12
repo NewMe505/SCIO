@@ -398,6 +398,9 @@ After the M8 live milestone the owner said they had been billed for API usage an
 
 ### What failed
 - The first live trial script passed an `EvalTask` where the solver wants `to_task_like(task)`; a harness detail, no spend.
+- The first `scio new` through the backend died on its first call: print mode returned `is_error` with no message, and the provider called every unexplained error fatal (I-068). The harness already had a retry policy; the provider just never raised the retryable class. Transient process failures are now retried and the subtype is carried in the message.
+- The first `scio build` through the backend died in P1's documenter turn: the T0 cap of $0.50, written for API prices, was handed to `--max-budget-usd` as the remaining $0.29 and Claude Code stopped the turn; the backend turned that into a traceback instead of SCIO's `budget` exit (I-069). Two fixes: tier caps scale by a measured factor (4.0) on this backend, and the binary's budget stop maps to `BudgetExceeded`, which every node already handles. The eval solver scales task budgets the same way.
+- A lesson about guards: a cap expressed in dollars is only as portable as the price list behind it. When a backend changes what a dollar measures, scale the guard with data from one trial before running anything long.
 
 ### Live trial (2026-10-12, Max login, no Console API usage)
 t001 through the T0 graph with both seams on (`SCIO_PROVIDER_OVERRIDE=claude_code`, `SCIO_WORKER_BACKEND=claude_code`), run from inside a Claude Code session with `CLAUDECODE` stripped:

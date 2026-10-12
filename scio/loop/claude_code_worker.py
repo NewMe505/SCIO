@@ -140,6 +140,33 @@ def parse_stream(stdout: str) -> StreamTurn:
     return turn
 
 
+def validate_with_trimming[T: BaseModel](output_model: type[T], raw: Any) -> T:
+    """Validate ``raw`` against ``output_model``, trimming string fields that only exceed
+    their ``max_length`` (I-070). The wire schema handed to ``--json-schema`` carries no
+    length caps, and a cap on prose is a presentation limit: trim, then validate again.
+    Any other error is raised unchanged. ``raw`` is modified in place when trimmed."""
+    try:
+        return output_model.model_validate(raw)
+    except ValidationError as exc:
+        if not isinstance(raw, dict):
+            raise
+        trimmed = False
+        for err in exc.errors():
+            if err.get("type") != "string_too_long":
+                continue
+            loc = err.get("loc") or ()
+            limit = (err.get("ctx") or {}).get("max_length")
+            if len(loc) != 1 or not isinstance(limit, int):
+                continue
+            key = loc[0]
+            if isinstance(raw.get(key), str):
+                raw[key] = raw[key][: max(limit - 3, 0)].rstrip() + "..."
+                trimmed = True
+        if not trimmed:
+            raise
+        return output_model.model_validate(raw)
+
+
 class ClaudeCodeWorker:
     def __init__(
         self,
@@ -279,10 +306,9 @@ class ClaudeCodeWorker:
             payload = data.get("structured_output")
             text = json.dumps(payload) if payload is not None else str(data.get("result") or "")
             try:
-                value = output_model.model_validate(
-                    payload if payload is not None else json.loads(text)
-                )
-                return value, text, attempt
+                raw = payload if payload is not None else json.loads(text)
+                value = validate_with_trimming(output_model, raw)
+                return value, json.dumps(raw), attempt
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_error = str(exc)[:600]
         raise FatalError(
