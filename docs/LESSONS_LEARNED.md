@@ -232,7 +232,7 @@ Lessons:
 Actions: `tier_pin` (`EvalTask`, `RunContext`, `route`; `tests/unit/test_tier_pin.py`); `remove_tree` and `RunContext.close()` (`test_remove_tree_deletes_read_only_git_objects`, leak assertion in `test_cli_exit_codes`); ledger I-049, I-050; this section. Open: a task that makes verify fail against a full-suite-running coder (candidate: t007's pattern with a lint-only failure in a file the step does not touch).
 
 ### Carried forward (post-0.1.0)
-- I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates.
+- I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.
 - I-008, I-009: cosmetic pdoc warning; branch protection needs GitHub Pro or a public repository.
 - Open question 3 (patch sampling): the sampling step is wired but off; measure before enabling.

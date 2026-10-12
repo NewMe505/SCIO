@@ -98,7 +98,8 @@ out of the first live runs, none of them visible to the Fake.
   one step. Add one task per gap, not ten.
 - Should live results gate merges? No. They are variance-bearing and cost money; the Fake
   suite gates, the live suite informs and feeds the threshold sweep.
-- Re-run `evals/tune.py` live before trusting ADR 0006's thresholds; include a scenario
+- Re-run `evals/tune.py` live before trusting ADR 0006's thresholds (not yet possible: no
+  live run has escalated, see the status note at the end); include a scenario
   where the debugger *can* succeed (ADR 0006 consequence).
 
 ## 8. Disabling native advisor tools
@@ -157,5 +158,12 @@ yet; when there is, start with the capability suite's hidden tests, not a judge.
 2. SemVer rule; tag `v0.2.0` on the live-validation merge (item 1).
 3. Nightly live suite with a cost ceiling, two realistic tasks, live threshold sweep (item 7).
 4. Cheap signals in `scio report`: tool error rate, repeated calls, re-reads, documenter
-   completion (items 9, 10, 12).
+   completion (items 9, 10, 12). Done 2026-10-12 (issue #27): `RunReport.tool_signals`.
 5. Everything else waits for a measured failure it would have prevented.
+
+Status 2026-10-12: items 1 to 4 are done except the live threshold sweep in item 3, which
+has nothing to measure yet. Across 31 live task rows (three nightly suites and the first
+trials of t006 and t007) no run made an advisor call: every task passed in one or two
+iterations, so every sweep cell would run identically at about $30 for the grid. The sweep
+waits for a live task that makes the coder fail verify at least twice (ADR 0006,
+consequences).

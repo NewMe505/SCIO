@@ -18,7 +18,7 @@ from scio.harness.core import Harness
 from scio.harness.providers.fake import FakeProvider
 from scio.harness.retry import RetryPolicy
 from scio.settings import REPO_ROOT, Settings
-from scio.state.models import ExitReason, FeatureStatus, TaskSpec, Tier
+from scio.state.models import ExitReason, FeatureStatus, Role, TaskSpec, Tier
 
 FIXTURE = REPO_ROOT / "evals" / "tasks" / "t001_add_function"
 
@@ -98,6 +98,7 @@ def test_happy_path_end_to_end(tmp_path: Path) -> None:
     )
     assert s.budgets.tokens_used > 0 and s.budgets.usd_used > 0
     assert "pr_body" in s.artifacts and "verify:last" in s.artifacts
+    assert s.artifacts["documenter:1"].produced_by is Role.DOCUMENTER  # report tool signals
     work = tmp_path / "work"
     assert "def slugify" in (work / "textutils" / "__init__.py").read_text()
     assert "slugify" in (work / "CHANGELOG.md").read_text()
