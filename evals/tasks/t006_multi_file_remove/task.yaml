@@ -1,0 +1,8 @@
+id: t006_multi_file_remove
+suite: regression
+title: Add remove to the inventory store and CLI
+tier_hint: T1
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_inventory_hidden.py

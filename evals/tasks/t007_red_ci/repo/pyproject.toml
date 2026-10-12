@@ -1,0 +1,10 @@
+[project]
+name = "ledger"
+version = "0.1.0"
+description = "A minimal account balance."
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

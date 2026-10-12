@@ -14,10 +14,32 @@ def test_tasks_load() -> None:
         "t003_update_docs",
         "t004_two_features",
         "t005_cli_json_flag",
+        "t006_multi_file_remove",
+        "t007_red_ci",
     ]
     assert all(t.grader == "tests" and t.hidden_tests for t in tasks)
     assert all(t.trials >= 5 for t in tasks)
     assert "Acceptance criteria" in tasks[0].spec
+
+
+def test_make_origin_leaves_caches_behind(tmp_path: Path) -> None:
+    """I-048: caches on disk in a fixture must not become tracked fixture content."""
+    import subprocess
+
+    from evals.solvers import make_origin
+
+    fixture = tmp_path / "fixture"
+    (fixture / "pkg" / "__pycache__").mkdir(parents=True)
+    (fixture / "pkg" / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+    (fixture / "pkg" / "__pycache__" / "__init__.cpython-312.pyc").write_bytes(b"\x00")
+    (fixture / ".pytest_cache").mkdir()
+    (fixture / ".pytest_cache" / "v").write_text("", encoding="utf-8")
+    origin = make_origin(fixture, tmp_path / "origin")
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=origin, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert tracked == ["pkg/__init__.py"]
+    assert not (origin / "pkg" / "__pycache__").exists()
 
 
 def test_metrics() -> None:

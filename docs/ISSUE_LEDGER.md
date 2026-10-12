@@ -281,6 +281,14 @@ Template:
 - Sweep: `SuiteReport.to_markdown` already prints `not applicable here: …`; `evals.runner --min-pass-pow-k` on an empty suite would also fail (pass^k 0.0), left as is because an empty regression suite is a real failure. The GitHub nightly workflow runs on the Fake provider where all tasks apply
 - Resolved: 2026-10-12 · Status: resolved
 
+### I-048 · Fixture bytecode became tracked content and showed up in the agent's commits
+- Found: 2026-10-12 · first live trial of t006 and t007 (issue #25); the gate's reasoning noted "compiled __pycache__ .pyc files were committed" on both runs
+- Symptom: the agent's diff and commits included `__pycache__/*.pyc` under the fixture packages; the gate passed with a non-blocking caveat
+- Root cause: the fixtures' tests had been run in place while authoring them, leaving `__pycache__` on disk (git-ignored in SCIO, so invisible to `git status`). `make_origin` copied the whole tree, so the `.pyc` files were part of the fixture's base commit; `prepare` writes `.git/info/exclude`, but an exclude only hides *untracked* files, and tracked bytecode is rewritten by every test run
+- Fix: `make_origin` copies with `shutil.ignore_patterns` for `__pycache__`, `*.pyc`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`; the stray directories deleted from the working tree. `test_make_origin_leaves_caches_behind`
+- Sweep: `find evals/tasks -name __pycache__` now empty; `grep -rn "copytree" evals scio tests scripts` finds one call, `make_origin`, so every sandbox (local, Docker mount, E2B upload) starts from the filtered clone. The scratch diagnostics copy whole task directories but hand the repo to `make_origin`
+- Resolved: 2026-10-12 · Status: resolved
+
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016
 - Symptom: `E2BSandbox` is verified with a fake client only
