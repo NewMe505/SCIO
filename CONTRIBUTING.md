@@ -34,7 +34,7 @@ These three protocols are mandatory for humans and agents. `CLAUDE.md` restates 
 3. **Systemic bug sweeps.** A bug is never fixed in isolation. After the root cause is known, search the entire codebase for the same construct (state the grep or pattern in the ledger entry), fix every instance, and add a guard that prevents recurrence (a test, a lint rule, a docs check, or a CONTRIBUTING rule). "Patched the symptom" is not a valid resolution.
 
 ## Concurrent sessions
-- One session (human or agent) per working checkout. A second concurrent session works in its own `git worktree add` directory (ledger I-055).
+- One session (human or agent) per working checkout. A second concurrent session works in its own `git worktree add` directory (ledger I-058).
 - Every scripted commit starts with a branch assertion, e.g. `test "$(git branch --show-current)" = "docs/34-product-mode" && git commit ...`, so a checkout switched by someone else fails loudly instead of committing to the wrong branch.
 
 ## File hygiene

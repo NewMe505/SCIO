@@ -166,6 +166,7 @@ graph TD;
 	triage(triage)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> intake;
+	advise -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
 	advise -.-> halt;
 	advise -.-> implement;
 	advise -.-> plan;
@@ -277,6 +278,7 @@ graph TD;
 	triage(triage)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> intake;
+	advise -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;
 	advise -.-> halt;
 	advise -.-> implement;
 	advise -.-> plan;
@@ -341,7 +343,16 @@ flowchart TD
   ESC{"advisor_calls_this_step < 1<br/>and advisor_calls_run < K?"}
   ESC -->|yes| ADV[advise]
   ESC -->|no| HUM["interrupt: human"]
+  P[verify passed] --> p1{"high-impact flags<br/>not yet reviewed?"}
+  p1 -->|no| CKPT[git_checkpoint]
+  p1 -->|yes| p2{"caps allow?"}
+  p2 -->|no| CKPT
+  p2 -->|yes| REV["advise: pre-commit review (ADR 0008)"]
+  REV -->|continue| CKPT
+  REV -->|change_approach / replan| IMPL[implement / plan]
 ```
+
+A passing verify escalates on one signal only: an unreviewed high-impact diff gets a pre-commit advisor review (ADR 0008). `continue` commits without another coder turn; a refused review commits as usual.
 
 ---
 
@@ -867,9 +878,9 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 - One builder (`scio/graph/build.py`) wires every tier; `after_route` sends the run down the chosen tier and the generated sections above are the `tier="T0"|"T1"|"T2"` restrictions of that graph.
 - T2 `scope` (Opus) produces 2–4 exploration questions; `explore` runs them in parallel through LangGraph `Send` with a read-only toolbox and reduces ≤1.5k-token summaries into `explorer_summaries`. T1 runs a single `localize` explorer for the first step.
 - `plan` (Opus) owns the feature list's `test_filter`s and the steps; `post_plan` mirrors the checklist to the issue (idempotent by marker). `implement` executes one step per cycle; `git_checkpoint` commits that step's features and advances the cursor (ADR 0005).
-- `verify` stores a `TriageDecision` after a failing check; the `triage` edge reads it: `debug` (the default and the never-escalate path), `advise` (any of the six signals while the caps allow), or `halt` with exit `advisor_cap`. `advise` records an `EscalationRecord` (trigger, brief artifact, verdict, tokens, $, outcome) and routes on the verdict; the next verify resolves the record.
+- `verify` stores a `TriageDecision` after a failing check; the `triage` edge reads it: `debug` (the default and the never-escalate path), `advise` (any of the six signals while the caps allow), or `halt` with exit `advisor_cap`. `advise` records an `EscalationRecord` (trigger, brief artifact, verdict, tokens, $, outcome) and routes on the verdict; the next verify resolves the record. A *passing* verify with unreviewed high-impact flags also stores an `advise` decision (`review_decision`, ADR 0008): the advisor reviews the diff before commit, `continue` resolves the record and routes straight to `git_checkpoint`, the other verdicts behave as on a failure.
 - `review` is a fresh-context Reviewer over task + diff + test output; its findings go into the PR body. The Documenter writes an ADR in the target repository when the advisor replanned or changed approach, or the diff is high impact.
-- `evals/` carries nine real tasks across the tiers (t001 T0, t002 T1, t003 T0, t004 T1 two steps, t005 T2, t006 T1 multi-file store + CLI change, t007 T1 red CI: the fixture's own `ruff` config and a failing test, which verify's narrow lint does not see; t008 T1 a formatting change that breaks a CLI snapshot test and a README example test a filtered `run_tests` never executes, so verify's full-suite step is what catches it; t009 T1 pinned: an undefined name in a module no test imports, which only verify's lint step sees, so the debugger must run); `evals/fake_scripts.TaskScript` drives them deterministically on the Fake provider, including the escalation scenarios.
+- `evals/` carries ten real tasks across the tiers (t001 T0, t002 T1, t003 T0, t004 T1 two steps, t005 T2, t006 T1 multi-file store + CLI change, t007 T1 red CI: the fixture's own `ruff` config and a failing test, which verify's narrow lint does not see; t008 T1 a formatting change that breaks a CLI snapshot test and a README example test a filtered `run_tests` never executes, so verify's full-suite step is what catches it; t009 T1 pinned: an undefined name in a module no test imports, which only verify's lint step sees, so the debugger must run; t010 T1 pinned: a rename used by nine modules, a correct diff of eleven files that passes verify and gets the pre-commit advisor review of ADR 0008); `evals/fake_scripts.TaskScript` drives them deterministically on the Fake provider, including the escalation scenarios.
 
 ### M5: observability, eval tuning, release
 - Per-run report (`scio report --thread <id>`, `scio/graph/report.py`): built from the durable checkpoint and the persisted cost ledger (`.scio/ledger/<thread>.jsonl`), so it works after the process is gone. Tokens and dollars by role, escalations with outcomes, timeline, artifacts, and tool signals counted from the worker transcripts (`log` artifacts of the coder, debugger and documenter): calls and error rate per tool, repeated identical calls within a turn, `view_file` re-reads of a path already viewed in the turn, and whether the documenter edited a documentation file when the final diff touched code. No model call is involved (`docs/IDEAS_TRIAGE.md` items 9, 10, 12).

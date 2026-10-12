@@ -9,7 +9,7 @@ from typing import Any, Literal
 from scio.aci.tools import RunTestsInput, ToolError, run_tests
 from scio.graph.nodes.common import diff_stat, fact
 from scio.graph.run_context import RunContext
-from scio.loop.escalation import decide, exit_for
+from scio.loop.escalation import decide, exit_for, review_decision
 from scio.loop.exits import check_exit
 from scio.state.models import ExitReason, FeatureStatus, Role, SCIOState
 from scio.state.signatures import advance
@@ -213,6 +213,10 @@ def verify(ctx: RunContext) -> Node:
             probe = state.model_copy(update={"progress": progress, "feature_list": features})
             triage_decision = decide(probe, ctx.escalation, root=ctx.sandbox.root)
             exit_reason = exit_for(triage_decision)
+        if all_ok and exit_reason is None and plan is not None:
+            # ADR 0008: a passing high-impact diff gets one advisor review before commit.
+            probe = state.model_copy(update={"progress": progress})
+            triage_decision = review_decision(probe, ctx.escalation)
         entry = fact(
             f"verify: {'all checks passed' if all_ok else progress.last_failure_kind} "
             f"(iteration {progress.iterations}, stall {progress.stall_count})"
@@ -243,5 +247,7 @@ def after_verify(state: SCIOState) -> Literal["checkpoint", "t0_loop", "triage",
     if state.exit_reason is not None:
         return "halt"
     if state.progress.last_failure_kind == "none":
-        return "checkpoint"
+        # ADR 0008: verify stores an advise decision for a passing high-impact diff.
+        reviewing = state.triage is not None and state.triage.route == "advise"
+        return "triage" if reviewing and state.plan is not None else "checkpoint"
     return "t0_loop" if state.plan is None else "triage"

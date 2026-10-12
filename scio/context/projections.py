@@ -177,7 +177,16 @@ def advisor_brief(
     attempts: int,
     worker_summary: str | None,
     impact_flags: list[str],
+    verify_passed: bool = False,
 ) -> str:
+    why = ", ".join(t.value for t in triggers)
+    if verify_passed:
+        # ADR 0008: a pre-commit review of a passing high-impact diff, not a failure.
+        why += (
+            "\nVerify passed: tests and lint are green. This is a pre-commit review of a "
+            "high-impact diff. Reply `continue` if the change is sound as it stands; "
+            "`change_approach` or `replan` only if the diff itself should change."
+        )
     return "\n".join(
         [
             f"# Goal\n{task.title}: {task.description.strip()[:600]}",
@@ -185,7 +194,7 @@ def advisor_brief(
             f"# Step\n{step.id if step else 'S1'}: {step.description if step else '(no plan)'}",
             f"Expected files: {', '.join(step.files_expected) if step else '-'}",
             "",
-            f"# Why you are consulted\n{', '.join(t.value for t in triggers)}",
+            f"# Why you are consulted\n{why}",
             f"Impact flags: {'; '.join(impact_flags) or 'none'}",
             "",
             f"# Diff summary\n{diff_stat[:800]}",

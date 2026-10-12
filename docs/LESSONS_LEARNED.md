@@ -248,6 +248,26 @@ Lessons:
 
 Actions: t009 fixture, hidden tests and fake script (`Step.debug_edits`, so the scripted debugger has something to apply when the step was correct); `test_t1_lint_only_failure_runs_the_debugger` asserts the debugger ran at iteration 2 and was shown a lint failure and no test failure; ledger I-051, I-052; this section.
 
+### Advisor review of passing high-impact diffs (2026-10-12, issue #37, ADR 0008)
+Issue #37 set out to force the advisor live with a wide rename. A read-only pass over `escalation.py` and `verify.py` before writing any code showed the premise was wrong: every trigger was evaluated only after a failing verify (I-056). The owner chose the design change: a passing verify with unreviewed high-impact flags now gets one pre-commit advisor review; `continue` commits without another coder turn. t010 (rename `format_cents` to `format_money` across nine modules, pinned T1) is the first task built on it. One live trial on `sonnet_opus_advisor`:
+
+| tier | result | iterations | tool calls | cost | advisor calls |
+|---|---|---:|---:|---:|---|
+| T1 | pass, 3 hidden tests | 3 | 57 | $0.64 | 2, both resolved ($0.08) |
+
+What happened:
+- The planner split the work into S1 (`money.py` and its tests) and S2 (migrate the callers). S1's two-file diff passed verify but removed the public `format_cents`, which the impact detector flags on its own, so the ADR 0008 review fired on a diff of two files, not eleven. Opus answered `continue` ($0.03) and the step committed with no extra coder turn.
+- S2 was the first *natural* live escalation SCIO has ever produced: the plan's `test_filter` named a test that did not exist, verify failed on "no tests collected", the coder had reported low confidence and had touched files outside the step's list, so `low_confidence, plan_drift` routed to `advise`. Opus answered `continue` with guidance ($0.05); the next coder turn made verify pass and the record resolved. Both ADR 0005 paths (review and failure) now have a live data point in one run.
+- The fake coder's first version of the rename was rejected edit by edit: `edit_file` lints each edit and reverts one that leaves a name undefined, so an import line and its call site cannot change in two steps (I-057). A real coder would hit the same wall if it edited in halves.
+
+Lessons:
+- Read the entry condition, not the signal list. A trigger that exists in `detect` is only reachable from the node that calls `decide`; the eval premise failed on the call site, not the signal.
+- The impact detector fires on *what* changed before *how much*: a removed public symbol flags a two-file diff. Tasks that want the file-count trigger must keep the rename and the migration in one step, or accept that the review lands on the first step.
+- Natural escalations come from the harness's seams (a planned filter that matches nothing, a worker reporting low confidence), not from hard code. Fixing those seams will make the advisor rarer again; keep ADR 0008 so it still has a deterministic path.
+- Rename edits are atomic per file. Scripted or live, change the import and every use in one `edit_file` call.
+
+Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_checkpoint` edge, regenerated Mermaid; t010 fixture, hidden tests, fake script with whole-file caller edits; `test_passing_high_impact_diff_is_reviewed_once`, `test_t1_passing_high_impact_diff_gets_one_advisor_review`; ledger I-056, I-057; ADR 0006 live-data note updated. Open: a test_filter the planner invents should be rejected by the plan normaliser (it names a test that does not exist yet and the step does not add); candidate ledger entry once reproduced on the Fake.
+
 ### Carried forward (post-0.1.0)
 - I-019 (placeholder key): re-run the regression suite, the A/B configs and `evals/tune.py` live when a key exists; revisit ADR 0006 decision 1 with real resolution rates. Update 2026-10-12: the suite and configs run nightly; the sweep still waits, because no live run has escalated (31 task rows, zero advisor calls) and a sweep over runs that never escalate measures nothing.
 - I-016: Docker and E2B live checks on a machine that has them.

@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ## [Unreleased]
 ### Changed
 - Product Mode roadmap (`docs/PRODUCT_MODE.md`, M6–M11) and ADR 0007: a product orchestrator over the task graph, toolchain profiles for any stack, milestone approvals; two defects logged for M6 (I-053, I-054).
+- A passing verify whose diff is high impact (more than 8 files, dependency or schema files, a removed public symbol) now gets one advisor review before commit (ADR 0008): `review_decision`, a `triage` route from a passing verify, and an `advise -> git_checkpoint` edge for `continue`. Until now every advisor trigger required a failing verify, and no live run had ever called the advisor (I-056).
+### Added
+- t010_wide_rename (T1, pinned): `format_cents` becomes `format_money(cents, currency)` across nine caller modules; the correct diff passes verify and trips the impact detector, so the advisor reviews it. Fake script edits each caller in one whole-file edit because `edit_file` lints every edit (I-057).
+
+## [0.3.0] - 2026-10-12
+### Changed
 - E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
 - t008_snapshot_coupling: a formatting change that breaks a CLI snapshot test and a README example test outside the coder's filtered run; the first regression task built to make verify's full-suite step fail and the debugger run live.

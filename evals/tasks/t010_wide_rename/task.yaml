@@ -1,0 +1,9 @@
+id: t010_wide_rename
+suite: regression
+title: Rename format_cents to format_money with a currency argument
+tier_hint: T1
+tier_pin: T1  # built for the passing-verify advisor review (ADR 0008); the router may rate it T0
+trials: 5
+budget: { tokens: 300000, usd: 3.0 }
+grader: tests
+hidden_tests: hidden/test_rename_hidden.py
