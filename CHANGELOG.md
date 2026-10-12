@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Changed
+- Product Mode roadmap (`docs/PRODUCT_MODE.md`, M6–M11) and ADR 0007: a product orchestrator over the task graph, toolchain profiles for any stack, milestone approvals; two defects logged for M6 (I-053, I-054).
 - E2B is no longer a planned live tier: no account (I-029, wontfix). Local backend for own fixtures, Docker for untrusted repositories (ADR 0003).
 ### Added
 - t008_snapshot_coupling: a formatting change that breaks a CLI snapshot test and a README example test outside the coder's filtered run; the first regression task built to make verify's full-suite step fail and the debugger run live.

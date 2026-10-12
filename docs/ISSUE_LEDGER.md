@@ -433,3 +433,19 @@ Template:
 - Fix: the owner made the repository public on 2026-10-10; ruleset `protect-main` (active) now requires a pull request and the `checks` status for the default branch and blocks force-pushes and deletion
 - Sweep: the only other repository SCIO wrote to (the throwaway evaluation repository) has been deleted; `GitHubClient` already refuses default-branch writes on its side
 - Resolved: 2026-10-10 · Status: resolved
+
+### I-053 · `scio run --tier` sets the budget but not the route
+- Found: 2026-10-11 · Product Mode survey (#34) · `scio/cli.py` passes `tier` to `RunContext.create`, which uses it only for the budget row; `tier_pin` is set only by the eval runner
+- Symptom: a CLI run with `--tier T0` can be routed to T2 by the router and then work under T0's $0.50 budget (same failure class as I-035 and I-050)
+- Root cause: open; to be fixed in M6
+- Fix: open
+- Sweep: open
+- Resolved: · Status: open
+
+### I-054 · `SCIO_SANDBOX_BACKEND` is never read
+- Found: 2026-10-11 · Product Mode survey (#34) · `grep -rn sandbox_backend scio` finds only the field in `scio/settings.py`
+- Symptom: setting `SCIO_SANDBOX_BACKEND=docker` has no effect; `RunContext.create` always builds a `LocalSandbox`
+- Root cause: open; to be fixed in M6
+- Fix: open
+- Sweep: open
+- Resolved: · Status: open
