@@ -159,7 +159,10 @@ def build_graph(ctx: RunContext | None, tier: TierName | None = None) -> StateGr
         checkpoint_map["review"] = "review"
     g.add_conditional_edges("git_checkpoint", cg.after_checkpoint, checkpoint_map)
     g.add_conditional_edges("document", wk.after_document, {"gate": "gate", "halt": "halt"})
-    g.add_conditional_edges("gate", cg.after_gate, {"pr_ready": "pr_ready", "halt": "halt"})
+    gate_map: dict[Hashable, str] = {"pr_ready": "pr_ready", "halt": "halt"}
+    if planned:
+        gate_map["plan"] = "plan"  # one gate replan per run; T0 has no plan and halts
+    g.add_conditional_edges("gate", cg.after_gate, gate_map)
     g.add_edge("pr_ready", "merge_wait")
     g.add_edge("merge_wait", END)
     g.add_edge("halt", END)

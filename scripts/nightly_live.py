@@ -7,10 +7,21 @@ fails: the history row is the signal, not the exit code.
 
     python scripts/nightly_live.py [--max-usd 10] [--trials 3] [--parallel 3] [--config NAME]
 
-Register on Windows (runs as the logged-in user, so the profile is available)::
+Register on Windows (runs as the logged-in user, so the profile is available). ``schtasks``
+cannot set the conditions, and without them the scheduler refuses the task when the
+machine was asleep or on battery at 03:17 (result 0x800710E0, ledger I-045)::
 
-    schtasks /create /tn "SCIO nightly live evals" /sc daily /st 03:17 ^
-      /tr "cmd /c cd /d <repo> && uv run python scripts/nightly_live.py >> .scio\\nightly.log 2>&1"
+    $action = New-ScheduledTaskAction -Execute cmd -Argument ('/c cd /d "<repo>" && ' +
+      'set UV_SYSTEM_CERTS=1 && uv run python scripts/nightly_live.py >> .scio\\nightly.log 2>&1')
+    $trigger = New-ScheduledTaskTrigger -Daily -At 03:17
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
+      -DontStopIfGoingOnBatteries -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours 6)
+    Register-ScheduledTask "SCIO nightly live evals" -Action $action -Trigger $trigger `
+      -Settings $settings
+
+The profile's refresh token rotates on every refresh; all trials share one SDK client so
+only one refresh is ever in flight (I-044). If a run logs ``invalid_grant``, the profile is
+dead: run ``ant auth login`` again.
 """
 
 from __future__ import annotations

@@ -244,9 +244,34 @@ Template:
 - Found: 2026-10-11 · first nightly live run: regression t003 trial 1 of 3, `exit=escalate_human`, 3 iterations, hidden tests passing on the final tree (the other two trials passed; pass^3 0.80)
 - Symptom: a correct run stopped for a human instead of merging; the per-run artifacts were not kept
 - Root cause: unknown; candidates are the gate returning `replan`/`escalate_human` on a passing tree, or a worker setting `needs_design_decision`. The run report (`.scio/reports`) would show which
-- Fix: pending. Next occurrence: re-run t003 with `GraphSolver(keep_dirs=True)` and read `last_gate` and the ledger; if it is the gate, feed it the docs-check and diff more precisely
-- Sweep: n/a until diagnosed
-- Resolved: — · Status: open
+- Root cause (inferred, not reproduced): six further live t003 trials with state capture all passed ($2.33; first attempt died on I-044 at $0). Every passing gate verdict carried the same caveats: "no separate docs-check output" (the fixture has no docs check, so `gate_message` omitted the section) and "the docstring's wording cannot be inspected from the diff summary alone". A verdict that acts on those caveats is `replan`, and `gate` mapped `replan` to `ExitReason.ESCALATE_HUMAN`, although ARCHITECTURE draws `gate --replan--> plan`. So one draw in seven turned a pass-worthy run into a human escalation
+- Fix: (1) `gate_message` always carries a docs-check line (`clean: no docs-check failures reported` when there is nothing to run); (2) gate prompt v2 says the diff is a stat, a criterion is evidenced by passing feature tests, and `replan` means more work would meet it; (3) `gate` returns to `plan` on the first `replan` of a planned run (`progress.gate_replans`, cap 1), passing its reasons as the plan revision reason; the planner appends a step when every step is already done; T0 and a second replan still halt for a human. `tests/graph/test_gate_replan.py`
+- Sweep: every verdict-to-edge mapping checked against the ARCHITECTURE diagrams: advisor (`continue`/`change_approach`/`replan`/`escalate_human`) matched; gate did not. Exposed I-046 in the process
+- Resolved: 2026-10-11 · Status: resolved (nightly rows will show a `replan` instead of an escalation if the draw recurs)
+
+### I-046 · A worker's reported `step_id` moved the run onto a finished step; passing verifies looped without limit
+- Found: 2026-10-11 · `tests/graph/test_gate_replan.py` hung (first run of the gate-replan path); checkpoint dump showed 24 iterations, stall 22, `current_step_id=S1` (done) while `S2` stayed open
+- Symptom: coder → verify (all checks passed) → checkpoint (nothing pending) → implement → … forever; no exit reason, because `check_exit` ran only after a failing verify
+- Root cause: two defects. `implement.py` wrote `output.step_id or current_step_id`, so a model naming the wrong step (the scripted coder names `S1` for unknown steps; a live model can do the same) changed the plan's current step; and the stall counter was advanced on passing verifies but never compared to `max_stall`, so a pass that changed nothing was not an exit
+- Fix: the plan owns the current step (`current_step_id or output.step_id`); a passing verify with `stall_count > max_stall` exits `STALL`. `test_worker_cannot_move_the_run_onto_a_finished_step` (t004, three steps, iterations ≤ 4)
+- Sweep: `grep -rn "current_step_id" scio`: the other writer from model output is `worker.py` (T0, no plan, informational only; left as is). `grep -n "check_exit"`: the only call was in the failing branch of verify. Guard: every pass through verify now has a cap, so no graph edge can loop unbounded on green checks
+- Resolved: 2026-10-11 · Status: resolved
+
+### I-044 · Parallel live trials raced on OAuth refresh-token rotation; the profile's refresh token died
+- Found: 2026-10-11 · I-043 diagnosis run, `evals.runner` with `--parallel 3` on the Anthropic profile, access token expired 13h earlier
+- Symptom: all three trials: `WorkloadIdentityError: user_oauth refresh failed (HTTP 400): {'error': 'invalid_grant', 'error_description': 'Refresh token not found or invalid'}`; afterwards `ant auth status` still shows the profile but every refresh fails
+- Root cause: `AnthropicProvider` built one `anthropic.Anthropic()` per instance and the registry builds one per `Harness`, so `--parallel N` made N clients. The SDK's `CredentialsFile` runs the `refresh_token` grant and rotates the token in the file, serialised only inside one client's `TokenCache`. N clients read the same refresh token and refreshed at once; the token endpoint accepts one grant and rejects the rest, and the rotated token was not the one the losers held. The first nightly run worked only because the access token was still fresh
+- Fix: `scio/harness/providers/anthropic.py` `shared_client(timeout_s)`: one process-wide client per timeout behind a lock; injected clients unchanged. `tests/unit/test_anthropic_shared_client.py` (same timeout shares, different timeout does not, injected is not shared, 32 concurrent constructions build one). The profile itself needs `ant auth login` again
+- Sweep: `grep -rn "Anthropic(\|OpenAI(" scio evals scripts tests`: the only other SDK client is `OpenAIProvider` (static key, no rotation, not affected). No other code refreshes credentials
+- Resolved: 2026-10-11 · Status: resolved (code); profile re-login pending
+
+### I-045 · The 03:17 scheduled nightly task was refused by the Task Scheduler
+- Found: 2026-10-11 · checking why `.scio/nightly.log` did not exist the morning after PR #17
+- Symptom: `Get-ScheduledTaskInfo`: LastRunTime 11:38, LastTaskResult 2147946720 (0x800710E0, "the operator or administrator has refused the request"); no log, no results directory, no history rows
+- Root cause: the task was registered with `schtasks`, which cannot set conditions: `StartWhenAvailable`, `AllowStartIfOnBatteries`, `DontStopIfGoingOnBatteries`, `WakeToRun` were all off, so a laptop asleep or on battery at 03:17 skips the run and refuses the catch-up
+- Fix: `Set-ScheduledTask` with those four settings and a 6 h execution limit; the registration recipe in `scripts/nightly_live.py` is now the PowerShell form that sets them
+- Sweep: only one scheduled task exists for this project. `.github/workflows/nightly-evals.yml` is unaffected (GitHub cron). Guard: the history table in `docs/EVAL_HISTORY.md` is the signal; a missing row for a date means the task did not run
+- Resolved: 2026-10-11 · Status: resolved (verify with tomorrow's row)
 
 ### I-029 · E2B backend not exercised live (no API key)
 - Found: 2026-10-10 · M5 follow-up, split from I-016

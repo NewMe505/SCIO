@@ -57,7 +57,9 @@ def _after_worker(
     )
     progress = state.progress.model_copy(
         update={
-            "current_step_id": output.step_id or state.progress.current_step_id,
+            # The plan, not the model, says which step is current: a worker that names a
+            # finished step would otherwise move the run back onto it and loop (I-046).
+            "current_step_id": state.progress.current_step_id or output.step_id,
             "attempts_on_step": attempt,
             "tool_calls": state.progress.tool_calls + tool_calls,
         }

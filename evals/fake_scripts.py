@@ -348,8 +348,11 @@ class ScriptedResponder:
         coder_mode: str = "solve",
         router_tier: str | None = None,
         advisor_verdict: str = "change_approach",
+        gate_verdicts: list[str] | None = None,
     ) -> None:
         self.gate_verdict = gate_verdict
+        self.gate_verdicts = list(gate_verdicts or [])
+        """Per-call gate verdicts in order; ``gate_verdict`` applies once they run out."""
         self.coder_mode = coder_mode
         self.router_tier = router_tier
         self.advisor_verdict = advisor_verdict
@@ -435,10 +438,14 @@ class ScriptedResponder:
         if kind == "reviewer":
             return _json({"findings": [], "overall": "approve"})
         if kind == "gate":
-            met = self.gate_verdict == "pass"
+            n = self._n("gate")
+            verdict = (
+                self.gate_verdicts[n - 1] if n <= len(self.gate_verdicts) else self.gate_verdict
+            )
+            met = verdict == "pass"
             return _json(
                 {
-                    "verdict": self.gate_verdict,
+                    "verdict": verdict,
                     "objective_met": met,
                     "unmet_acceptance": [] if met else ["(scripted) criteria judged unmet"],
                     "reasoning": "scripted gate verdict",

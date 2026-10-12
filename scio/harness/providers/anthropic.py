@@ -8,6 +8,7 @@ typed outputs use ``output_config.format``, and the system prompt and tool list 
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -175,6 +176,28 @@ def translate_response(msg: Any, *, latency_ms: int) -> CompletionResponse:
     )
 
 
+_shared_clients: dict[float, anthropic.Anthropic] = {}
+_shared_lock = threading.Lock()
+
+
+def shared_client(timeout_s: float) -> anthropic.Anthropic:
+    """One SDK client per timeout for the whole process.
+
+    A login profile (``ant auth login``) carries a rotating refresh token. Each client owns
+    a token cache that serialises refreshes, but two clients refreshing at once both present
+    the same refresh token and only one grant can win: the others fail with ``invalid_grant``
+    and can leave the profile with a dead token (ledger I-044). Parallel trials build one
+    harness each, so the client must be shared, not the harness. The SDK client is
+    thread-safe.
+    """
+    with _shared_lock:
+        client = _shared_clients.get(timeout_s)
+        if client is None:
+            client = anthropic.Anthropic(timeout=timeout_s, max_retries=0)
+            _shared_clients[timeout_s] = client
+        return client
+
+
 class AnthropicProvider:
     """``ModelProvider`` for the Anthropic API."""
 
@@ -189,7 +212,7 @@ class AnthropicProvider:
         cache_min_tokens: dict[str, int] | None = None,
         refusal_fallback_models: frozenset[str] = frozenset(),
     ) -> None:
-        self._client = client or anthropic.Anthropic(timeout=timeout_s, max_retries=0)
+        self._client = client or shared_client(timeout_s)
         self.cache = cache or CachePolicy()
         self.cache_min_tokens = cache_min_tokens or {}
         self.refusal_fallback_models = refusal_fallback_models

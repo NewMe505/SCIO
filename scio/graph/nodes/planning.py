@@ -269,6 +269,18 @@ def plan(ctx: RunContext) -> Node:
                 )
             )
         steps, plan_notes = normalize_steps(steps, [f.id for f in features])
+        if reason and reason.startswith("gate replan") and all(s.done for s in steps):
+            # A gate replan must produce one more implementation pass; a plan whose steps
+            # are all done would hit "implement: no open plan step" and halt (I-043).
+            steps.append(
+                PlanStep(
+                    id=f"S{len(steps) + 1}",
+                    description=f"Address the gate's unmet criteria: {reason[:1500]}",
+                    feature_ids=[f.id for f in features],
+                    files_expected=[],
+                )
+            )
+            plan_notes.append("gate replan: appended a step because every step was done")
         new_plan = Plan(
             version=(previous.version + 1) if previous else 1,
             author=Role.PLANNER,
