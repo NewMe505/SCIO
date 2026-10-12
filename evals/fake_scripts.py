@@ -601,6 +601,8 @@ def _schema_kind(schema: dict[str, object]) -> str:
         ("objective_met", "gate"),
         ("plan_vs_done", "pr_body"),
         ("next_action", "worker"),
+        ("interview_questions", "interviewer"),  # product mode (ADR 0010)
+        ("product_name", "product_spec"),
     ):
         if marker in props:
             return kind
@@ -677,6 +679,42 @@ class ScriptedResponder:
 
     def _structured(self, role: str, kind: str, text: str) -> FakeReply:
         sc = self.script
+        if kind == "interviewer":
+            return _json(
+                {
+                    "interview_questions": [
+                        "Who uses this first, and on what platform?",
+                        "Which single workflow must work on day one?",
+                        "What is explicitly out of scope for the first release?",
+                    ],
+                    "rationale": "scripted interview",
+                }
+            )
+        if kind == "product_spec":
+            revised = "rejected" in text
+            return _json(
+                {
+                    "product_name": "Todo CLI",  # normaliser slugs this to todo_cli
+                    "title": "Todo CLI" + (" (revised)" if revised else ""),
+                    "vision": "A command-line todo list with tags and JSON export.",
+                    "users": ["people who live in a terminal"],
+                    "features": [
+                        {
+                            "id": "F1",
+                            "description": "Add and list todos",
+                            "acceptance": ["`todo add x` then `todo list` prints x"],
+                        },
+                        {
+                            "id": "F2",
+                            "description": "Tags and JSON export",
+                            "acceptance": ["`todo export --json` prints valid JSON with tags"],
+                        },
+                    ],
+                    "quality_bar": ["tests pass with coverage >= 80%", "lint and types clean"],
+                    "stack": "python",
+                    "dependencies": [],
+                }
+            )
         if kind == "router":
             tier = self.router_tier or (sc.tier if sc else "T0")
             return _json({"tier": tier, "rationale": f"scripted: {tier}", "confidence": 0.9})
