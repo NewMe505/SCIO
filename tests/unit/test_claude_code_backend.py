@@ -156,6 +156,9 @@ def test_provider_failures_are_classified() -> None:
             _result(is_error=True, result="API Error: rate_limit exceeded"),
             _result(is_error=True, result="Not logged in"),
             ClaudeRunResult(0, "not json", ""),
+            _result(is_error=True, result="", subtype="error_during_execution"),  # I-068
+            _result(is_error=True, result="", subtype="error_max_turns"),
+            _result(is_error=True, result="Credit balance is too low"),
         ]
     )
     provider = ClaudeCodeProvider(runner=fake)
@@ -167,6 +170,12 @@ def test_provider_failures_are_classified() -> None:
     with pytest.raises(FatalError, match="Not logged in"):
         provider.complete(req)
     with pytest.raises(FatalError, match="no JSON"):
+        provider.complete(req)
+    with pytest.raises(RetryableError, match="subtype=error_during_execution"):
+        provider.complete(req)
+    with pytest.raises(RetryableError, match="no message"):
+        provider.complete(req)
+    with pytest.raises(FatalError, match="Credit balance"):
         provider.complete(req)
 
 

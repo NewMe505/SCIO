@@ -553,3 +553,11 @@ Template:
 - Fix: `feature` node, before a fresh attempt: `git checkout -q <milestone branch>`, `git reset -q --hard`, `git clean -fdq` (ignored files such as `.scio/sandbox` are kept). A resume of a running attempt does not reset
 - Sweep: the other places that switch branches in the product build (`plan_milestone` to main, `issues` to the milestone branch, `merge_wait` to main, `update_progress` to main) run after a passed feature's fast-forward or after the loop, when the tree is clean; `prepare_repo` in task mode clones fresh. Guard: `test_feature_failure_stops_for_one_human_decision` plants a stray file and a modified tracked file before answering `skip` and asserts the next attempt starts clean
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-068 · A transient `claude -p` error with no message was treated as fatal by the Claude Code backend
+- Found: 2026-10-12 · Claude Code backend live milestone (#47) · `scio new` through `SCIO_PROVIDER_OVERRIDE=claude_code`, first interviewer call
+- Symptom: `FatalError: claude -p failed: unknown error`; the same call repeated by hand a minute later succeeded ($0.01 estimate, Opus)
+- Root cause: print mode returned `is_error: true` with neither `result` nor `error` text (a transient failure of the run itself); `parse_result` mapped every `is_error` without a retryable keyword to `FatalError`, so the harness's retry policy never saw it, and the message carried no subtype to diagnose
+- Fix: `parse_result` builds the message from `result`, `error`, `errors` and `subtype`; an `is_error` with no usable message, or whose subtype names a transient condition (`error_during_execution`, `error_max_turns` excluded), raises `RetryableError` so `with_retry` re-runs the process; authentication, credit and budget messages stay fatal
+- Sweep: the worker's `_summary` and stream path go through the same `parse_result`; the `ClaudeRunResult` non-zero-exit path already carried stderr. Guard: `test_provider_failures_are_classified` gains the empty-message and subtype cases
+- Resolved: 2026-10-12 · Status: resolved

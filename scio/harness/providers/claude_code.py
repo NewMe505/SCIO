@@ -37,7 +37,9 @@ from scio.harness.types import (
 
 PROVIDER_NAME = "claude_code"
 STRIPPED_ENV = ("CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-RETRYABLE_ERRORS = ("rate_limit", "overloaded", "server_error")
+RETRYABLE_ERRORS = ("rate_limit", "overloaded", "server_error", "api_retry", "timed out")
+TRANSIENT_SUBTYPES = ("error_during_execution",)
+FATAL_ERRORS = ("not logged in", "authentication", "credit balance", "budget", "invalid_request")
 
 
 @dataclass(frozen=True)
@@ -115,8 +117,20 @@ def parse_result(res: ClaudeRunResult) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise FatalError(f"claude -p result is not an object: {text[:300]!r}")
     if data.get("is_error"):
-        message = str(data.get("result") or data.get("error") or "unknown error")
-        if any(k in message.lower() for k in RETRYABLE_ERRORS):
+        errors = data.get("errors")
+        detail = str(
+            data.get("result")
+            or data.get("error")
+            or (", ".join(str(e) for e in errors) if isinstance(errors, list) and errors else "")
+        ).strip()
+        subtype = str(data.get("subtype") or "")
+        message = f"{detail or 'no message'} (subtype={subtype or '-'})"
+        low = message.lower()
+        if any(k in low for k in FATAL_ERRORS):
+            raise FatalError(f"claude -p failed: {message[:500]}")
+        # A run that died without saying why (I-068), or a transient condition: let the
+        # harness's retry policy re-run the process before giving up.
+        if not detail or subtype in TRANSIENT_SUBTYPES or any(k in low for k in RETRYABLE_ERRORS):
             raise RetryableError(f"claude -p failed: {message[:500]}")
         raise FatalError(f"claude -p failed: {message[:500]}")
     return data
