@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.4.0] - 2026-10-12
 ### Changed
 - Product Mode roadmap (`docs/PRODUCT_MODE.md`, M6–M11) and ADR 0007: a product orchestrator over the task graph, toolchain profiles for any stack, milestone approvals; two defects logged for M6 (I-053, I-054).
 - A passing verify whose diff is high impact (more than 8 files, dependency or schema files, a removed public symbol) now gets one advisor review before commit (ADR 0008): `review_decision`, a `triage` route from a passing verify, and an `advise -> git_checkpoint` edge for `continue`. Until now every advisor trigger required a failing verify, and no live run had ever called the advisor (I-056).
