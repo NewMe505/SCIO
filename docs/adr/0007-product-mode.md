@@ -11,7 +11,7 @@ SCIO's task graph (M0–M5) takes one task on one existing Python repository to 
 1. **Add a layer instead of rewriting.** A new product orchestrator (`scio/product/`) calls the existing task graph as a subgraph, one feature at a time. The task graph remains the unit of work, and its guarantees carry over unchanged: one writer, ground-truth verification, idempotent side effects, and capped escalation.
 2. **Persist product state in the target repository.** `PRODUCT.md`, `.scio/product/progress.json`, ADRs and `NOTES.md` together are the memory across sessions (the "initializer + progress file" harness).
 3. **A human approves at each product milestone.** Each milestone is one PR into the default branch, and merging stays human (CONTRIBUTING). Creating a GitHub repository also requires human confirmation.
-4. **Handle stacks through toolchain profiles.** Every Python-specific command moves behind a `Toolchain` protocol (ADR 0008, M6). A new stack is a profile, not new logic in the graph.
+4. **Handle stacks through toolchain profiles.** Every Python-specific command moves behind a `Toolchain` protocol (ADR 0009, M6). A new stack is a profile, not new logic in the graph.
 5. **No product-level dollar cap by default.** Per-feature tier caps, stall caps and iteration caps remain as runaway guards. Cost is reported at every approval stop.
 6. **Ground truth defines "product-ready".** The release gate runs a fixed quality bar: tests with a coverage floor, lint, types, build, smoke/e2e against the running app, dependency audit, secret scan, and checked README instructions. A failing check overrides any model verdict.
 

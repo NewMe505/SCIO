@@ -84,7 +84,7 @@ Each milestone has its own issue, branch and draft PR. Read [LESSONS_LEARNED.md]
 
 | M | Deliverable | Done when |
 |---|---|---|
-| M6 Foundations | Fix I-053 and I-054 (with sweep and guard tests). Extract the `python` profile with no behaviour change. ADR 0008 (toolchain profiles). Update the PROMPT.md non-goals and F-8. | Regression pass^5 = 1.00 offline; live t001 still passes; no Python-specific command outside the `python` profile |
+| M6 Foundations | Fix I-053 and I-054 (with sweep and guard tests). Extract the `python` profile with no behaviour change. ADR 0009 (toolchain profiles). Update the PROMPT.md non-goals and F-8. | Regression pass^5 = 1.00 offline; live t001 still passes; no Python-specific command outside the `python` profile |
 | M7 Greenfield bootstrap | `scio new`: interview → normalised PRODUCT.md → stack and profile → scaffold → git init → CI → walking skeleton. | On both Fake and one live run, an empty directory becomes a repository with green local CI and a passing smoke test |
 | M8 Decompose + milestone loop | Progress file, GitHub milestones and issues, features run in sequence on the milestone branch, integration verify, milestone PR, merge_wait, resume. | A two-milestone Fake product survives a crash and resume with no duplicated issues or commits; one live milestone |
 | M9 Dependencies + runtime | Docker default, two-phase network, `install_deps` / `run_app` / `delete_file`, e2e acceptance runner. | A product that needs a third-party dependency and an HTTP server passes black-box e2e tests |
