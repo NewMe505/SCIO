@@ -46,6 +46,10 @@ def append_history(report: object, config_name: str) -> str:
 
     assert isinstance(report, SuiteReport)
     when = report.finished_at.strftime("%Y-%m-%d %H:%M")
+    if not report.tasks:
+        # No metrics without tasks: a 0.00 row would read as a failure (ledger I-047).
+        skipped = ", ".join(report.not_applicable) or "none"
+        return f"{when} {report.suite}: no applicable tasks on {report.provider} ({skipped})\n"
     row = (
         f"| {when} | {report.suite} | {report.provider} | {report.k} | "
         f"{report.pass_at_1:.2f} | {report.pass_pow_k:.2f} | {report.advisor_call_rate:.2f} | "
