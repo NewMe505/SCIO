@@ -67,6 +67,8 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
             f.model_copy(update={"id": f"P{i}"}) for i, f in enumerate(features, 2)
         ]
         notes.append("walking skeleton inserted as P1; later features renumbered")
+    features[0], skeleton_notes = _module_only_skeleton(features[0], name)
+    notes.extend(skeleton_notes)
     app = out.app or AppSpec()
     if app.module is not None and app.module.strip() in ("", name):
         app = app.model_copy(update={"module": None})  # None means the package itself
@@ -88,6 +90,38 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
         app=app,
     )
     return spec, notes
+
+
+_INSTALL_RE = re.compile(r"console[ -]script|entry[ -]point|pip install|installed", re.IGNORECASE)
+_COMMAND_RE = re.compile(r"`\s*(?P<word>[A-Za-z][\w.-]*)")
+
+
+def _module_only_skeleton(first: ProductFeature, name: str) -> tuple[ProductFeature, list[str]]:
+    """The walking skeleton must be provable without installing the package (M9): a criterion
+    that needs a console script, an entry point or an install, or whose backticked command
+    is not ``python ...``, becomes the ``python -m <package>`` form. Two live planners wrote
+    a console-script P1 that no sandbox could satisfy (M8 retrospective)."""
+    kept: list[str] = []
+    rewritten: list[str] = []
+    for criterion in first.acceptance:
+        first_word = _COMMAND_RE.search(criterion)
+        needs_install = bool(_INSTALL_RE.search(criterion)) or (
+            first_word is not None and first_word.group("word") not in ("python", "pytest")
+        )
+        if needs_install:
+            rewritten.append(criterion)
+        else:
+            kept.append(criterion)
+    if not rewritten:
+        return first, []
+    module_form = f"`python -m {name} --version` prints the version and exits 0"
+    if module_form not in kept:
+        kept.insert(0, module_form)
+    note = (
+        f"P1 criteria that need an installed entry point were replaced by the module form "
+        f"({len(rewritten)} rewritten): " + "; ".join(c[:80] for c in rewritten)
+    )
+    return first.model_copy(update={"acceptance": kept}), [note]
 
 
 def render_product_md(spec: ProductSpec) -> str:

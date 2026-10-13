@@ -456,9 +456,9 @@ Lessons:
 - The coverage check left `.coverage` in the product tree, which a later feature's `git add -A` would have committed; the profile's cache excludes carry the coverage artifacts now.
 
 ### Actions
+- `_module_only_skeleton` in `scio/product/spec.py` and the planner rule: a P1 criterion that needs a console script, an entry point or an install becomes the `python -m <package>` form (two live planners had asked for one).
 - `scio/aci/runtime.py`, `scio/product/acceptance.py`, `Sandbox.delete` and `exec(network=)`, `ToolDef.needs_context`, `QualityCheck` and `Runtime` in the toolchain, `AppSpec` and the `## Runtime` section, the scaffold's acceptance tests and http skeleton, `evals/product_scripts_http.py`; tests `test_runtime.py`, `test_acceptance.py`, the delete and quality-bar tests, the http product loop test; ADR 0013; ledger I-071 to I-073.
 
 ### Still open in M9
 - Docker default for product builds (a persistent container per build; the registry allowlist enforced by an egress proxy); Docker is not installed on the dev machine (I-016), so these need CI.
 - A live milestone of an http product on the Claude Code backend.
-- The product planner's walking skeleton must stop asking for a console-script install (normaliser rule or prompt).
