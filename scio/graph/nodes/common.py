@@ -45,11 +45,20 @@ def git_out(sandbox: Sandbox, *args: str) -> str:
     ).strip()
 
 
+def untracked_files(sandbox: Sandbox) -> list[str]:
+    """New files git does not track yet: part of the change, invisible to ``git diff`` (I-063)."""
+    out = git_out(sandbox, "ls-files", "--others", "--exclude-standard")
+    return [ln for ln in out.splitlines() if ln and not ln.startswith("(git")]
+
+
 def diff_stat(sandbox: Sandbox, base_sha: str | None) -> str:
+    """What changed since ``base_sha``: the tracked diff stat plus every untracked file."""
     if not base_sha:
         return git_out(sandbox, "status", "--short") or "(no changes)"
     staged = git_out(sandbox, "diff", "--stat", base_sha)
-    return staged or "(no changes since base)"
+    new = [f" new file: {p}" for p in untracked_files(sandbox)]
+    text = "\n".join(([staged] if staged else []) + new)
+    return text or "(no changes since base)"
 
 
 def slug(text: str, max_len: int = 40) -> str:

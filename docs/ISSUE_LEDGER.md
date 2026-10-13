@@ -437,18 +437,18 @@ Template:
 ### I-053 · `scio run --tier` sets the budget but not the route
 - Found: 2026-10-11 · Product Mode survey (#34) · `scio/cli.py` passes `tier` to `RunContext.create`, which uses it only for the budget row; `tier_pin` is set only by the eval runner
 - Symptom: a CLI run with `--tier T0` can be routed to T2 by the router and then work under T0's $0.50 budget (same failure class as I-035 and I-050)
-- Root cause: open; to be fixed in M6
-- Fix: open
-- Sweep: open
-- Resolved: · Status: open
+- Root cause: `tier` only selected the budget row; the route came from the classifier, which prefers the cheaper tier (I-050)
+- Fix: M6 (PR #41): `scio run --tier` passes `tier_pin` to `RunContext.create` and `route` skips the classifier; without `--tier` a default budget is resized for the routed tier (`apply_tier_budgets`)
+- Sweep: every `RunContext.create` call site (`cli.py`, `evals/solvers.py`, tests) reviewed for the same hint-versus-pin confusion; guard `tests/unit/test_m6_foundations.py` (default budget follows the routed tier, explicit budgets untouched). Entry completed late, in M8 (the M6 retrospective recorded the fix but this entry was left open)
+- Resolved: 2026-10-12 · Status: resolved
 
 ### I-054 · `SCIO_SANDBOX_BACKEND` is never read
 - Found: 2026-10-11 · Product Mode survey (#34) · `grep -rn sandbox_backend scio` finds only the field in `scio/settings.py`
 - Symptom: setting `SCIO_SANDBOX_BACKEND=docker` has no effect; `RunContext.create` always builds a `LocalSandbox`
-- Root cause: open; to be fixed in M6
-- Fix: open
-- Sweep: open
-- Resolved: · Status: open
+- Root cause: the field was declared with the other M2 settings and no reader was ever written
+- Fix: M6 (PR #41): `make_sandbox` in `scio/graph/run_context.py` selects local, docker or e2b from `settings.sandbox_backend`
+- Sweep: every `Settings` field grepped for a reader; four more declared-but-unread fields found and wired (I-059); guard `tests/unit/test_m6_foundations.py` (backend selection). Entry completed late, in M8
+- Resolved: 2026-10-12 · Status: resolved
 
 ### I-058 · A commit landed on local `main` because another session switched the shared checkout
 - Found: 2026-10-11 · Product Mode docs (#34) · `git push` rejected (non-fast-forward); `git status -sb` showed `main` instead of `docs/34-product-mode`
@@ -504,4 +504,52 @@ Template:
 - Root cause: `_new` treated `--thread` as the resume signal. The Fake end-to-end tests call the library (`run_product` / `resume_product`) and never went through the CLI, so the contract was untested (pre-flight: a fake reproduces the shapes you thought of)
 - Fix: the absence of `--prompt` means resume; `--thread` only names the thread. `test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt` drives the three CLI calls on the Fake and the two usage errors
 - Sweep: `scio run` / `scio resume` are separate subcommands and have no such ambiguity. Guard: the CLI test above; README documents the two forms
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-062 · `uv.lock` recorded the project at 0.3.0 after two releases
+- Found: 2026-10-12 · M8 · `git status` on `main` showed `uv.lock` modified before any work; `uv run` rebuilt and reinstalled `scio` on every invocation
+- Symptom: the lock said `version = "0.3.0"` for the `scio` package while `pyproject.toml` said 0.5.0; every `uv run` printed "Uninstalled 1 package / Installed 1 package"
+- Root cause: the release chore bumps `pyproject.toml` and `CHANGELOG.md` but never ran `uv lock`, so the lock drifted at 0.4.0 and again at 0.5.0; `uv run` re-syncs the editable package each time it notices the mismatch
+- Fix: `uv lock` on the M8 branch; the lock now says 0.5.0
+- Sweep: `git log -p --follow uv.lock` shows the version line was last updated at 0.3.0; the two release PRs (#38 area, #45) touched only `pyproject.toml` and `CHANGELOG.md`. Guard: `tests/unit/test_version.py` gains an assertion that the lock's `scio` version equals the project version, so a release cut without relocking fails CI
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-063 · A feature delivered only by new files was invisible to verify ("no changes since base")
+- Found: 2026-10-12 · M8 · first Fake product build: P1 (a T0 task whose only edit creates `tests/test_entry.py`) stalled after four coder turns with `verify: no_changes` while `git status` showed the new file as `??`
+- Symptom: verify's step 0 (`diff_stat`, "something must have changed since the base commit") read `git diff --stat <base>`, which lists tracked files only; an untracked new file is not a change to it, so every iteration was a stall and the run exited `stall`. Every earlier eval script also edited an existing file, so the hole never showed on the Fake, and live coders happened to touch existing files too
+- Root cause: `git diff` compares the index and tree to the base; files git has never seen are outside both. The harness equated "diff is empty" with "nothing changed"
+- Fix: `scio/graph/nodes/common.py::diff_stat` appends ` new file: <path>` for every untracked file (`git ls-files --others --exclude-standard`); `implement._diff_text` runs `git add -N` on untracked files before `git diff` so the full diff (impact detection, ADR 0008 review, the final diff artifact) includes them
+- Sweep: `grep -rn '"diff"' scio` finds the two call sites above plus the product build's `git diff --stat main milestone/n` (committed branches, no untracked files involved). `git_checkpoint` already stages with `git add -A`, so commits were never affected. Guard: `tests/unit/test_cli_and_nodes.py::test_diff_stat_counts_untracked_files_as_changes`, and the M8 Fake product's P1 script is a new-files-only task that runs in every CI
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-064 · The `ant auth login` profile died again before the M8 live milestone (recurrence of I-060)
+- Found: 2026-10-12 · M8 · `env -u ANTHROPIC_API_KEY -u SCIO_PROVIDER_OVERRIDE uv run scio new --prompt ... --thread new-live2`, first model call (interviewer)
+- Symptom: `FatalError: WorkloadIdentityError("user_oauth refresh failed (HTTP 400): {'error': 'invalid_grant', 'error_description': 'Refresh token not found or invalid'}")`; nothing spent, thread `new-live2` holds an empty checkpoint
+- Root cause: the profile's refresh token rotates and expires between sessions (I-060); SCIO cannot refresh it, and `scio new` has no pre-flight check, so the failure surfaces as a traceback from inside the graph
+- Fix: the owner runs `ant auth login`, then the live milestone runs on a fresh thread (`new-live3`; an empty checkpoint on `new-live2` would otherwise be resumed, I-061). Code change: none in M8; a pre-flight credential probe before the first product call is a candidate (`docs/IDEAS_TRIAGE.md`)
+- Sweep: every live command in CLAUDE.md and the nightly script already strips the placeholder key; the gap is the missing probe, not a wrong command. Guard: this entry and the M8 runbook in LESSONS_LEARNED
+- Resolved: 2026-10-12 · Status: resolved (the owner logged in again with `ant auth login`; the live milestone ran on thread `new-live3` / `build-todo_cli`, recorded in LESSONS_LEARNED M8)
+
+### I-065 · `scio new` approved a PRODUCT.md the human never saw: model call and interrupt in one node
+- Found: 2026-10-12 · M8 live milestone · `scio new --thread new-live3 --decision approve`: the approval payload showed "tagtodo, 8 features"; the repository was bootstrapped with "todo_cli, 7 features"; the cost ledger shows `interviewer: 2 calls`, `product_planner: 2 calls`
+- Symptom: every human stop of the M7 graph re-ran the model call before it on resume (interviewer $0.008 and planner $0.057 paid twice, $0.065 wasted), and the answer applied to a fresh draft, not the one shown. The Fake tests could not see it because the scripted planner returns the same draft every call
+- Root cause: LangGraph re-executes a node from its first statement when a run resumes; `interrupt()` only short-circuits once reached. `interview` and `specify` made the model call and then interrupted in the same node, and `interview`'s `if state.questions` guard could never fire because the questions reach state only when the node returns, after the interrupt. The M8 loop was written with the stop in its own node (`milestone_gate` then `gate_decision`) but the M7 nodes were not revisited
+- Fix: `interview` and `specify` now only call the model and return; `answers` and `approval` are interrupt-only nodes that read the questions and the draft from state (`scio/product/graph.py`); the approval payload's cost comes from state too
+- Sweep: `grep -rn "interrupt(" scio` lists seven call sites; `checkpoint_gate.merge_wait` and `halt`, `product.graph.publish`, and `build.gate_decision` / `merge_wait` / `feature` make no model call before the interrupt (`feature` resumes a paused or finished subgraph, which repeats nothing). Guard: `test_the_draft_shown_is_the_draft_approved_and_no_model_call_repeats` drives the Fake with a planner whose draft changes on every call and counts calls; rule added to the pre-flight list in LESSONS_LEARNED
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-066 · `scio report` on a feature thread inside a build crashed: thread kind decided by name prefix
+- Found: 2026-10-12 · M8 live milestone · `scio report --thread build-todo_cli-p2-a1` exited 1 (validation error: the checkpoint is an `SCIOState`, the CLI tried to read a `ProductBuildState`)
+- Symptom: the report command picked the product view for every thread whose id starts with `build-`, and every feature run inside a build is named `build-<product>-...`
+- Root cause: the thread kind was inferred from the name, not from the checkpoint; the naming scheme for feature threads was chosen after the report branch was written
+- Fix: `scio/cli.py::_is_build_thread` reads the checkpoint and checks for `feature_runs`; the CLI test reports a feature thread as a task run
+- Sweep: `grep -rn 'startswith("build-")' scio tests` finds no other use; the memory note "report detects by prefix" was wrong and is corrected by the test. Guard: `test_cli_build_status_and_report`
+- Resolved: 2026-10-12 · Status: resolved
+
+### I-067 · A skipped feature's uncommitted edits leaked into the next feature's run
+- Found: 2026-10-12 · M8 live milestone · P2's first verify failed on `tests/test_smoke.py::test_todo_console_script_version`, a test P1's attempt had written; the advisor flagged `plan_drift, high_impact` because `pyproject.toml` and `tests/test_smoke.py` were outside S1's expected files ($0.05 advisor call, one extra coder iteration)
+- Symptom: P1 exited `escalate_human` and was skipped with its working tree dirty (edits to `cli.py`, `pyproject.toml`, `tests/test_smoke.py`, never committed because verify never passed). The next feature's `prepare_repo` ran `git checkout milestone/1` then `checkout -B agent/p2-...`, and git carried the modified files across, so P2 started from P1's half-done work and committed part of it
+- Root cause: the task graph assumes it starts on a clean checkout (it clones in task mode); in a product build the sandbox is the product repository and only the orchestrator knows that a previous attempt ended without a commit. Nothing reset the tree between attempts
+- Fix: `feature` node, before a fresh attempt: `git checkout -q <milestone branch>`, `git reset -q --hard`, `git clean -fdq` (ignored files such as `.scio/sandbox` are kept). A resume of a running attempt does not reset
+- Sweep: the other places that switch branches in the product build (`plan_milestone` to main, `issues` to the milestone branch, `merge_wait` to main, `update_progress` to main) run after a passed feature's fast-forward or after the loop, when the tree is clean; `prepare_repo` in task mode clones fresh. Guard: `test_feature_failure_stops_for_one_human_decision` plants a stray file and a modified tracked file before answering `skip` and asserts the next attempt starts clean
 - Resolved: 2026-10-12 · Status: resolved

@@ -578,11 +578,17 @@ SCRIPTS: list[TaskScript] = [
 
 
 def script_for(title: str) -> TaskScript:
+    from evals.product_scripts import PRODUCT_SCRIPTS  # product features first: "json" collides
+
     low = title.lower()
-    for s in SCRIPTS:
+    for s in [*PRODUCT_SCRIPTS, *SCRIPTS]:
         if s.key in low:
             return s
     raise KeyError(f"no fake script for task title {title!r}")
+
+
+OPEN_FEATURES_RE = re.compile(r"^Open features: (?P<ids>.+)$", re.MULTILINE)
+MILESTONE_NUMBER_RE = re.compile(r"Propose milestone M(?P<n>\d+)")
 
 
 # ---------- helpers ----------
@@ -603,6 +609,7 @@ def _schema_kind(schema: dict[str, object]) -> str:
         ("next_action", "worker"),
         ("interview_questions", "interviewer"),  # product mode (ADR 0010)
         ("product_name", "product_spec"),
+        ("milestone_title", "milestone_plan"),  # product mode (ADR 0011)
     ):
         if marker in props:
             return kind
@@ -643,10 +650,16 @@ class ScriptedResponder:
         router_tier: str | None = None,
         advisor_verdict: str = "change_approach",
         gate_verdicts: list[str] | None = None,
+        milestone_gate_verdict: str = "pass",
+        milestone_size: int = 2,
     ) -> None:
         self.gate_verdict = gate_verdict
         self.gate_verdicts = list(gate_verdicts or [])
         """Per-call gate verdicts in order; ``gate_verdict`` applies once they run out."""
+        self.milestone_gate_verdict = milestone_gate_verdict
+        """The product build's milestone gate (ADR 0011), separate from the feature gates."""
+        self.milestone_size = milestone_size
+        """How many open features the scripted milestone planner groups per milestone."""
         self.coder_mode = coder_mode
         self.router_tier = router_tier
         self.advisor_verdict = advisor_verdict
@@ -669,8 +682,11 @@ class ScriptedResponder:
         if m:
             self.root = m.group("root")
         t = TITLE_RE.search(text)
-        if t and self.script is None:
+        if t and (self.script is None or self.script.key not in t.group("title").lower()):
+            # A product build runs several tasks through one responder (ADR 0011): a new
+            # task title switches the script and restarts the per-task counters.
             self.script = script_for(t.group("title"))
+            self.counts = {}
         if req.output_schema is not None:
             return self._structured(role, _schema_kind(req.output_schema), text)
         return self._turn(role, text)
@@ -713,6 +729,22 @@ class ScriptedResponder:
                     "quality_bar": ["tests pass with coverage >= 80%", "lint and types clean"],
                     "stack": "python",
                     "dependencies": [],
+                }
+            )
+        if kind == "milestone_plan":
+            open_m = OPEN_FEATURES_RE.search(text)
+            open_ids = open_m.group("ids") if open_m else "P1"
+            ids = [x.strip() for x in open_ids.split(",") if x.strip()]
+            num_m = MILESTONE_NUMBER_RE.search(text)
+            number = num_m.group("n") if num_m else "1"
+            return _json(
+                {
+                    "milestone_title": f"Milestone {number}",
+                    "features": [
+                        {"id": fid, "tier": "T0" if fid == "P1" else "T1", "notes": ""}
+                        for fid in ids[: self.milestone_size]
+                    ],
+                    "rationale": "scripted milestone",
                 }
             )
         if kind == "router":
@@ -778,10 +810,13 @@ class ScriptedResponder:
         if kind == "reviewer":
             return _json({"findings": [], "overall": "approve"})
         if kind == "gate":
-            n = self._n("gate")
-            verdict = (
-                self.gate_verdicts[n - 1] if n <= len(self.gate_verdicts) else self.gate_verdict
-            )
+            if text.startswith("# Milestone gate"):
+                verdict = self.milestone_gate_verdict
+            else:
+                n = self._n("gate")
+                verdict = (
+                    self.gate_verdicts[n - 1] if n <= len(self.gate_verdicts) else self.gate_verdict
+                )
             met = verdict == "pass"
             return _json(
                 {

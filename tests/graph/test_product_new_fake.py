@@ -4,6 +4,7 @@ bootstrap duplicates nothing (ADR 0010)."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -67,7 +68,7 @@ def test_empty_directory_becomes_a_repository_with_green_ci(tmp_path: Path) -> N
         out = run_product(ctx, prompt=PROMPT)
         assert out.paused and out.interrupt is not None
         assert 2 <= len(out.interrupt["questions"]) <= 4
-        assert out.state.phase == "interview" and out.state.spec is None
+        assert out.state.phase == "answers" and out.state.spec is None
 
         # 2. answers -> spec -> pauses for approval with PRODUCT.md in the payload
         out = resume_product(ctx, "1: developers; 2: add and list; 3: no sync")
@@ -106,7 +107,9 @@ def test_empty_directory_becomes_a_repository_with_green_ci(tmp_path: Path) -> N
         assert (repo / rel).is_file(), rel
     progress = json.loads((repo / ".scio/product/progress.json").read_text(encoding="utf-8"))
     assert progress["product"] == "todo_cli" and progress["bootstrap_commit"] == s.bootstrap_commit
-    assert progress["features"][0]["status"] == "done"
+    # ADR 0011 decision 1: the scaffold proves the toolchain; P1 is verified by its own run.
+    assert [f["status"] for f in progress["features"]] == ["todo"] * 3
+    assert progress["milestones"] == []
     subjects = _git(repo, "log", "--format=%s").splitlines()
     assert len(subjects) == 2 and BOOTSTRAP_MARKER in subjects[-1]
     assert _git(repo, "status", "--porcelain") == ""  # nothing left uncommitted
@@ -202,3 +205,63 @@ def test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt(
     assert "phase=done" in out and "bootstrap commit" in out
     assert (tmp_path / "product" / ".git").is_dir()
     assert main(["new", "--dir", target]) == 2  # neither a prompt nor a thread
+
+
+def test_the_draft_shown_is_the_draft_approved_and_no_model_call_repeats(tmp_path: Path) -> None:
+    """I-065: on resume a node re-runs from its start, so a model call and an interrupt in the
+    same node ran the planner twice and the human approved a draft they never saw. A responder
+    whose drafts differ on every call makes the duplicate visible."""
+    from scio.harness.types import CompletionRequest
+
+    inner = ScriptedResponder()
+    calls = {"interviewer": 0, "product_spec": 0}
+
+    def responder(req: CompletionRequest) -> object:
+        reply = inner(req)
+        props = (req.output_schema or {}).get("properties", {})
+        if "interview_questions" in props:
+            calls["interviewer"] += 1
+        if "product_name" in props:
+            calls["product_spec"] += 1
+            data = json.loads(reply.text)
+            data["title"] = f"Todo CLI draft {calls['product_spec']}"
+            return dataclasses.replace(reply, text=json.dumps(data))
+        return reply
+
+    settings = Settings(
+        provider_override="fake",
+        checkpoint_dsn=f"sqlite:///{(tmp_path / 'ckpt.sqlite').as_posix()}",
+    )
+    config = ModelsConfig.load(settings.models_path)
+    registry = ProviderRegistry(config, settings)
+    registry.register("fake", FakeProvider(responder=responder))
+    harness = Harness(
+        config,
+        registry,
+        settings=settings,
+        budget=BudgetGuard(BudgetLimits(tokens_max=500_000, usd_max=5.0)),
+        retry=RetryPolicy(max_attempts=2, base_delay_s=0, jitter=False),
+        sleep=lambda _s: None,
+    )
+    ctx = RunContext.create(
+        thread_id="new-4",
+        sandbox_root=tmp_path / "product",
+        tier="T1",
+        tier_pin="T1",
+        settings=settings,
+        harness=harness,
+        work_dir=tmp_path / ".scio",
+    )
+    try:
+        out = run_product(ctx, prompt=PROMPT)
+        questions = out.interrupt["questions"]
+        out = resume_product(ctx, "answers")
+        assert calls["interviewer"] == 1 and out.state.questions == questions
+        shown = out.interrupt["product_md"]
+        assert shown.startswith("# Todo CLI draft 1")
+        out = resume_product(ctx, "approve")
+        assert calls["product_spec"] == 1 and out.state.phase == "done"
+        assert out.state.product_md == shown
+    finally:
+        ctx.close()
+    assert (tmp_path / "product" / "PRODUCT.md").read_text(encoding="utf-8") == shown

@@ -16,6 +16,9 @@ class FakeGh:
         self.branches: set[str] = set()
         self.comments: dict[int, dict[int, str]] = {}  # issue -> {id: body}
         self.prs: dict[str, dict[str, object]] = {}  # head -> pr
+        self.milestones: dict[str, int] = {}  # title -> number
+        self.issues: dict[int, dict[str, object]] = {}  # number -> issue
+        self.merged: set[int] = set()
         self.next_id = 100
 
     def __call__(self, argv: Sequence[str], *, stdin: str | None = None) -> RunResult:
@@ -37,8 +40,33 @@ class FakeGh:
                 ),
                 "",
             )
+        if a[:2] == ["issue", "list"]:
+            needle = a[a.index("--search") + 1].split('"')[1]
+            rows = [i for i in self.issues.values() if needle in str(i["title"])]
+            return RunResult(0, json.dumps(rows), "")
+        if a[:2] == ["issue", "create"]:
+            n = self.next_id
+            self.next_id += 1
+            self.issues[n] = {
+                "number": n,
+                "title": a[a.index("--title") + 1],
+                "body": stdin,
+                "labels": [{"name": a[i + 1]} for i, x in enumerate(a) if x == "--label"],
+                "url": f"https://github.com/o/r/issues/{n}",
+                "milestone": a[a.index("--milestone") + 1] if "--milestone" in a else None,
+            }
+            return RunResult(0, f"https://github.com/o/r/issues/{n}\n", "")
         if a[0] == "api":
             path = next(x for x in a[1:] if x.startswith("repos/"))
+            if "/milestones" in path:
+                if "-X" in a and a[a.index("-X") + 1] == "POST":
+                    title = json.loads(stdin or "{}")["title"]
+                    n = self.next_id
+                    self.next_id += 1
+                    self.milestones[title] = n
+                    return RunResult(0, json.dumps({"number": n, "title": title}), "")
+                rows = [{"number": n, "title": t} for t, n in self.milestones.items()]
+                return RunResult(0, json.dumps(rows), "")
             if "/git/ref/heads/" in path:
                 name = path.split("/git/ref/heads/", 1)[1]  # branch names may contain '/'
                 return (
@@ -87,7 +115,18 @@ class FakeGh:
         if a[:2] == ["pr", "view"]:
             n = int(a[2])
             pr = next(p for p in self.prs.values() if p["number"] == n)
-            return RunResult(0, json.dumps({"isDraft": pr["isDraft"]}), "")
+            merged = n in self.merged
+            return RunResult(
+                0,
+                json.dumps(
+                    {
+                        "isDraft": pr["isDraft"],
+                        "state": "MERGED" if merged else "OPEN",
+                        "mergedAt": "2026-10-12T00:00:00Z" if merged else None,
+                    }
+                ),
+                "",
+            )
         if a[:2] == ["pr", "ready"]:
             n = int(a[2])
             next(p for p in self.prs.values() if p["number"] == n)["isDraft"] = False
@@ -167,3 +206,43 @@ def test_gh_failure_raises_github_error() -> None:
     client = GitHubClient("o/r", runner=lambda argv, stdin=None: RunResult(1, "", "boom"))
     with pytest.raises(GitHubError, match="boom"):
         client.default_branch()
+
+
+def test_ensure_milestone_and_issue_are_idempotent_by_title(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """ADR 0011: a resumed build must find its own milestone and issues, never create twins."""
+    client, fake = gh
+    m1 = client.ensure_milestone("M1: Skeleton", "Product Todo CLI")
+    assert client.ensure_milestone("M1: Skeleton") == m1 and len(fake.milestones) == 1
+    assert client.find_milestone("M2: Later") is None
+    issue = client.ensure_issue(
+        title="P2: Add and list",
+        body="- [ ] c\n",
+        milestone="M1: Skeleton",
+        labels=("product-mode",),
+    )
+    again = client.ensure_issue(title="P2: Add and list", body="other", milestone="M1: Skeleton")
+    assert again.number == issue.number and len(fake.issues) == 1
+    assert fake.issues[issue.number]["milestone"] == "M1: Skeleton"
+    assert fake.issues[issue.number]["labels"] == [{"name": "product-mode"}]
+    found = client.find_issue("P2: Add and list")
+    assert (
+        found is not None and found.number == issue.number and found.url.endswith(str(issue.number))
+    )
+    assert client.find_issue("P2: Add") is None  # a prefix is not the title
+    ops = [(w.op, w.noop) for w in client.writes]
+    assert ops == [
+        ("ensure_milestone", False),
+        ("ensure_milestone", True),
+        ("ensure_issue", False),
+        ("ensure_issue", True),
+    ]
+
+
+def test_pr_merged_reads_the_merge_state(gh: tuple[GitHubClient, FakeGh]) -> None:
+    client, fake = gh
+    pr = client.ensure_draft_pr(head="milestone/1", base="main", title="M1", body="b")
+    assert client.pr_merged(pr.number) is False
+    fake.merged.add(pr.number)
+    assert client.pr_merged(pr.number) is True

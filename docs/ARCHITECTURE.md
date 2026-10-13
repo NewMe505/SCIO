@@ -759,6 +759,9 @@ scio/
 │   │   ├── act_verify_fix.py    # bounded loop driver used by implement / debug / t0_loop
 │   │   ├── exits.py             # success | max_iters | budget | stall | escalate_human
 │   │   └── escalation.py        # the six signals + caps (pure functions)
+│   ├── toolchain/               # ADR 0009: the Toolchain protocol and the python profile (configs/profiles/)
+│   ├── product/                 # Product Mode: graph.py (scio new), build.py (the milestone loop),
+│   │                            #   progress.py (PRODUCT.md and progress.json), spec.py, scaffold.py, report.py
 │   └── graph/                   # Layer 5
 │       ├── build.py             # compile StateGraph for a tier; checkpointer wiring
 │       ├── checkpointer.py      # Postgres (prod) / SQLite (dev)
@@ -767,7 +770,8 @@ scio/
 │       └── tiers/
 │           ├── t0.py
 │           ├── t1.py
-│           └── t2.py
+│           ├── t2.py
+│           └── product.py       # product_new and product_build diagrams
 ├── evals/
 │   ├── tasks/<task_id>/         # fixture repo, spec.md, hidden tests, expected budget
 │   ├── regression/              # must stay ~100%; blocks CI
@@ -889,3 +893,92 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 - `evals/tune.py` sweeps `repeat_threshold` × `max_stall`; ADR 0006 records the data and the chosen values (spec defaults confirmed by control-flow data) and the coupling `max_stall >= repeat_threshold - 1`, now enforced in `EscalationConfig`.
 - Release: `scripts/release_notes.py` cuts `[Unreleased]` into a version and extracts its notes; `.github/workflows/release.yml` creates the GitHub Release on a `v*` tag.
 - The real end-to-end run (`NewMe505/scio-eval-sandbox`, issue #1 → PR #2) found that `git add -A` committed bytecode caches; `prepare_repo` now writes repo-local excludes (I-028).
+
+### Product mode graphs (M7, M8)
+Two graphs sit above the task graph (ADR 0007, ADR 0010, ADR 0011). `scio new` runs `product_new`: interview, normalised `PRODUCT.md`, bootstrap, optional publish, with an interrupt at every human stop. `scio build` runs `product_build`, the milestone loop: the orchestrator picks the first open feature, the milestone planner groups up to four, issues are created idempotently, each feature runs through the task graph as a subgraph on its own checkpoint thread (the `feature` node loops until the milestone's features have passed or been skipped), the integration checks and the milestone gate run on the branch, one PR waits for the human merge, and `update_progress` loops back to plan the next milestone. Both diagrams below are generated from the compiled graphs.
+
+<!-- scio:graph:product_new:begin -->
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	interview(interview)
+	answers(answers)
+	specify(specify)
+	approval(approval)
+	bootstrap(bootstrap)
+	publish(publish)
+	done(done)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> interview;
+	answers --> specify;
+	approval -.-> bootstrap;
+	approval -. &nbsp;halt&nbsp; .-> done;
+	approval -.-> specify;
+	bootstrap -.-> done;
+	bootstrap -.-> publish;
+	interview -.-> answers;
+	interview -. &nbsp;halt&nbsp; .-> done;
+	publish --> done;
+	specify -.-> approval;
+	specify -. &nbsp;halt&nbsp; .-> done;
+	done --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+<!-- scio:graph:product_new:end -->
+
+<!-- scio:graph:product_build:begin -->
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	load(load)
+	plan_milestone(plan_milestone)
+	issues(issues)
+	feature(feature)
+	integrate(integrate)
+	milestone_gate(milestone_gate)
+	gate_decision(gate_decision)
+	milestone_pr(milestone_pr)
+	merge_wait(merge_wait)
+	update_progress(update_progress)
+	done(done)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> load;
+	feature -. &nbsp;halt&nbsp; .-> done;
+	feature -.-> integrate;
+	gate_decision -. &nbsp;halt&nbsp; .-> done;
+	gate_decision -. &nbsp;pr&nbsp; .-> milestone_pr;
+	integrate -. &nbsp;halt&nbsp; .-> done;
+	integrate -. &nbsp;gate&nbsp; .-> milestone_gate;
+	issues --> feature;
+	load -. &nbsp;halt&nbsp; .-> done;
+	load -. &nbsp;plan&nbsp; .-> plan_milestone;
+	merge_wait -. &nbsp;halt&nbsp; .-> done;
+	merge_wait -. &nbsp;update&nbsp; .-> update_progress;
+	milestone_gate -. &nbsp;halt&nbsp; .-> done;
+	milestone_gate -.-> gate_decision;
+	milestone_gate -. &nbsp;pr&nbsp; .-> milestone_pr;
+	milestone_pr --> merge_wait;
+	plan_milestone -.-> done;
+	plan_milestone -.-> issues;
+	update_progress -.-> done;
+	update_progress -. &nbsp;plan&nbsp; .-> plan_milestone;
+	done --> __end__;
+	feature -.-> feature;
+	merge_wait -.-> merge_wait;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+<!-- scio:graph:product_build:end -->

@@ -50,6 +50,8 @@ class Role(StrEnum):
     COMPACTOR = "compactor"
     INTERVIEWER = "interviewer"  # product mode (ADR 0010)
     PRODUCT_PLANNER = "product_planner"
+    MILESTONE_PLANNER = "milestone_planner"  # product mode (ADR 0011)
+    MILESTONE_GATE = "milestone_gate"
     HUMAN = "human"
     SYSTEM = "system"
 
@@ -432,6 +434,129 @@ class ProductState(BaseModel):
     ``budget``."""
     ledger: Annotated[list[LedgerEntry], operator.add] = Field(default_factory=list)
     budgets: Budget
+
+
+# ---------- product build: the milestone loop (ADR 0011) ----------
+
+
+class MilestoneFeatureOutput(BaseModel):
+    id: str
+    """A feature id from PRODUCT.md (``P3``)."""
+    tier: Tier = Tier.T1
+    notes: str = Field(default="", max_length=400)
+    """Guidance for the task run (which modules to touch, what to avoid)."""
+
+
+class MilestonePlanOutput(BaseModel):
+    """The milestone planner's proposal (schema marker: ``milestone_title``)."""
+
+    milestone_title: str = Field(max_length=100)
+    features: list[MilestoneFeatureOutput] = Field(min_length=1, max_length=6)
+    rationale: str = Field(max_length=800)
+
+
+class MilestonePlan(BaseModel):
+    """The normalised milestone the orchestrator runs: a consecutive prefix of the open
+    features in PRODUCT.md order, one pinned tier each."""
+
+    number: int
+    title: str
+    branch: str
+    features: list[MilestoneFeatureOutput] = Field(min_length=1)
+
+    @property
+    def id(self) -> str:
+        return f"M{self.number}"
+
+    def feature_ids(self) -> list[str]:
+        return [f.id for f in self.features]
+
+
+class FeatureRun(BaseModel):
+    """What one feature's task-graph run produced, as the product graph records it."""
+
+    feature_id: str
+    thread_id: str
+    attempt: int = 1
+    tier: Tier
+    status: Literal["running", "passed", "failed", "skipped"] = "running"
+    exit_reason: str | None = None
+    commit_sha: str | None = None
+    branch: str | None = None
+    issue_number: int | None = None
+    usd: float = 0.0
+    tokens: int = 0
+    iterations: int = 0
+    escalations: int = 0
+    escalations_resolved: int = 0
+    human_notes: list[str] = Field(default_factory=list)
+
+
+class MilestonePR(BaseModel):
+    number: int | None = None
+    url: str | None = None
+    body_path: str | None = None
+    """Offline: where the PR body was written instead."""
+
+
+ProductBuildPhase = Literal[
+    "load",
+    "plan",
+    "issues",
+    "feature",
+    "integrate",
+    "gate",
+    "pr",
+    "merge_wait",
+    "update",
+    "done",
+    "halted",
+]
+
+
+class ProductBuildState(BaseModel):
+    """State of the milestone loop (``scio build``). One thread per product build."""
+
+    thread_id: str
+    product_dir: str
+    gh_repo: str | None = None
+    phase: ProductBuildPhase = "load"
+    spec: ProductSpec | None = None
+    milestone: MilestonePlan | None = None
+    issues: dict[str, int] = Field(default_factory=dict)
+    """Feature id -> GitHub issue number (or the offline file index)."""
+    feature_runs: list[FeatureRun] = Field(default_factory=list)
+    """Every run of this build, oldest first; the latest per feature id is current."""
+    integration: str | None = None
+    """Output of the integration checks on the milestone branch, or None before they ran."""
+    integration_ok: bool | None = None
+    last_gate: GateOutput | None = None
+    pr: MilestonePR | None = None
+    merged_commit: str | None = None
+    """``main`` after the milestone merge (local merge offline, pulled from origin on GitHub)."""
+    stop_after_merge: bool = False
+    """The human answered ``merge and stop``: record the milestone, then end the thread instead
+    of planning the next milestone (``scio build`` starts a new thread for it)."""
+    milestones_done: list[str] = Field(default_factory=list)
+    exit_reason: str | None = None
+    """None while running or on success; ``feature_failed``, ``integration_failed``,
+    ``gate_escalated``, ``stopped``, ``budget`` or ``load_failed`` otherwise."""
+    human_notes: Annotated[list[str], operator.add] = Field(default_factory=list)
+    ledger: Annotated[list[LedgerEntry], operator.add] = Field(default_factory=list)
+    budgets: Budget
+
+    def latest_run(self, feature_id: str) -> FeatureRun | None:
+        return next((r for r in reversed(self.feature_runs) if r.feature_id == feature_id), None)
+
+    def next_feature(self) -> MilestoneFeatureOutput | None:
+        """The first feature of the milestone without a passed or skipped run."""
+        if self.milestone is None:
+            return None
+        for f in self.milestone.features:
+            run = self.latest_run(f.id)
+            if run is None or run.status not in ("passed", "skipped"):
+                return f
+        return None
 
 
 # ---------- the graph state ----------

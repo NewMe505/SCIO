@@ -151,6 +151,34 @@ class GitHubClient:
             str(d["baseRefName"]),
         )
 
+    def find_milestone(self, title: str) -> int | None:
+        rows = self._json("api", "--paginate", f"repos/{self.repo}/milestones?state=all") or []
+        for m in rows:
+            if str(m.get("title")) == title:
+                return int(m["number"])
+        return None
+
+    def find_issue(self, title: str) -> IssueInfo | None:
+        """The open or closed issue with exactly this title, if any."""
+        rows = self._json(
+            "issue", "list", "-R", self.repo, "--state", "all", "--limit", "200",
+            "--search", f'in:title "{title}"', "--json", "number,title,body,labels,url",
+        )  # fmt: skip
+        for d in rows or []:
+            if str(d.get("title")) == title:
+                return IssueInfo(
+                    number=int(d["number"]),
+                    title=str(d["title"]),
+                    body=str(d.get("body") or ""),
+                    labels=[str(lb["name"]) for lb in d.get("labels", [])],
+                    url=str(d["url"]),
+                )
+        return None
+
+    def pr_merged(self, number: int) -> bool:
+        d = self._json("pr", "view", str(number), "-R", self.repo, "--json", "state,mergedAt")
+        return str(d.get("state", "")).upper() == "MERGED" or bool(d.get("mergedAt"))
+
     def find_comment(self, issue: int, marker: str) -> int | None:
         rows = self._json("api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments") or []
         for c in rows:
@@ -178,6 +206,51 @@ class GitHubClient:
         )
         self._record("ensure_branch", name, noop=False, detail=from_sha[:12])
         return True
+
+    def ensure_milestone(self, title: str, description: str = "") -> int:
+        """Create the milestone unless one with this title exists. Returns its number."""
+        existing = self.find_milestone(title)
+        if existing is not None:
+            self._record("ensure_milestone", title, noop=True, detail=f"#{existing}")
+            return existing
+        d = self._json(
+            "api",
+            "-X",
+            "POST",
+            f"repos/{self.repo}/milestones",
+            "--input",
+            "-",
+            stdin=json.dumps({"title": title, "description": description}),
+        )
+        self._record("ensure_milestone", title, noop=False, detail=f"#{d['number']}")
+        return int(d["number"])
+
+    def ensure_issue(
+        self, *, title: str, body: str, milestone: str | None, labels: Sequence[str] = ()
+    ) -> IssueInfo:
+        """Create the issue unless one with exactly this title exists (the title carries the
+        feature id, so a resumed build finds its own issue)."""
+        existing = self.find_issue(title)
+        if existing is not None:
+            self._record("ensure_issue", title, noop=True, detail=f"#{existing.number}")
+            return existing
+        argv = ["issue", "create", "-R", self.repo, "--title", title, "--body-file", "-"]
+        if milestone:
+            argv += ["--milestone", milestone]
+        for lb in labels:
+            argv += ["--label", lb]
+        out = self._gh(*argv, stdin=body)
+        url = out.strip().splitlines()[-1] if out.strip() else ""
+        m = re.search(r"/issues/(\d+)", url)
+        if not m:
+            created = self.find_issue(title)
+            if created is None:
+                raise GitHubError(f"issue created but not found by title {title!r}: {out!r}")
+            self._record("ensure_issue", title, noop=False, detail=f"#{created.number}")
+            return created
+        number = int(m.group(1))
+        self._record("ensure_issue", title, noop=False, detail=f"#{number}")
+        return IssueInfo(number=number, title=title, body=body, labels=list(labels), url=url)
 
     def upsert_issue_comment(self, issue: int, body: str, *, marker: str) -> int:
         """Create or update the one comment carrying ``<!-- marker -->``. Returns its id."""

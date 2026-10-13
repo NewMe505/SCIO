@@ -20,6 +20,7 @@ EXPECTED_ROLES = {
     "router", "compactor", "scoper", "planner", "advisor", "gate",
     "explorer", "coder", "tester", "debugger", "reviewer", "documenter",
     "interviewer", "product_planner",  # product mode (ADR 0010)
+    "milestone_planner", "milestone_gate",  # product mode (ADR 0011)
 }  # fmt: skip
 
 

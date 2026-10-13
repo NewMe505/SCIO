@@ -67,6 +67,24 @@ The result is a git repository on `main` with `PRODUCT.md`, `NOTES.md`, `.scio/p
 a package that answers `--version`, one smoke test, CI that runs the profile's lint and tests, README,
 CHANGELOG, LICENSE and `.gitignore`; lint and tests ran green before the bootstrap commit.
 
+The milestone loop (M8, ADR 0011) then builds the product one approved milestone at a time. Every
+feature in `PRODUCT.md` starts `todo`, the walking skeleton included; the orchestrator always takes the
+first open feature, an Opus planner groups up to four into a milestone with a tier each, GitHub gets a
+milestone and one issue per feature (or `.scio/product/issues/` offline), and each feature runs through
+the task graph on its own checkpoint thread on branch `milestone/<n>`. After the last feature the
+profile's full suite and lint run on the branch, an Opus milestone gate gives a verdict that any failing
+check overrides, and one milestone PR waits for you. A crash at any point resumes without a duplicated
+issue, commit or PR; a feature that halts stops for one decision (`retry`, `skip`, or stop).
+
+```bash
+uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR
+uv run scio build --product ./todo --decision merged      # after you merged the PR (offline: "merge")
+uv run scio build --product ./todo --decision "merge and stop"   # record the milestone, end the thread
+uv run scio build --product ./todo --decision skip        # or retry / stop, when a feature halted
+uv run scio status --product ./todo                       # progress.json as text
+uv run scio report --thread build-todo_cli                # feature runs, cost, escalations
+```
+
 After a run, `uv run scio report --thread <id>` writes `.scio/reports/<id>.md` and `.json`:
 tokens and dollars by role, every escalation with its outcome, and the ledger timeline.
 
@@ -139,7 +157,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 

@@ -18,6 +18,7 @@ One section per milestone, written when the milestone closes. **Read this whole 
 12. When adding a keyword argument that every call site should pass (a role tag, an intent), grep for every existing call site in the same change; a default value hides the ones you missed (I-026). When a node writes a value that a following edge reads, the node must not also advance past it (I-025).
 13. Anything that refreshes a rotating credential (the login profile's refresh token) must exist once per process: share the SDK client across parallel trials, never build one per harness (I-044). A fan-out that works with a fresh token and fails hours later is this bug. A scheduled task registered with `schtasks` has no catch-up or battery conditions; register it from PowerShell with `StartWhenAvailable` and `WakeToRun`, and treat a missing history row as the alarm (I-045).
 14. A model's structured output never names control-flow identity (the current step, the feature in scope); it reports, the plan decides (I-046). Every loop in the graph needs a cap on the passing path as well as the failing one: a pass that changes nothing is a stall. When a diagram says an edge exists (`gate --replan--> plan`), test that the code has it (I-043); the verdict list of every structured output is a list of edges to check.
+15. A node that interrupts does nothing else: a node re-runs from its first statement when the graph resumes, so a model call (or any effect without a probe) before `interrupt()` in the same node runs twice and the human answers a draft they never saw (I-065). Put the stop in its own node that reads from state, and test it on the Fake with a responder whose answer changes on every call.
 
 ---
 
@@ -326,3 +327,57 @@ Actions: ADR 0008; `review_decision`, verify/advise routing, `advise -> git_chec
 - I-016: Docker and E2B live checks on a machine that has them.
 - I-008, I-009: cosmetic pdoc warning; branch protection needs GitHub Pro or a public repository.
 - Open question 3 (patch sampling): the sampling step is wired but off; measure before enabling.
+
+## M8: Decompose + milestone loop (2026-10-12, issue #44, ADR 0011)
+
+### Lessons applied
+- Pre-flight 1: the whole file and the open ledger entries were read first. Two entries (I-053, I-054) were still `open` although M6 had fixed them; they were completed before any M8 code (an entry is finished when the fix lands, not when the retrospective mentions it).
+- Pre-flight 8: a six-line probe script confirmed, before the design was fixed, that a graph invoked inside another graph's node with its own `thread_id` gets an independent checkpoint thread (namespace `""`, resumable from a fresh graph object). The nested-subgraph design rests on that measurement, not on the LangGraph docs.
+- I-046 (the model reports, the plan decides): the milestone planner proposes a grouping and tiers; `normalise_milestone` enforces PRODUCT.md order, a consecutive prefix from the first open feature and the cap, and the orchestrator alone picks the next feature.
+- I-050 and I-053 (a hint is not a pin): every feature's `RunContext` carries `tier_pin`, so the router is never consulted inside a product build.
+- ADR 0003: every side effect in the loop (milestone branch, issue files and their commit, GitHub milestone, issues, the fast-forward after a feature, push, PR, ready, merge or pull, the progress commit) is a `run_effect` with a world probe, and the crash tests kill the process at the second feature's gate and after the PR.
+- The M7 carry-over (P1 ownership) was decided first, as option (b): every feature starts `todo` and P1 is a feature run. The M7 test that asserted P1 `done` was changed with the ADR, not worked around.
+
+### What succeeded
+- The whole loop ran on the Fake at the first attempt once lint and types were clean, except for one real harness defect it exposed (below): planner, issues, P1 at T0, P2 at T1, fast-forwards, integration checks, gate, PR file, merge, progress commit, second milestone, done, and the product's own CI green on `main`.
+- Sharing the orchestrator's open checkpointer with each feature subgraph (`run_graph(..., saver=...)`) avoided a second SQLite connection inside a running node; the deterministic thread id per attempt made crash resume a probe (`thread_started`) instead of state bookkeeping.
+- `Harness.child` gave each feature its own budget guard and cost ledger while keeping one provider registry (and so one SDK client per process, I-044); the product's `FeatureRun` records cost, iterations and escalations straight from the subgraph's final `SCIOState`, and the typed-handoff test compares the two.
+- The GitHub path was tested end to end without GitHub: a canned `gh` runner for milestones, issues, PR and merge state, plus a bare local `origin` for the real push and pull.
+
+### What failed
+- The first Fake build stalled on P1: its only edit creates a new test file, and verify's "something changed" check read `git diff --stat`, which ignores untracked files (I-063). Ten eval tasks and every live run had edited an existing file, so the hole was invisible. The P1 script is now a new-files-only task in CI.
+- `uv.lock` had been stale since 0.3.0 (I-062): the release chore never relocks. `test_version.py` now checks the lock.
+- A crash test counted commits on the feature branch and forgot that the branch includes the milestone's earlier commits; the assertion, not the code, was wrong (`milestone/1..agent/...` ranges fix it).
+- The first live `scio new` after M8 approved a different `PRODUCT.md` from the one shown ("tagtodo, 8 features" on screen, "todo_cli, 7 features" on disk) and paid the interviewer and the planner twice (I-065): both M7 nodes made their model call and interrupted in the same node, and a node re-runs from its start on resume. The M8 loop had been written with its stops in separate nodes (`gate_decision`, `merge_wait`) without going back to M7. The scripted Fake returns the same draft every call, so no test could see it; the guard test now varies the draft per call and counts calls. Pre-flight item 15.
+
+### Live milestone (2026-10-12, `sonnet_opus_advisor`)
+`scio new` from an empty directory (interview, approval, bootstrap: $0.13 across four Opus calls, two of them the I-065 duplicates) then `scio build` for one milestone on the resulting `todo_cli` product (seven features in PRODUCT.md). The planner grouped P1 to P4 as M1 "Walking skeleton, storage, add and list" with P1 and P4 at T0, P2 and P3 at T1.
+
+| feature | tier | result | iterations | tool calls | cost | escalations | what happened |
+|---|---|---|---:|---:|---:|---|---|
+| P1 walking skeleton (console script `todo --version`) | T0 | skipped by human | 1 | 22 | $0.21 | 0 | the coder wrote the entry point, `[project.scripts]` and a subprocess smoke test, then asked a design question: the sandbox has no install step, so `todo` is not on PATH (M9 scope) |
+| P2 JSON file storage | T1 | pass | 4 | 44 | $0.77 | 1 resolved (`plan_drift, high_impact`, advisor `change_approach`) | verify failed on a test P1 had left in the tree (I-067); the advisor named the drift, the guided turn fixed it, two more steps passed first time |
+| P3 `todo add` with tags | T1 | pass | 2 | 23 | $0.52 | 0 | plan, localize, one coder turn per step |
+| P4 `todo list` | T0 | pass | 1 | 12 | $0.23 | 0 | one coder turn |
+| orchestrator | | | | | $0.05 | | milestone planner $0.023, milestone gate $0.030 |
+
+Integration checks on `milestone/1`: lint clean, 20 tests passed. The milestone gate returned `escalate_human` on its own ("P1 has no commit, so no feature run covers its criteria") before the orchestrator's override could apply; `proceed` opened the PR file, `merge and stop` merged `milestone/1` into `main` with the `[scio:merge:M1]` marker and recorded M1 in `progress.json` ($1.73 features, $1.78 total). Human stops: four (P1's decision, the gate, the merge, and the approval of PRODUCT.md).
+
+Lessons:
+- The planner's P1 criteria need an installed console script, and the M8 sandbox cannot install anything (`PIP_NO_INDEX`, no `install_deps` until M9). The coder diagnosed it exactly and asked instead of faking a pass; the orchestrator turned that into one decision. Until M9, the walking-skeleton prompt should ask for `python -m <pkg>` criteria only, or the planner's P1 should be rewritten by the normaliser.
+- A failed attempt leaves a dirty tree, and the next feature inherits it (I-067). The orchestrator now resets the milestone branch before every fresh attempt.
+- Every stop that re-runs a model call pays twice and may act on a draft nobody saw (I-065). Found only because the live planner is non-deterministic; the Fake now varies drafts in the guard test.
+- After the merge the loop went straight into planning M2 with no stop and no cap; `merge and stop` now exists and threads are named per starting milestone.
+- `scio report` on a feature thread inside a build crashed (I-066): the thread kind must come from the checkpoint, not the name.
+- Cost shape: a T1 feature on a small product costs $0.5 to $0.8, dominated by coder turns (59% of P2, 53% of P3); the explorer and documenter are the next largest. The orchestrator's own calls are 3% of the milestone.
+
+### Actions
+- `scio/product/build.py` (the loop), `scio/product/progress.py` (PRODUCT.md parser, `ProgressFile`, `normalise_milestone`), `scio/product/report.py`, `evals/product_scripts.py` (three scripted features), roles `milestone_planner` and `milestone_gate`, `Harness.child`, `GitHubClient.ensure_milestone` / `ensure_issue` / `find_issue` / `pr_merged`, `run_graph(..., saver=)` and `thread_started`, `scio build` / `scio status` / `scio report` for build threads, registered `product_new` and `product_build` diagrams.
+- `tests/graph/test_product_build_fake.py` (ten tests: the two-milestone loop, crash between features, GitHub mode crash after the PR against a bare origin, gate override, integration ground truth, escalations across features, feature decisions, gate escalation, the CLI), `tests/unit/test_product_progress.py`, GitHub client idempotency tests, `test_diff_stat_counts_untracked_files_as_changes`, the lock-version test.
+- ADR 0011; README; PRODUCT_MODE status; ARCHITECTURE product graphs section and tree; CHANGELOG; ledger I-062 to I-067, I-053 and I-054 completed; `answers` and `approval` nodes (I-065); `merge and stop`, per-milestone build threads; the working-tree reset before a fresh attempt (I-067); report thread detection by checkpoint shape (I-066).
+
+### Carried into M9
+- I-064 is closed by the live milestone above. Before M9: make the walking-skeleton criteria installable without a package install, or give the normaliser a rule for P1 (the planner wrote a console-script P1 twice in two live runs).
+- `integrate` runs tests and lint only; the build, smoke against a running app, dependency audit and the coverage floor arrive with M9's runtime commands (`install_deps`, `run_app`) and the Docker default.
+- A pre-flight credential probe for live product commands (one cheap call before the interview) would turn I-060/I-064 into a one-line message instead of a traceback.
+- Repositories bootstrapped by 0.5.0 carry the old `progress.json` shape (P1 `done`, one milestone); `ProgressFile.sync_features` adds missing records but does not reset P1. Re-bootstrap or edit by hand until a migration is worth writing.

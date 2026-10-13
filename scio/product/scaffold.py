@@ -8,9 +8,9 @@ from the profile's cache excludes, and the product memory files.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 
+from scio.product.progress import ProgressFile
 from scio.state.models import ProductSpec
 from scio.toolchain import Toolchain, get_toolchain
 
@@ -37,26 +37,12 @@ DEALINGS IN THE SOFTWARE.
 
 
 def progress_json(spec: ProductSpec, *, bootstrap_commit: str | None) -> str:
-    """``.scio/product/progress.json``: the memory across sessions (ADR 0007 decision 2)."""
-    data = {
-        "product": spec.name,
-        "stack": spec.stack,
-        "bootstrap_commit": bootstrap_commit,
-        "milestones": [
-            {
-                "id": "M1",
-                "title": "Walking skeleton",
-                "status": "done" if bootstrap_commit else "in_progress",
-                "features": [{"id": spec.features[0].id, "status": "done", "commit": None}],
-            }
-        ],
-        "features": [
-            {"id": f.id, "description": f.description, "status": "done" if i == 0 else "todo"}
-            for i, f in enumerate(spec.features)
-        ],
-        "updated": datetime.now(UTC).isoformat(timespec="seconds"),
-    }
-    return json.dumps(data, indent=2) + "\n"
+    """``.scio/product/progress.json``: the memory across sessions (ADR 0007 decision 2).
+
+    Every feature starts ``todo``, the walking skeleton included: the scaffold proves the
+    toolchain, and ``scio build`` runs P1 as the first feature task (ADR 0011 decision 1).
+    """
+    return ProgressFile.initial(spec, bootstrap_commit=bootstrap_commit).to_json()
 
 
 def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:
