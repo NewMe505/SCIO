@@ -437,3 +437,28 @@ Lessons:
 - Three defects surfaced only live, each in the seam between SCIO's guards and the binary's behaviour: an unexplained transient error (I-068), a dollar cap sized for API prices (I-069), and a prose cap the binary cannot see (I-070). All three were fixed between resumes and the same build thread carried on from its checkpoint each time, which is what the crash-safety work in M8 was for.
 - Cost shape on this backend: the T1 feature (P2) cost four times the T0 ones, dominated by nine coder runs; each `claude -p` process re-sends Claude Code's prompt, so iterations are the lever, as on the API, but with a higher constant. A milestone of this size is about $4 of estimate, or roughly a tenth of a Max 5x usage window by the same yardstick.
 - The documenter is the most expensive role per feature after the coder (two rounds, each a session plus a summary); M9 should give it one round with the docs check folded into the turn.
+
+## M9: Dependencies + runtime (in progress, 2026-10-13, issue #49, ADR 0013)
+
+### Lessons applied
+- The read-only inventory before any code (as in M6 to M8) listed every seam M9 touches, with lines, and became the issue body; the slices followed it in order: sandbox `delete` and the Claude Code local-only guard, the profile's quality bar, the product environment and install phase, `install_deps` and `run_app`, the `## Runtime` section and the acceptance runner, then the http Fake product.
+- Pre-flight 8: the venv, pip and app commands are profile data (`runtime:`), exercised by real processes in the tests (a venv is created, a server is started and probed), not mocked.
+- I-063 made the P1 scripts possible: both Fake products' first features add only new files.
+- The Claude Code backend's boundary (ADR 0012) shaped the design: installs are an orchestrator step before the turn, never a worker act, so the same code path serves both backends.
+
+### What succeeded
+- The done criterion's shape runs offline: `todo_api` approves `pyyaml`, the install phase creates its environment, two features build through the task graph, `integrate` starts the server on a free port, runs the black-box acceptance tests against it, stops it, the milestone merges and the tree is clean.
+- "Skipped, tool absent" as a first-class outcome keeps the quality bar honest on machines without `build` or `pip-audit` and lets a product's own CI be the place that installs them.
+
+### What failed
+- Shell-embedded patches mangled backslashes three times in one session (I-071, I-072); the rule has existed since M1. The fix is a memory rule for the assistant: edits with backslashes or quote-heavy literals go through the file tools, one site per edit.
+- The first `todo_api` build stalled on a feature that was correct: two test modules shared a basename across `tests/` and `tests/acceptance/` and pytest refused to collect (I-073). The scaffold's test directories are packages now.
+- The coverage check left `.coverage` in the product tree, which a later feature's `git add -A` would have committed; the profile's cache excludes carry the coverage artifacts now.
+
+### Actions
+- `_module_only_skeleton` in `scio/product/spec.py` and the planner rule: a P1 criterion that needs a console script, an entry point or an install becomes the `python -m <package>` form (two live planners had asked for one).
+- `scio/aci/runtime.py`, `scio/product/acceptance.py`, `Sandbox.delete` and `exec(network=)`, `ToolDef.needs_context`, `QualityCheck` and `Runtime` in the toolchain, `AppSpec` and the `## Runtime` section, the scaffold's acceptance tests and http skeleton, `evals/product_scripts_http.py`; tests `test_runtime.py`, `test_acceptance.py`, the delete and quality-bar tests, the http product loop test; ADR 0013; ledger I-071 to I-073.
+
+### Still open in M9
+- Docker default for product builds (a persistent container per build; the registry allowlist enforced by an egress proxy); Docker is not installed on the dev machine (I-016), so these need CI.
+- A live milestone of an http product on the Claude Code backend.

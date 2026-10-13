@@ -31,11 +31,15 @@ def _text(data: str | bytes | None) -> str:
 class LocalSandbox:
     host_root: Path
 
-    def __init__(self, root: str | Path, limits: Limits | None = None) -> None:
+    def __init__(
+        self, root: str | Path, limits: Limits | None = None, *, python: str | None = None
+    ) -> None:
         self.host_root = Path(root).resolve()
         self.host_root.mkdir(parents=True, exist_ok=True)
         self.root = str(self.host_root)
         self.limits = limits or Limits()
+        self.python = python
+        """The product environment's interpreter (M9); None runs SCIO's own."""
         if not self.limits.network:
             log.warning("LocalSandbox cannot disable the network; use docker or e2b for isolation")
 
@@ -56,14 +60,20 @@ class LocalSandbox:
         cwd: str | None = None,
         timeout_s: int | None = None,
         env: Mapping[str, str] | None = None,
+        network: bool | None = None,
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
         argv = list(argv)
         if argv and argv[0] == "python":
-            argv[0] = sys.executable  # the interpreter running SCIO, not whatever is on PATH
+            # The product environment once it exists, else the interpreter running SCIO,
+            # never whatever is on PATH.
+            argv[0] = self.python or sys.executable
         run_env = {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})}
-        if not self.limits.network:
+        allow_network = self.limits.network if network is None else network
+        if not allow_network:
             run_env.setdefault("PIP_NO_INDEX", "1")
+        else:
+            run_env.pop("PIP_NO_INDEX", None)
         t0 = time.perf_counter()
         try:
             proc = subprocess.run(
@@ -106,6 +116,12 @@ class LocalSandbox:
 
     def exists(self, path: str) -> bool:
         return Path(self.resolve(path)).exists()
+
+    def delete(self, path: str) -> None:
+        p = Path(self.resolve(path))
+        if p.is_dir():
+            raise IsADirectoryError(f"refusing to delete a directory: {path}")
+        p.unlink(missing_ok=True)
 
     def close(self) -> None:
         return None

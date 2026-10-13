@@ -107,6 +107,9 @@ class _FakeFiles:
     def exists(self, path: str) -> bool:
         return path in self.store
 
+    def remove(self, path: str) -> None:
+        del self.store[path]
+
 
 class _FakeCommands:
     def __init__(self) -> None:

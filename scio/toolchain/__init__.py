@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from functools import cache
 
-from scio.toolchain.base import TestOutcome, Toolchain
+from scio.toolchain.base import CheckOutcome, QualityCheck, Runtime, TestOutcome, Toolchain
 from scio.toolchain.python import PythonToolchain, load_python_profile
 
 __all__ = [
+    "CheckOutcome",
     "PythonToolchain",
+    "QualityCheck",
+    "Runtime",
     "TestOutcome",
     "Toolchain",
     "get_toolchain",

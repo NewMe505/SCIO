@@ -123,7 +123,7 @@ def test_empty_directory_becomes_a_repository_with_green_ci(tmp_path: Path) -> N
         tc.test_argv(filter=None, path=None), cwd=repo, capture_output=True, text=True
     )
     assert tests.returncode == 0, tests.stdout + tests.stderr
-    assert "2 passed" in tests.stdout
+    assert "3 passed" in tests.stdout  # two smoke tests and the black-box version test (M9)
     version = subprocess.run(
         ["python", "-m", "todo_cli", "--version"], cwd=repo, capture_output=True, text=True
     )

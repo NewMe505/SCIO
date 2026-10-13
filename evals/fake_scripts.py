@@ -579,9 +579,10 @@ SCRIPTS: list[TaskScript] = [
 
 def script_for(title: str) -> TaskScript:
     from evals.product_scripts import PRODUCT_SCRIPTS  # product features first: "json" collides
+    from evals.product_scripts_http import HTTP_PRODUCT_SCRIPTS
 
     low = title.lower()
-    for s in [*PRODUCT_SCRIPTS, *SCRIPTS]:
+    for s in [*PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS, *SCRIPTS]:
         if s.key in low:
             return s
     raise KeyError(f"no fake script for task title {title!r}")
@@ -652,7 +653,11 @@ class ScriptedResponder:
         gate_verdicts: list[str] | None = None,
         milestone_gate_verdict: str = "pass",
         milestone_size: int = 2,
+        product: str = "todo_cli",
     ) -> None:
+        self.product = product
+        """Which scripted product the planner drafts: ``todo_cli`` (a CLI, standard library
+        only) or ``todo_api`` (an http server with an approved dependency, M9)."""
         self.gate_verdict = gate_verdict
         self.gate_verdicts = list(gate_verdicts or [])
         """Per-call gate verdicts in order; ``gate_verdict`` applies once they run out."""
@@ -704,6 +709,38 @@ class ScriptedResponder:
                         "What is explicitly out of scope for the first release?",
                     ],
                     "rationale": "scripted interview",
+                }
+            )
+        if kind == "product_spec" and self.product == "todo_api":
+            from evals.product_scripts_http import DEPENDENCY
+
+            return _json(
+                {
+                    "product_name": "Todo API",
+                    "title": "Todo API",
+                    "vision": "A small HTTP todo service with a YAML store.",
+                    "users": ["scripts and front ends that need a todo list over HTTP"],
+                    "features": [
+                        {
+                            "id": "F1",
+                            "description": "Health and version endpoint",
+                            "acceptance": ["GET /health returns status ok and the version"],
+                        },
+                        {
+                            "id": "F2",
+                            "description": "Create and list todos",
+                            "acceptance": ["POST /todos then GET /todos returns the todo as JSON"],
+                        },
+                    ],
+                    "quality_bar": ["tests pass", "lint clean"],
+                    "stack": "python",
+                    "dependencies": [DEPENDENCY],
+                    "app": {
+                        "kind": "http",
+                        "module": "todo_api",
+                        "args": ["serve", "--port", "{port}"],
+                        "health_path": "/health",
+                    },
                 }
             )
         if kind == "product_spec":

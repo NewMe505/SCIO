@@ -20,6 +20,10 @@ OLD_LINT_ARGV = ["ruff", "check", "--no-cache", "--select", "E9,F63,F7,F82,F821"
 OLD_LINT_ARGV += ["--output-format", "concise"]
 OLD_EXCLUDES = "__pycache__/\n*.pyc\n.pytest_cache/\n.ruff_cache/\n.mypy_cache/\n"
 OLD_CACHE_PATTERNS = ("__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+# M9 appended the coverage artifacts the quality bar leaves behind; everything before them
+# is still the pre-M6 list byte for byte.
+M9_CACHE_PATTERNS = (".coverage*", "htmlcov")
+M9_EXCLUDES = ".coverage*\nhtmlcov/\n"
 
 
 def test_python_profile_loads_from_yaml_and_satisfies_the_protocol() -> None:
@@ -63,8 +67,8 @@ def test_lint_command_and_findings_match_the_pre_m6_literals() -> None:
 
 def test_file_rules_match_the_pre_m6_behaviour() -> None:
     tc = python_toolchain()
-    assert tc.git_exclude_text() == OLD_EXCLUDES
-    assert tc.cache_excludes == OLD_CACHE_PATTERNS
+    assert tc.git_exclude_text() == OLD_EXCLUDES + M9_EXCLUDES
+    assert tc.cache_excludes == OLD_CACHE_PATTERNS + M9_CACHE_PATTERNS
     assert tc.is_source("pkg/mod.py") and not tc.is_source("README.md")
     assert tc.is_test_path("tests/test_x.py") and tc.is_test_path("pkg/tests/x.py")
     assert tc.is_test_path("test_x.py") and not tc.is_test_path("pkg/mod.py")
@@ -105,3 +109,18 @@ def test_no_stack_specific_command_outside_the_toolchain_package() -> None:
             if _ARGV_TOKEN.search(line) or any(lit in line for lit in _LITERALS):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{i}: {line.strip()[:80]}")
     assert offenders == [], "\n".join(offenders)
+
+
+def test_python_profile_declares_the_quality_bar_and_classifies_outcomes() -> None:
+    """M9: coverage, build and audit are profile data; an absent tool is a skip, not a pass."""
+    tc = python_toolchain()
+    names = [c.name for c in tc.quality_checks()]
+    assert names == ["coverage", "build", "audit"]
+    coverage, build, audit = tc.quality_checks()
+    assert coverage.outcome(0, "") == "passed"
+    assert coverage.outcome(4, "error: unrecognized arguments: --cov") == "skipped"
+    assert coverage.outcome(1, "FAIL Required test coverage of 80% not reached") == "failed"
+    assert build.outcome(1, "No module named build") == "skipped"
+    assert build.outcome(1, "error: invalid pyproject") == "failed"
+    assert audit.outcome(1, "/usr/bin/python: No module named pip_audit") == "skipped"
+    assert all(str(a).startswith(".scio/sandbox") for a in build.argv if "/" in str(a))

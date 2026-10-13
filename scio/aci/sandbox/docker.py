@@ -65,6 +65,7 @@ class DockerSandbox:
         self.image = image
         self.limits = limits or Limits()
         self._run = runner
+        self.python: str | None = None  # a product environment inside the sandbox (M9)
 
     def resolve(self, path: str) -> str:
         return resolve_under(self.root, path)
@@ -79,11 +80,13 @@ class DockerSandbox:
         *,
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
+        network: bool | None = None,
     ) -> list[str]:
         name = f"scio-{uuid.uuid4().hex[:12]}"
+        allow_network = self.limits.network if network is None else network
         cmd = [
             "docker", "run", "--rm", "--name", name,
-            "--network", "bridge" if self.limits.network else "none",
+            "--network", "bridge" if allow_network else "none",
             "--cpus", str(self.limits.cpus),
             "--memory", f"{self.limits.memory_mb}m",
             "--pids-limit", "512",
@@ -105,9 +108,10 @@ class DockerSandbox:
         cwd: str | None = None,
         timeout_s: int | None = None,
         env: Mapping[str, str] | None = None,
+        network: bool | None = None,
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
-        cmd = self.docker_argv(argv, cwd=cwd, env=env)
+        cmd = self.docker_argv(argv, cwd=cwd, env=env, network=network)
         result = self._run(cmd, timeout + 5)
         if result.timed_out:
             self._run(["docker", "kill", cmd[cmd.index("--name") + 1]], 15)
@@ -123,6 +127,12 @@ class DockerSandbox:
 
     def exists(self, path: str) -> bool:
         return self._host_path(path).exists()
+
+    def delete(self, path: str) -> None:
+        p = self._host_path(path)
+        if p.is_dir():
+            raise IsADirectoryError(f"refusing to delete a directory: {path}")
+        p.unlink(missing_ok=True)
 
     def close(self) -> None:
         return None

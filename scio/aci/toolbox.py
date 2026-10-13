@@ -14,8 +14,10 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError
 
+from scio.aci import runtime as R
 from scio.aci import tools as T
 from scio.aci.capabilities import Capability, check_toolset
+from scio.aci.runtime import ToolContext
 from scio.aci.sandbox.base import Sandbox
 from scio.aci.tools import ToolError
 from scio.harness.telemetry import execute_tool_span
@@ -33,6 +35,9 @@ class ToolDef:
     description: str
     input_model: type[BaseModel]
     fn: ToolFn
+    needs_context: bool = False
+    """The function takes ``(sandbox, inp, ctx)`` with the toolbox's :class:`ToolContext`
+    (the approved dependency list, the toolchain) as a third argument (M9)."""
 
 
 def _wrap(fn: Callable[[Sandbox, object], str]) -> ToolFn:
@@ -68,6 +73,29 @@ TOOLS: dict[str, ToolDef] = {
         T.RunTestsInput,
         _wrap(T.run_tests),  # type: ignore[arg-type]
     ),
+    "delete_file": ToolDef(
+        "delete_file",
+        "Delete one file (absolute path). Use it to remove a file you created by mistake or "
+        "that a change makes obsolete; directories and .git are refused.",
+        T.DeleteFileInput,
+        _wrap(T.delete_file),  # type: ignore[arg-type]
+    ),
+    "install_deps": ToolDef(
+        "install_deps",
+        "Install packages from the product's approved dependency list into the product "
+        "environment. A package not on the list is refused: ask for a design decision instead.",
+        R.InstallDepsInput,
+        _wrap(R.install_deps),  # type: ignore[arg-type]
+        needs_context=True,
+    ),
+    "run_app": ToolDef(
+        "run_app",
+        "Start the app with the toolchain's app command (python -m <module> args), wait for a "
+        "local health_url or for it to exit, return its output, and stop it.",
+        R.RunAppInput,
+        _wrap(R.run_app),  # type: ignore[arg-type]
+        needs_context=True,
+    ),
     "git_checkpoint": ToolDef(
         "git_checkpoint",
         "Stage all changes and commit with a Conventional Commit message. Returns the SHA.",
@@ -87,8 +115,10 @@ class ToolBox:
         extra_capabilities: dict[str, Iterable[Capability]] | None = None,
         max_calls: int | None = None,
         role: str = "agent",
+        context: ToolContext | None = None,
     ) -> None:
         self.role = role
+        self.context = context or ToolContext()
         names = list(tool_names)
         unknown = [n for n in names if n not in TOOLS]
         if unknown:
@@ -138,7 +168,11 @@ class ToolBox:
                     is_error=True,
                 )
             try:
-                return ToolResultPart(tool_use_id=tool_use_id, content=d.fn(self.sandbox, inp))
+                if d.needs_context:
+                    content = d.fn(self.sandbox, inp, self.context)  # type: ignore[call-arg]
+                else:
+                    content = d.fn(self.sandbox, inp)
+                return ToolResultPart(tool_use_id=tool_use_id, content=content)
             except ToolError as exc:
                 return ToolResultPart(tool_use_id=tool_use_id, content=str(exc), is_error=True)
             except Exception as exc:

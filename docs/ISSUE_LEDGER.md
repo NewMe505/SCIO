@@ -577,3 +577,27 @@ Template:
 - Fix: `coerce_lengths` in `scio/loop/claude_code_worker.py` truncates string fields that exceed their `max_length` (from the model's field constraints) and re-validates locally before any re-ask; a re-ask now only happens for errors that are not length overflows; the re-ask text names the field caps
 - Sweep: `AgentLoop` goes through `structured_call` (API repair loop) where the same overflow would also re-ask; `grep -n "max_length" scio/state/models.py` lists every capped prose field (summary 800, guidance 2800, reasoning 2000, rationale 400/600/800, description 400, vision 1200, notes 400). Guard: `test_worker_trims_overlong_prose_fields_instead_of_failing`
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-071 · A `\n` escape passed through a shell-embedded Python patch became a real newline (recurrence of I-010, I-027)
+- Found: 2026-10-13 · M9 · appending two tests to `tests/unit/test_aci_tools.py` through a `python - <<'EOF'` heredoc whose string literals contained `\n`
+- Symptom: `ruff format` refused the file: `missing closing quote in string literal` at the two lines where `"X = 1\n"` had been written as a quote, a newline and a quote
+- Root cause: pre-flight item 6 says never pass a backslash through a shell-embedded script; the patch did, and the double escaping guessed for the heredoc was wrong. The lint step in the same command caught it before any test ran, which is the mechanical guard from I-027 doing its job
+- Fix: the two lines rewritten with the file edit tool
+- Sweep: the other shell-embedded patches of this milestone (`test_sandbox.py` fake, `backends.py`, `nightly_live.py`) carried no backslashes. Guard: unchanged (lint or import immediately after every shell patch); the rule stands, the habit slipped
+- Resolved: 2026-10-13 · Status: resolved
+
+### I-072 · Three more shell-embedded patches mangled backslashes in one session (I-071 recurred twice within the hour)
+- Found: 2026-10-13 · M9 · `python - <<'EOF'` patches of `scio/product/scaffold.py` and `scio/product/build.py`: the first aborted with a `SyntaxError` inside the patch script, the second failed its anchor assertion because the anchor text contained `\n`, so nothing was written and the work was redone with the file tools
+- Symptom: wasted turns; no corrupted file (every patch asserted its anchors or crashed before writing, and the lint-after-patch rule caught the one that did write, I-071)
+- Root cause: the habit of patching source through a shell heredoc whenever an edit spans several places, against pre-flight item 6, which exists because of exactly this (I-001, I-010, I-027). Double-escaping the backslashes for the heredoc is guesswork; the shell wrapper and the heredoc disagree on when `\n` is a newline
+- Fix: no code change. Rule tightened for the assistant: any patch whose text contains a backslash, a quote-heavy Python literal, or a regex is done with the Edit/Write tools, one edit per site, never through a heredoc; heredocs are for appending prose to Markdown and for short shell lists only
+- Sweep: this session's remaining heredoc patches (ledger and changelog appends, yaml appends) carried no backslashes. Guard: the assistant's project memory records the rule (feedback memory `scio-no-shell-patches`), so it is loaded in every session
+- Resolved: 2026-10-13 · Status: resolved
+
+### I-073 · Two test modules with the same basename broke a product's whole suite (pytest import file mismatch)
+- Found: 2026-10-13 · M9 · the Fake `todo_api` product: P2's scripted coder added `tests/test_todos.py` next to the scaffold's `tests/acceptance/test_todos.py`; every `pytest` run in the repository then failed at collection with `import file mismatch ... use a unique basename`, so verify failed on every iteration and the feature stalled
+- Symptom: a feature that was correct could never pass verify; the debugger's turns could not see the cause because the error names pytest's import rules, not the code
+- Root cause: the scaffold's `tests/` and `tests/acceptance/` were plain directories, so pytest imported both files as top-level module `test_todos`; any product that keeps unit and acceptance tests with matching names hits this
+- Fix: the scaffold ships `tests/__init__.py` and `tests/acceptance/__init__.py`, so modules are package-qualified and basenames may repeat; the scripted acceptance test was also renamed
+- Sweep: `evals/tasks/*/repo/tests` fixtures are single directories (no nesting), unaffected; SCIO's own `tests/` already has `__init__.py` files. Guard: `test_http_product_with_a_dependency_builds_and_passes_black_box_acceptance` keeps a unit test and an acceptance test with related names in the two directories
+- Resolved: 2026-10-13 · Status: resolved

@@ -40,6 +40,13 @@ def make_worker(
     if ctx.settings.worker_backend == "claude_code":
         from scio.loop.claude_code_worker import ClaudeCodeWorker
 
+        if ctx.settings.sandbox_backend != "local":
+            # The binary runs on the host in the sandbox root; a Docker or E2B root is not a
+            # host path (ADR 0012 boundary, enforced since M9).
+            raise ValueError(
+                "SCIO_WORKER_BACKEND=claude_code needs SCIO_SANDBOX_BACKEND=local; "
+                f"got {ctx.settings.sandbox_backend!r}"
+            )
         return ClaudeCodeWorker(
             ctx.harness,
             ctx.sandbox,
