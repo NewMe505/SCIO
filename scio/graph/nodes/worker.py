@@ -16,7 +16,7 @@ from scio.graph.nodes.common import decision, diff_stat, fact, slug
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
-from scio.loop.agent_loop import AgentLoop
+from scio.loop.backends import make_worker
 from scio.state.models import ExitReason, Role, SCIOState, Verdict
 
 Node = Callable[[SCIOState], dict[str, Any]]
@@ -48,7 +48,7 @@ def t0_loop(ctx: RunContext) -> Node:
             max_calls=ctx.limits.max_tool_calls_per_iter,
             role="coder",
         )
-        loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "coder")
+        loop = make_worker(ctx, toolbox, "coder")
         msg = coder_message(
             state.task,
             state.feature_list,
@@ -111,7 +111,7 @@ def document(ctx: RunContext) -> Node:
         test_ref = state.artifacts.get("verify:last")
         test_summary = ctx.artifacts.head(test_ref, 1500) if test_ref else "(no verify output)"
         toolbox = ToolBox(sb, DOCUMENTER_TOOLS, human_gate=False, max_calls=12, role="documenter")
-        loop = AgentLoop(ctx.harness, toolbox, ctx.prompts, "documenter")
+        loop = make_worker(ctx, toolbox, "documenter")
         docs_check: str | None = None
         logs: dict[str, Any] = {}
         for round_ in (1, 2):

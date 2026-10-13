@@ -9,6 +9,11 @@ providers:
     adapter: openai
   fake:
     adapter: fake
+  # ADR 0012: the same model ids served through the unmodified `claude` binary on a Claude
+  # subscription (SCIO_PROVIDER_OVERRIDE=claude_code). Prices still come from the rows below;
+  # the dollars are an estimate of what the API would have cost, nothing is billed.
+  claude_code:
+    adapter: claude_code
 
 models:
   claude-opus-5-5:

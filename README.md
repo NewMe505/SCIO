@@ -85,6 +85,18 @@ uv run scio status --product ./todo                       # progress.json as tex
 uv run scio report --thread build-todo_cli                # feature runs, cost, escalations
 ```
 
+Running on a Claude subscription instead of the API (ADR 0012): with `SCIO_PROVIDER_OVERRIDE=claude_code`
+every tool-less role (router, planners, advisor, gates, reviewer) runs as one `claude -p` call, and with
+`SCIO_WORKER_BACKEND=claude_code` every tool-using turn (coder, debugger, documenter, explorer) is one
+Claude Code session in the sandbox root followed by a typed summary on `--resume`. The binary is the
+unmodified Claude Code signed in with your own account (`claude` on PATH, or `SCIO_CLAUDE_CODE_BIN`);
+nothing is billed to a Console organisation, the dollars in reports are the API-price estimate Claude
+Code prints. Verify, commits, the gate and the PR flow are unchanged; local sandbox only.
+
+```bash
+SCIO_PROVIDER_OVERRIDE=claude_code SCIO_WORKER_BACKEND=claude_code uv run scio run --spec task.md --repo ./repo
+```
+
 After a run, `uv run scio report --thread <id>` writes `.scio/reports/<id>.md` and `.json`:
 tokens and dollars by role, every escalation with its outcome, and the ledger timeline.
 
@@ -157,7 +169,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 

@@ -111,6 +111,19 @@ class EscalationSettings(BaseModel):
     explorers_max: int = 4
 
 
+def budget_factor(settings: Any) -> float:
+    """How much to scale dollar and token caps for the configured worker backend.
+
+    Budgets in ``budgets.yaml`` are API-price guards. A Claude Code turn reports about four
+    times that for the same work (its own prompt and tool set as cache writes and reads,
+    ADR 0012 live trial), so the ``claude_code`` backend scales every cap by
+    ``settings.claude_code_budget_factor`` (I-069). Nothing is billed either way.
+    """
+    if getattr(settings, "worker_backend", "aci") == "claude_code":
+        return float(getattr(settings, "claude_code_budget_factor", 1.0))
+    return 1.0
+
+
 class BudgetsConfig(BaseModel):
     tiers: dict[str, BudgetLimits]
     reserve_output_fraction: float = 1.0
@@ -120,6 +133,26 @@ class BudgetsConfig(BaseModel):
     def load(cls, path: Path) -> BudgetsConfig:
         data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
         return cls.model_validate(data)
+
+    @classmethod
+    def for_settings(cls, settings: Any) -> BudgetsConfig:
+        """The tier budgets for a run: ``budgets.yaml`` scaled by :func:`budget_factor`."""
+        return cls.load(settings.budgets_path).scaled(budget_factor(settings))
+
+    def scaled(self, factor: float) -> BudgetsConfig:
+        """Every tier's dollar and token caps multiplied by ``factor`` (I-069)."""
+        if factor == 1.0:
+            return self
+        tiers = {
+            name: lim.model_copy(
+                update={
+                    "usd_max": round(lim.usd_max * factor, 4),
+                    "tokens_max": int(lim.tokens_max * factor),
+                }
+            )
+            for name, lim in self.tiers.items()
+        }
+        return self.model_copy(update={"tiers": tiers})
 
     def guard_for(self, tier: str) -> BudgetGuard:
         return BudgetGuard(self.tiers[tier], reserve_output_fraction=self.reserve_output_fraction)
