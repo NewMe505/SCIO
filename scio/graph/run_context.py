@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from scio.aci.runtime import ToolContext
 from scio.aci.sandbox.base import Limits, Sandbox
 from scio.aci.sandbox.local import LocalSandbox
 from scio.context.artifacts import ArtifactStore
@@ -61,6 +62,9 @@ class RunContext:
     budget_from_tier: bool = False
     """True when the budget was sized from ``tier`` defaults rather than explicit limits, so
     ``route`` may resize it for the tier the classifier picks (I-053)."""
+    tool_context: ToolContext | None = None
+    """The approved dependency list for ``install_deps`` (product builds, M9); None in task
+    mode, where installs are refused."""
 
     @classmethod
     def create(

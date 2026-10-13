@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from scio.state.models import (
+    AppSpec,
     MilestoneFeatureOutput,
     MilestonePlan,
     MilestonePlanOutput,
@@ -129,6 +130,7 @@ def parse_product_md(text: str) -> ProductSpec:
     users: list[str] = []
     quality: list[str] = []
     deps: list[str] = []
+    runtime: dict[str, str] = {}
     features: list[ProductFeature] = []
     current: tuple[str, str, list[str]] | None = None
     for raw in text.splitlines():
@@ -156,6 +158,8 @@ def parse_product_md(text: str) -> ProductSpec:
                 if head.startswith("quality")
                 else "deps"
                 if head.startswith("approved dependencies")
+                else "runtime"
+                if head.startswith("runtime")
                 else "other"
             )
             continue
@@ -180,6 +184,9 @@ def parse_product_md(text: str) -> ProductSpec:
             d = line[2:].strip()
             if not d.startswith("none"):
                 deps.append(d)
+        elif section == "runtime" and line.startswith("- ") and ":" in line:
+            key, _, value = line[2:].partition(":")
+            runtime[key.strip().lower()] = value.strip()
     if current:
         features.append(_feature(current))
     if not features:
@@ -193,6 +200,19 @@ def parse_product_md(text: str) -> ProductSpec:
         quality_bar=quality or ["tests pass"],
         stack=stack or "python",
         dependencies=deps,
+        app=_app(runtime, name or "app"),
+    )
+
+
+def _app(runtime: dict[str, str], name: str) -> AppSpec:
+    kind = runtime.get("kind", "cli")
+    args = runtime.get("args", "")
+    module = runtime.get("module") or None
+    return AppSpec(
+        kind="http" if kind == "http" else "cli",
+        module=None if module in (None, name) else module,  # None means the package itself
+        args=[] if args in ("", "(none)") else args.split(),
+        health_path=runtime.get("health", "/health"),
     )
 
 

@@ -10,12 +10,14 @@ from scio.aci.sandbox.base import ExecResult
 from scio.aci.sandbox.local import LocalSandbox
 from scio.aci.toolbox import ToolBox
 from scio.aci.tools import (
+    DeleteFileInput,
     EditFileInput,
     GitCheckpointInput,
     RepoSearchInput,
     RunTestsInput,
     ToolError,
     ViewFileInput,
+    delete_file,
     edit_file,
     failures_only,
     git_checkpoint,
@@ -257,3 +259,26 @@ def test_toolbox_specs_dispatch_errors_and_call_cap(repo: LocalSandbox, spans) -
     assert [s.name for s in spans.get_finished_spans()][:1] == ["execute_tool view_file"]
     with pytest.raises(KeyError):
         ToolBox(repo, ["nope"], human_gate=True)
+
+
+def test_delete_file_removes_a_file_and_refuses_directories_and_git(repo: LocalSandbox) -> None:
+    """M9: the sandbox protocol gained ``delete``; the tool uses it and guards the repository."""
+    target = p(repo, "pkg/obsolete.py")
+    repo.write_text(target, "X = 1\n")
+    assert delete_file(repo, DeleteFileInput(path=target)) == f"deleted {target}"
+    assert not repo.exists(target)
+    assert delete_file(repo, DeleteFileInput(path=target)).startswith("nothing to delete")
+    with pytest.raises(ToolError, match="directory"):
+        delete_file(repo, DeleteFileInput(path=p(repo, "pkg")))
+    with pytest.raises(ToolError, match="never touch"):
+        delete_file(repo, DeleteFileInput(path=p(repo, ".git/HEAD")))
+    with pytest.raises(ToolError, match="absolute paths"):
+        delete_file(repo, DeleteFileInput(path=str(Path(repo.root).parent / "outside.py")))
+
+
+def test_rejected_new_file_is_removed_not_left_empty(repo: LocalSandbox) -> None:
+    """Before M9 a new file that failed lint was left behind as an empty file."""
+    new = p(repo, "pkg/bad.py")
+    with pytest.raises(ToolError, match="lint"):
+        edit_file(repo, EditFileInput(path=new, old_text="", new_text="y = undefined_name\n"))
+    assert not repo.exists(new)

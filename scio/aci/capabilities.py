@@ -17,6 +17,11 @@ TOOL_CAPABILITIES: dict[str, frozenset[Capability]] = {
     "repo_search": frozenset({"private_data"}),
     "view_file": frozenset({"private_data"}),
     "edit_file": frozenset({"private_data", "mutation"}),
+    "delete_file": frozenset({"private_data", "mutation"}),
+    # M9: the install phase reaches an allowlisted registry only, and every package comes
+    # from the human-approved list in PRODUCT.md, so it is not tagged as exfiltration.
+    "install_deps": frozenset({"mutation", "untrusted_input"}),
+    "run_app": frozenset({"private_data", "untrusted_input"}),
     "run_tests": frozenset({"private_data", "untrusted_input"}),
     "git_checkpoint": frozenset({"mutation"}),
     "git_push": frozenset({"mutation", "exfiltration"}),

@@ -52,8 +52,10 @@ DEFAULT_MAX_TURNS = 30
 BACKEND_NOTE = (
     "\n\nThis turn runs inside Claude Code. Its built-in tools replace the ones named above: "
     "Grep and Glob for repo_search, Read for view_file, Edit and Write for edit_file, and "
-    "Bash for run_tests ({test_cmd}). Keep every path inside the repository root, never run "
-    "git commands that change history, and stop when the tests you were asked for pass."
+    "Bash for run_tests ({test_cmd}). Dependencies are installed by the orchestrator from the "
+    "product's approved list before your turn; never install packages yourself, ask for a "
+    "design decision instead. Keep every path inside the repository root, never run git "
+    "commands that change history, and stop when the tests you were asked for pass."
 )
 
 
@@ -64,6 +66,11 @@ def allowed_tools_for(tool_names: tuple[str, ...], toolchain: Toolchain) -> list
         rules += READ_TOOLS
     if "edit_file" in tool_names:
         rules += EDIT_TOOLS
+    if "delete_file" in tool_names:
+        rules += ["Bash(rm *)"]  # Claude Code has no delete tool; rm inside the sandbox root
+    if "run_app" in tool_names:
+        rules += [f"Bash({' '.join(toolchain.runtime().app_argv)} *)"]
+    # install_deps has no rule on purpose: the install phase runs outside the turn (M9)
     if "run_tests" in tool_names:
         test_bin = toolchain.test_argv(filter=None, path=None)[0]
         rules += [f"Bash({test_bin} *)", f"Bash(python -m {toolchain.test_runner} *)"]

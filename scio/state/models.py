@@ -371,6 +371,19 @@ class ProductFeature(BaseModel):
     """Testable criteria; the normaliser rejects a feature without one."""
 
 
+class AppSpec(BaseModel):
+    """How the product starts and answers a health check (M9, ADR 0013)."""
+
+    kind: Literal["cli", "http"] = "cli"
+    """``cli``: a command that exits; ``http``: a server that answers ``health_path``."""
+    module: str | None = Field(default=None, max_length=80)
+    """Module for the toolchain's app command (``python -m <module>``); the package itself
+    when None."""
+    args: list[str] = Field(default_factory=list, max_length=12)
+    """Arguments that start the server; ``{port}`` is replaced by a free port."""
+    health_path: str = Field(default="/health", max_length=200)
+
+
 class ProductSpec(BaseModel):
     """The normalised content of PRODUCT.md."""
 
@@ -385,6 +398,8 @@ class ProductSpec(BaseModel):
     """Toolchain profile name (ADR 0009)."""
     dependencies: list[str] = Field(default_factory=list)
     """Approved third-party dependencies; empty for a walking skeleton."""
+    app: AppSpec = Field(default_factory=AppSpec)
+    """How the product runs (``## Runtime`` in PRODUCT.md)."""
 
 
 class InterviewOutput(BaseModel):
@@ -405,6 +420,8 @@ class ProductSpecOutput(BaseModel):
     quality_bar: list[str] = Field(min_length=1, max_length=12)
     stack: str = Field(max_length=40)
     dependencies: list[str] = Field(default_factory=list, max_length=20)
+    app: AppSpec | None = None
+    """``cli`` when omitted; ``http`` products name the serve arguments and health path."""
 
 
 ProductPhase = Literal[

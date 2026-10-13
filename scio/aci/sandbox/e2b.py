@@ -31,6 +31,7 @@ class E2BSandbox:
     ) -> None:
         self.limits = limits or Limits()
         self.root = root
+        self.python: str | None = None  # a product environment inside the sandbox (M9)
         if client is None:
             try:
                 from e2b import Sandbox as E2B
@@ -54,6 +55,7 @@ class E2BSandbox:
         cwd: str | None = None,
         timeout_s: int | None = None,
         env: Mapping[str, str] | None = None,
+        network: bool | None = None,  # E2B fixes network access per sandbox; ignored here
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
         cmd = shlex.join(argv)
@@ -93,6 +95,11 @@ class E2BSandbox:
 
     def exists(self, path: str) -> bool:
         return bool(self._sb.files.exists(self.resolve(path)))
+
+    def delete(self, path: str) -> None:
+        target = self.resolve(path)
+        if self._sb.files.exists(target):
+            self._sb.files.remove(target)  # e2b Filesystem.remove(path)
 
     def close(self) -> None:
         self._sb.kill()

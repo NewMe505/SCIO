@@ -463,3 +463,27 @@ def test_worker_trims_overlong_prose_fields_instead_of_failing(tmp_path: Path) -
     assert len(fake.calls) == 2  # no re-ask was needed
     with pytest.raises(Exception, match="step_id"):  # a structural error is not trimmed away
         validate_with_trimming(WorkerOutput, {"summary": "s"})
+
+
+def test_claude_code_backend_requires_the_local_sandbox(tmp_path: Path) -> None:
+    """ADR 0012 boundary enforced (M9): the binary runs on the host in the sandbox root."""
+    from scio.aci.toolbox import ToolBox
+    from scio.graph.run_context import RunContext
+    from scio.loop.backends import make_worker
+
+    settings = Settings(
+        provider_override="fake", worker_backend="claude_code", sandbox_backend="docker"
+    )
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    sandbox = LocalSandbox(tmp_path)  # injected, so no Docker daemon is needed for the check
+    ctx = RunContext.create(
+        thread_id="t", sandbox_root=tmp_path, settings=settings, harness=harness, sandbox=sandbox
+    )
+    try:
+        toolbox = ToolBox(sandbox, ("edit_file", "delete_file"), human_gate=False, role="coder")
+        with pytest.raises(ValueError, match="SCIO_SANDBOX_BACKEND=local"):
+            make_worker(ctx, toolbox, "coder")
+        assert "Bash(rm *)" in allowed_tools_for(("edit_file", "delete_file"), python_toolchain())
+    finally:
+        ctx.close()
