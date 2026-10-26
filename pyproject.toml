@@ -1,6 +1,6 @@
 [project]
 name = "scio"
-version = "0.5.0"
+version = "0.6.0"
 description = "Model-agnostic LangGraph framework that takes a software task from spec to merged, tested, documented PR"
 readme = "README.md"
 requires-python = ">=3.12"

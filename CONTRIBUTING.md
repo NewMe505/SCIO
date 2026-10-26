@@ -7,7 +7,8 @@ These rules apply to human contributors and to SCIO's own agents.
 2. **Branch:** `agent/<issue#>-<slug>` for agent work, `<type>/<issue#>-<slug>` for humans. Never push to `main` directly; never force-push. A ruleset on `main` enforces this: pull request required, the `checks` workflow must pass, no force-pushes, no deletion.
 3. **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`). One commit per passing feature.
 4. **Pull request:** open it as a draft using the PR template. Link the issue with `Closes #N`. It becomes ready for review only after all checks pass (and, for agent runs, after the Opus gate passes).
-5. **Merge:** always approved by a human.
+5. **Merge:** always approved by a human. Before any post-merge step (deleting a branch, branching from `main`, tagging), confirm on GitHub that the PR is merged: `gh pr view N --json mergedAt` must be non-null, in its own step, not inside an `&&` chain (I-087).
+6. **Release after every milestone:** when a milestone PR merges, the next PR is the release: `python scripts/release_notes.py --cut X.Y.Z`, the version in `pyproject.toml`, `scio/__init__.py` and `uv.lock`, the README status line; after its merge, tag `vX.Y.Z` on the merge commit and push the tag. `check_release_cadence` fails when two finished milestones wait unreleased (I-086).
 
 ## Docs-as-code
 Docs change **in the same PR** as the code they describe:
