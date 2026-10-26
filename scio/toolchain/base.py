@@ -52,6 +52,10 @@ class Runtime:
     """Hosts the install phase may reach (enforced by sandboxes that can)."""
     app_argv: tuple[str, ...]
     """Starts the app: the module name and its arguments are appended."""
+    test_tools: tuple[str, ...] = ()
+    """Requirement specs the test and quality commands need (runner, coverage plugin). A
+    local sandbox sees them through SCIO's own environment; any other sandbox installs them
+    into the product environment when it is created (I-074)."""
 
 
 @runtime_checkable

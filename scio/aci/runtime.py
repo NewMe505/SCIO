@@ -4,9 +4,12 @@ and ``run_app``.
 Two phases, as docs/PRODUCT_MODE.md component 4 describes: during **install** the network
 is open to the profile's registry allowlist and only packages on the approved list (the
 ``## Approved dependencies`` of ``PRODUCT.md``) are installed; during **test** the network
-is off again. The environment is a virtualenv under ``.scio/sandbox/venv`` in the product
-repository (git-ignored), created with the host's test tools visible so the walking
-skeleton still needs no download; the sandbox rewrites ``python`` to its interpreter.
+is off again. The environment is a plain virtualenv under ``.scio/sandbox/venv`` in the
+product repository (git-ignored); the sandbox rewrites ``python`` to its interpreter. On a
+local sandbox a ``.pth`` file makes SCIO's own environment visible, so the test runner and
+the coverage plugin need no download (not ``--system-site-packages``: that exposes the base
+interpreter, whose packages differ per machine, I-074); any other sandbox installs the
+profile's ``test_tools`` when the environment is created.
 
 ``install_deps`` is a worker tool gated by the approved list: a package that is not on it is
 refused with a message that tells the worker to ask for a design decision, which is the
@@ -20,6 +23,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import sysconfig
 import time
 import urllib.error
 import urllib.request
@@ -34,6 +38,8 @@ from scio.aci.tools import ToolError
 from scio.toolchain import Toolchain, python_toolchain
 
 VENV_DIR = ".scio/sandbox/venv"
+HOST_PTH = "scio_host_env.pth"
+"""The ``.pth`` file in a local product environment that appends SCIO's own site-packages."""
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
@@ -91,6 +97,11 @@ def ensure_product_env(
     sandbox.python = python
     installed = ""
     specs = [s for s in approved if s.strip()]
+    if created:
+        if isinstance(sandbox, LocalSandbox):
+            link_host_env(sandbox)
+        else:
+            specs = [*rt.test_tools, *specs]
     if specs:
         r = sandbox.exec([*rt.install_argv, *specs], timeout_s=900, network=True)
         if not r.ok:
@@ -100,6 +111,19 @@ def ensure_product_env(
         f"product environment {'created' if created else 'reused'} at {venv_dir}{installed} "
         f"(registry allowlist: {', '.join(rt.index_allowlist) or 'none'})"
     )
+
+
+def link_host_env(sandbox: Sandbox) -> str:
+    """Append SCIO's own site-packages to a freshly created local product environment through
+    a ``.pth`` file, so the test runner and coverage plugin SCIO runs with are importable
+    there without a download. The product's own installs come first on ``sys.path``, so a
+    product dependency always wins over SCIO's copy. Returns the ``.pth`` path."""
+    r = sandbox.exec(["python", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+    if not r.ok:
+        raise RuntimeError(f"could not locate the product environment's site-packages: {r.output}")
+    pth = f"{r.stdout.strip()}/{HOST_PTH}"
+    sandbox.write_text(pth, sysconfig.get_paths()["purelib"] + "\n")
+    return pth
 
 
 # ---------- install_deps ----------

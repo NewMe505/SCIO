@@ -454,10 +454,13 @@ Lessons:
 - Shell-embedded patches mangled backslashes three times in one session (I-071, I-072); the rule has existed since M1. The fix is a memory rule for the assistant: edits with backslashes or quote-heavy literals go through the file tools, one site per edit.
 - The first `todo_api` build stalled on a feature that was correct: two test modules shared a basename across `tests/` and `tests/acceptance/` and pytest refused to collect (I-073). The scaffold's test directories are packages now.
 - The coverage check left `.coverage` in the product tree, which a later feature's `git add -A` would have committed; the profile's cache excludes carry the coverage artifacts now.
+- The first push of PR #50 was red on CI and green locally (I-074): the product venv's `--system-site-packages` exposed the *base* interpreter, and only the dev machine's base Python happened to carry pytest. A test asserted that pytest imports, not where it comes from, so the accident passed. Rule: when a test depends on a tool being present, assert its origin (`__file__` under the expected path), and never rely on `--system-site-packages` under `uv run`.
+- The dev machine's Application Control policy began blocking the venv's `pytest.exe` and `scio.exe` launchers (I-075); the module forms are the fixed spelling in CLAUDE.md now, and `scio/__main__.py` exists so `python -m scio` works.
 
 ### Actions
 - `_module_only_skeleton` in `scio/product/spec.py` and the planner rule: a P1 criterion that needs a console script, an entry point or an install becomes the `python -m <package>` form (two live planners had asked for one).
 - `scio/aci/runtime.py`, `scio/product/acceptance.py`, `Sandbox.delete` and `exec(network=)`, `ToolDef.needs_context`, `QualityCheck` and `Runtime` in the toolchain, `AppSpec` and the `## Runtime` section, the scaffold's acceptance tests and http skeleton, `evals/product_scripts_http.py`; tests `test_runtime.py`, `test_acceptance.py`, the delete and quality-bar tests, the http product loop test; ADR 0013; ledger I-071 to I-073.
+- `link_host_env` and `Runtime.test_tools` (plain venv, `.pth` link on local, tools installed elsewhere), the origin assertion in `test_product_env_is_created_once_and_rewrites_python`, `test_non_local_sandbox_installs_the_test_tools_on_creation`; `scio/__main__.py` and its test; CLAUDE.md's CI-equivalent line; ledger I-074, I-075.
 
 ### Still open in M9
 - Docker default for product builds (a persistent container per build; the registry allowlist enforced by an egress proxy); Docker is not installed on the dev machine (I-016), so these need CI.

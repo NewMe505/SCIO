@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import socket
 import sys
+import sysconfig
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 from scio.aci.runtime import (
+    HOST_PTH,
     InstallDepsInput,
     RunAppInput,
     ToolContext,
@@ -46,6 +48,50 @@ class RecordingSandbox(LocalSandbox):
         return ExecResult(exit_code=0, stdout="ok", stderr="")
 
 
+class RemoteRecordingSandbox:
+    """A non-local sandbox (what Docker or E2B look like to the runtime): records execs,
+    answers them without running anything, and reports the venv as created after the first
+    ``venv`` call."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = str(root).replace("\\", "/")
+        self.python: str | None = None
+        self.calls: list[tuple[list[str], bool | None]] = []
+        self._paths: set[str] = set()
+
+    def exec(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        timeout_s: int | None = None,
+        env: Mapping[str, str] | None = None,
+        network: bool | None = None,
+    ) -> ExecResult:
+        self.calls.append((list(argv), network))
+        if "venv" in argv:
+            self._paths.add(venv_python(self, python_toolchain()))
+        return ExecResult(exit_code=0, stdout="ok", stderr="")
+
+    def read_text(self, path: str) -> str:
+        return ""
+
+    def write_text(self, path: str, content: str) -> None:
+        self._paths.add(path)
+
+    def exists(self, path: str) -> bool:
+        return path in self._paths
+
+    def delete(self, path: str) -> None:
+        self._paths.discard(path)
+
+    def resolve(self, path: str) -> str:
+        return path
+
+    def close(self) -> None:
+        return None
+
+
 def test_normalise_package_names() -> None:
     assert normalise_package("Flask>=3.0") == "flask"
     assert normalise_package("typing_extensions") == "typing-extensions"
@@ -62,9 +108,34 @@ def test_product_env_is_created_once_and_rewrites_python(tmp_path: Path) -> None
     assert again.startswith("product environment reused")
     r = sb.exec(["python", "-c", "import sys; print(sys.prefix)"])
     assert r.ok and ".scio" in r.stdout and "venv" in r.stdout
-    # the host's test tools are visible (system site packages), so no download was needed
-    r = sb.exec(["python", "-c", "import pytest; print('pytest ok')"])
-    assert r.ok and "pytest ok" in r.stdout
+    # SCIO's own environment is linked through a .pth file, so the test runner and the
+    # coverage plugin SCIO runs with are importable without a download, and they come from
+    # that environment, not from the base interpreter (I-074: the runner had no pytest there)
+    pths = list((tmp_path / ".scio" / "sandbox" / "venv").rglob(HOST_PTH))
+    assert len(pths) == 1
+    host_purelib = sysconfig.get_paths()["purelib"]
+    assert pths[0].read_text(encoding="utf-8").strip() == host_purelib
+    r = sb.exec(["python", "-c", "import pytest, pytest_cov; print(pytest.__file__)"])
+    assert r.ok, r.output
+    assert Path(r.stdout.strip()).resolve().is_relative_to(Path(host_purelib).resolve())
+
+
+def test_non_local_sandbox_installs_the_test_tools_on_creation(tmp_path: Path) -> None:
+    """A Docker or E2B environment has no host tools to link: the profile's ``test_tools``
+    go in with the approved packages during the network-open install call."""
+    sb = RemoteRecordingSandbox(tmp_path)
+    tc = python_toolchain()
+    summary = ensure_product_env(sb, tc, ("pyyaml",))
+    assert "created" in summary and "pytest>=8.3" in summary and "pyyaml" in summary
+    installs = [(argv, net) for argv, net in sb.calls if "pip" in argv]
+    assert len(installs) == 1
+    argv, network = installs[0]
+    assert network is True and argv[-3:] == ["pytest>=8.3", "pytest-cov>=6.0", "pyyaml"]
+    assert not list(tmp_path.rglob(HOST_PTH))
+    sb.calls.clear()
+    assert "reused" in ensure_product_env(sb, tc, ("pyyaml",))
+    argv, _ = sb.calls[-1]
+    assert argv[-1:] == ["pyyaml"] and "pytest>=8.3" not in argv  # tools only once
 
 
 def test_install_phase_opens_the_network_for_approved_packages_only(tmp_path: Path) -> None:

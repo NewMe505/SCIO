@@ -58,10 +58,13 @@ checks:
     timeout_s: 600
 # Runtime (M9): the product's own environment, the install phase and how the app is started.
 # `python` in every argv is rewritten by the sandbox to the product environment's interpreter
-# once `ensure_product_env` has created it (a venv with the host's test tools visible).
+# once `ensure_product_env` has created it. The venv is plain (no --system-site-packages: the
+# base interpreter's packages differ per machine, I-074); on a local sandbox a .pth file makes
+# SCIO's own environment visible so `test_tools` need no download, elsewhere they are installed.
 runtime:
-  venv_argv: [python, -m, venv, --system-site-packages]
+  venv_argv: [python, -m, venv]
   venv_python: { posix: bin/python, windows: Scripts/python.exe }
   install_argv: [python, -m, pip, install, --disable-pip-version-check, --no-input, --quiet]
   index_allowlist: [pypi.org, files.pythonhosted.org]
   app_argv: [python, -m]
+  test_tools: ["pytest>=8.3", "pytest-cov>=6.0"]

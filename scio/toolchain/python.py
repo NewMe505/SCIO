@@ -35,12 +35,13 @@ def has_summary(output: str) -> bool:
 
 
 DEFAULT_RUNTIME = Runtime(
-    venv_argv=("python", "-m", "venv", "--system-site-packages"),
+    venv_argv=("python", "-m", "venv"),
     venv_python_posix="bin/python",
     venv_python_windows="Scripts/python.exe",
     install_argv=("python", "-m", "pip", "install", "--disable-pip-version-check"),
     index_allowlist=("pypi.org", "files.pythonhosted.org"),
     app_argv=("python", "-m"),
+    test_tools=("pytest>=8.3", "pytest-cov>=6.0"),
 )
 
 
@@ -206,4 +207,5 @@ def _runtime(data: dict[str, Any] | None) -> Runtime:
         install_argv=tuple(str(a) for a in data["install_argv"]),
         index_allowlist=tuple(str(h) for h in data.get("index_allowlist", [])),
         app_argv=tuple(str(a) for a in data["app_argv"]),
+        test_tools=tuple(str(t) for t in data.get("test_tools", [])),
     )

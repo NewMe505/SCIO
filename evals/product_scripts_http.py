@@ -2,10 +2,10 @@
 with an approved third-party dependency, so the install phase, ``run_app`` semantics and the
 black-box acceptance step run through the whole milestone loop offline.
 
-The dependency is ``pyyaml``, which SCIO's own environment already carries: the product
-environment sees it through ``--system-site-packages``, so the install phase is satisfied
-without a download. The server stores its todos under ``.scio/sandbox/`` (git-ignored) so a
-black-box run leaves the tree clean.
+The dependency is ``pyyaml``, which SCIO's own environment already carries: a local product
+environment sees it through the ``.pth`` link to that environment, so the install phase is
+satisfied without a download. The server stores its todos under ``.scio/sandbox/``
+(git-ignored) so a black-box run leaves the tree clean.
 """
 
 from __future__ import annotations
