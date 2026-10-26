@@ -690,3 +690,11 @@ Template:
 - Fix: the local sandbox keeps the CPU-time and wall-clock limits and drops `RLIMIT_AS`; `Limits.memory_mb` is enforced by the Docker backend (`--memory`), where it measures resident memory
 - Sweep: `grep -rn "RLIMIT" scio` finds only `_preexec`; `docker.py` passes `--memory` (unchanged). Guard: the Node tests run in CI's `checks` job on Linux (`setup-node` 22), which is where the limit applied
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-085 · The node-ts install phase leaves `package.json` modified and `package-lock.json` untracked in the product tree
+- Found: 2026-10-26 · M10 live milestone (`notes_service`) · after `merge and stop`, `git status` in the product showed ` M package.json` and `?? package-lock.json`
+- Symptom: a merged milestone with a dirty tree; the next feature's `git add -A` would commit the lockfile and the rewritten dependency range as part of an unrelated feature
+- Root cause: `npm install --save <spec>` rewrites the dependency's range in `package.json` and writes the lockfile; the install phase runs as an orchestrator step outside any feature commit, and the Python profile never showed this because `pip` writes nothing into the tree. PRODUCT_MODE component 4 asks for a lockfile; nothing owns committing it
+- Fix: open. Candidates: the install phase commits its manifest and lockfile changes as `chore: install approved dependencies [scio:install]` on the milestone branch (a `run_effect` with the lockfile's hash as the probe), or `install_argv` drops `--save` and the scaffold's `package.json` is the single source of ranges
+- Sweep: the Fake `todo_api` node build has no dependency, so `test_same_spec_builds_in_both_stacks` passes its clean-tree assertion; a Fake case with one dependency would need the registry, so the guard belongs with the fix
+- Status: open
