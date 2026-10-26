@@ -40,22 +40,47 @@ class QualityCheck:
 
 @dataclass(frozen=True)
 class Runtime:
-    """How a product environment is created, filled and started (M9)."""
+    """How a product environment is created, filled and started (M9, generalised in M10).
 
-    venv_argv: tuple[str, ...]
-    """Creates the environment at the appended path (``python -m venv ...``)."""
-    venv_python_posix: str
-    venv_python_windows: str
+    A Python product has a virtualenv with its own interpreter; a Node product has
+    ``node_modules`` and no interpreter of its own. The fields say which: ``env_create_argv``
+    is None when installing creates the environment, and ``env_interpreter_*`` is None when
+    commands run with the host runtime as they are.
+    """
+
+    env_dir: str
+    """The environment's directory, relative to the repository root (git-ignored)."""
+    env_marker_posix: str
+    env_marker_windows: str
+    """A file whose presence means the environment exists (repository-relative)."""
     install_argv: tuple[str, ...]
     """Installs the appended package specs into the environment."""
     index_allowlist: tuple[str, ...]
     """Hosts the install phase may reach (enforced by sandboxes that can)."""
     app_argv: tuple[str, ...]
-    """Starts the app: the module name and its arguments are appended."""
+    """Starts the app: the target (module or entry file) and its arguments are appended."""
+    env_create_argv: tuple[str, ...] | None = None
+    """Creates the environment at the appended path (``python -m venv ...``); None when the
+    first install creates it (``npm install``)."""
+    env_interpreter_posix: str | None = None
+    env_interpreter_windows: str | None = None
+    """The environment's interpreter relative to ``env_dir``; the sandbox rewrites the
+    profile's interpreter word to it. None when the host runtime is used as it is."""
+    app_default_target: str | None = None
+    """What ``app_argv`` starts when the spec names no module (``src/main.ts``)."""
     test_tools: tuple[str, ...] = ()
     """Requirement specs the test and quality commands need (runner, coverage plugin). A
     local sandbox sees them through SCIO's own environment; any other sandbox installs them
     into the product environment when it is created (I-074)."""
+
+
+@dataclass(frozen=True)
+class Detect:
+    """Marker files that identify a repository's stack (M10 profile detection)."""
+
+    markers: tuple[str, ...]
+    all_of: bool = False
+    """True: every marker must exist (``package.json`` and ``tsconfig.json``)."""
 
 
 @runtime_checkable
@@ -88,11 +113,44 @@ class Toolchain(Protocol):
         """Short name of a filter expression for prompt text (``pytest -k filter``)."""
         ...
 
+    @property
+    def acceptance_dir(self) -> str:
+        """Where a product keeps its black-box acceptance tests (M10, stack-neutral)."""
+        ...
+
+    @property
+    def command_words(self) -> tuple[str, ...]:
+        """Commands a walking-skeleton criterion may name (``python``, ``node``); any other
+        backticked command is rewritten by the spec normaliser (ADR 0013 decision 8)."""
+        ...
+
+    @property
+    def detect(self) -> Detect | None:
+        """Marker files that identify this stack in an existing repository."""
+        ...
+
     # --- files ---
     def is_source(self, path: str) -> bool: ...
     def is_test_path(self, path: str) -> bool: ...
     def git_exclude_text(self) -> str: ...
-    def syntax_error(self, source: str, path: str) -> str | None: ...
+    def syntax_error(self, source: str, path: str) -> str | None:
+        """An in-process parse check (None when the stack has none; see
+        ``syntax_check_argv``)."""
+        ...
+
+    def syntax_check_argv(self, path: str) -> list[str] | None:
+        """A command that parses one file (``node --check``); None when ``syntax_error``
+        covers it in process."""
+        ...
+
+    # --- product skeleton ---
+    def skeleton_command(self, name: str) -> str:
+        """The walking skeleton's version command (``python -m {name} --version``)."""
+        ...
+
+    def app_target(self, name: str, module: str | None) -> str:
+        """What the app command starts for this product (a module name or an entry file)."""
+        ...
 
     # --- commands ---
     def test_argv(self, *, filter: str | None, path: str | None) -> list[str]: ...

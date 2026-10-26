@@ -75,7 +75,9 @@ def venv_python(sandbox: Sandbox, toolchain: Toolchain, venv_dir: str = VENV_DIR
     # The layout follows the sandbox's root, not the host: a Docker root (``/work``) holds a
     # posix venv even when SCIO runs on Windows (same rule as ``resolve_under``).
     windows_root = len(sandbox.root) > 1 and sandbox.root[1] == ":"
-    rel = rt.venv_python_windows if windows_root else rt.venv_python_posix
+    rel = rt.env_interpreter_windows if windows_root else rt.env_interpreter_posix
+    if rel is None:
+        raise RuntimeError(f"the {toolchain.name} profile has no environment interpreter")
     return f"{sandbox.root}/{venv_dir}/{rel}"
 
 
@@ -93,7 +95,8 @@ def ensure_product_env(
     python = venv_python(sandbox, toolchain, venv_dir)
     created = False
     if not sandbox.exists(python):
-        r = sandbox.exec([*rt.venv_argv, f"{sandbox.root}/{venv_dir}"], timeout_s=300)
+        create = rt.env_create_argv or ()
+        r = sandbox.exec([*create, f"{sandbox.root}/{venv_dir}"], timeout_s=300)
         if not r.ok:
             raise RuntimeError(f"could not create the product environment: {r.output[-500:]}")
         created = True

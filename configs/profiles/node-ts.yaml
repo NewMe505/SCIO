@@ -1,0 +1,71 @@
+# Toolchain profile: node-ts (ADR 0014, M10). Data only; the TAP parsers live in
+# scio/toolchain/node_ts.py. Node >= 22.18 runs TypeScript directly (type stripping), so the
+# walking skeleton tests with the built-in runner and no download; typescript, eslint and
+# npm audit form the quality bar and report "skipped: tool absent" until the product's own
+# devDependencies are installed (the same rule as the python profile's coverage and build).
+name: node-ts
+source_suffixes: [".ts", ".tsx", ".mts", ".cts"]
+test_dirs: ["tests/", "test/", "__tests__/"]
+test_file_suffixes: [".test.ts", ".spec.ts"]
+cache_excludes: ["node_modules", "dist", "coverage", ".eslintcache", "*.tsbuildinfo"]
+dependency_files:
+  - package.json
+  - package-lock.json
+  - pnpm-lock.yaml
+  - yarn.lock
+  - tsconfig.json
+  - pyproject.toml
+  - requirements.txt
+  - go.mod
+  - Cargo.toml
+env: { NODE_NO_WARNINGS: "1", CI: "1" }
+detect: { markers: [package.json, tsconfig.json], all_of: true }
+test:
+  runner: node:test
+  argv: [node, --test, --test-reporter=tap]
+  default_targets: ["tests/**/*.test.ts"]   # Node expands the glob itself (no shell)
+  path_glob: "{path}/**/*.test.ts"          # a directory target; a *.test.ts path is positional
+  filter_flag: "--test-name-pattern"
+  exit_codes: { passed: [0], no_tests: [], broken: [9] }   # 9: bad option
+  no_tests_patterns: ["# tests 0"]          # no matching files exits 0 with an empty plan
+  selector_help: "test file paths like tests/x.test.ts, or --test-name-pattern regexes"
+  filter_help: "node --test-name-pattern filter"
+lint:
+  argv: [node, node_modules/eslint/bin/eslint.js, --format, unix]
+  clean_exit_codes: [0, 127]
+  findings_exit_codes: [1]
+  absent_patterns: ["Cannot find module"]   # eslint not installed; not the agent's problem
+syntax_check_argv: [node, --check]          # parses one file, TypeScript included
+script_argv: [node]
+acceptance_dir: tests/acceptance
+skeleton_command: "node src/main.ts --version"
+command_words: [node, npm, npx]
+checks:
+  - name: typecheck
+    argv: [node, node_modules/typescript/bin/tsc, --noEmit]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: ["Cannot find module"]
+    timeout_s: 600
+  - name: build
+    argv: [node, node_modules/typescript/bin/tsc, -p, tsconfig.build.json, --outDir, .scio/sandbox/dist]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: ["Cannot find module"]
+    timeout_s: 600
+  - name: audit
+    argv: [npm, audit, --audit-level=high, --omit=dev]
+    pass_exit_codes: [0]
+    skip_exit_codes: [127]
+    skip_patterns: ["ENOLOCK", "ENOTFOUND", "EAI_AGAIN"]
+    timeout_s: 600
+runtime:
+  env_create_argv: null                     # npm install creates node_modules
+  env_dir: node_modules
+  env_marker: { posix: node_modules/.package-lock.json, windows: node_modules/.package-lock.json }
+  env_interpreter: null                     # node is the host runtime; nothing is rewritten
+  install_argv: [npm, install, --no-audit, --no-fund, --save]
+  index_allowlist: [registry.npmjs.org]
+  app_argv: [node]
+  app_default_target: src/main.ts
+  test_tools: []
