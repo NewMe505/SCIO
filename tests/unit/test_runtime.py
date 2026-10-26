@@ -224,3 +224,40 @@ def test_run_app_reports_an_exiting_command_and_refuses_remote_urls(tmp_path: Pa
     assert "exited 0" in out and "usage" in out.lower()
     with pytest.raises(ToolError, match="local"):
         run_app(sb, RunAppInput(module="http.server", health_url="http://example.com"), ctx)
+
+
+def test_node_ts_environment_is_node_modules_created_by_the_first_install(tmp_path: Path) -> None:
+    """M10: a stack without an interpreter of its own. Nothing is created up front, nothing is
+    rewritten, no ``.pth``; the first ``npm install`` makes ``node_modules`` and the approved
+    packages go in through the network-open call."""
+    from scio.aci.runtime import env_interpreter, env_marker
+    from scio.toolchain import node_ts_toolchain
+
+    sb = RecordingSandbox(tmp_path)
+    tc = node_ts_toolchain()
+    assert env_interpreter(sb, tc) is None
+    assert env_marker(sb, tc).endswith("node_modules/.package-lock.json")
+    summary = ensure_product_env(sb, tc, ())
+    assert summary.startswith("product environment not needed yet at node_modules")
+    assert sb.calls == [] and sb.python is None
+    summary = ensure_product_env(sb, tc, ("zod@^3", "pino"))
+    assert summary.startswith("product environment created at node_modules, installed zod@^3, pino")
+    assert "registry.npmjs.org" in summary
+    argv, network = sb.calls[-1]
+    assert argv[:2] == ["npm", "install"] and argv[-2:] == ["zod@^3", "pino"] and network is True
+    assert len(sb.calls) == 1 and not list(tmp_path.rglob(HOST_PTH))
+    ctx = ToolContext(toolchain=tc, approved=("@scope/Thing", "zod"))
+    assert (
+        ctx.is_approved("@scope/thing@^2")
+        and ctx.is_approved("zod@3.1")
+        and not ctx.is_approved("left-pad")
+    )
+    out = install_deps(sb, InstallDepsInput(packages=["zod@^3"]), ctx)
+    assert out.startswith("installed zod@^3") and sb.calls[-1][0][:2] == ["npm", "install"]
+
+
+def test_normalise_package_handles_npm_specs() -> None:
+    assert normalise_package("zod@^3.22") == "zod"
+    assert normalise_package("@types/node@22") == "@types/node"
+    assert normalise_package("@Scope/Pkg") == "@scope/pkg"
+    assert normalise_package("left-pad") == "left-pad"

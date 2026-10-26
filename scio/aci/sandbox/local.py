@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,11 +22,35 @@ from scio.aci.sandbox.base import ExecResult, Limits, resolve_under
 
 log = logging.getLogger(__name__)
 
+INTERPRETER_WORD = "python"
+"""The profile word the sandbox rewrites to the product environment's interpreter."""
+
 
 def _text(data: str | bytes | None) -> str:
     if data is None:
         return ""
     return data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+
+
+def resolve_command(argv: Sequence[str], interpreter: str | None) -> list[str]:
+    """What the host actually spawns for a profile command.
+
+    ``python`` becomes the product environment's interpreter once it exists, else the one
+    running SCIO, never whatever is on PATH. On Windows a bare command word (``npm``,
+    ``npx``) is resolved through PATH first, because ``CreateProcess`` does not try the
+    ``.cmd`` shims npm ships and Python would report "command not found" (I-081).
+    """
+    argv = list(argv)
+    if not argv:
+        return argv
+    head = argv[0]
+    if head == INTERPRETER_WORD:
+        argv[0] = interpreter or sys.executable
+    elif sys.platform == "win32" and Path(head).name == head and not head.lower().endswith(".exe"):
+        found = shutil.which(head)
+        if found:
+            argv[0] = found
+    return argv
 
 
 class LocalSandbox:
@@ -63,11 +88,7 @@ class LocalSandbox:
         network: bool | None = None,
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
-        argv = list(argv)
-        if argv and argv[0] == "python":
-            # The product environment once it exists, else the interpreter running SCIO,
-            # never whatever is on PATH.
-            argv[0] = self.python or sys.executable
+        argv = resolve_command(argv, self.python)
         run_env = {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})}
         allow_network = self.limits.network if network is None else network
         if not allow_network:

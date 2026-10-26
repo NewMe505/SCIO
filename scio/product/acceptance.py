@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import socket
 import subprocess
-import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from scio.aci.runtime import healthy
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.sandbox.local import LocalSandbox
+from scio.aci.sandbox.local import INTERPRETER_WORD, LocalSandbox, resolve_command
 from scio.graph.run_context import RunContext
 from scio.state.models import ProductSpec
 
@@ -96,8 +95,7 @@ def start_app(sb: Sandbox, argv: Sequence[str], url: str) -> RunningApp:
     runs: a host subprocess on a local sandbox, a detached process inside any other."""
     argv = list(argv)
     if isinstance(sb, LocalSandbox):
-        if argv[0] == "python":
-            argv[0] = sb.python or sys.executable
+        argv = resolve_command(argv, sb.python)
         proc = subprocess.Popen(
             argv,
             cwd=sb.root,
@@ -108,7 +106,7 @@ def start_app(sb: Sandbox, argv: Sequence[str], url: str) -> RunningApp:
             errors="replace",
         )
         return RunningApp(argv, url, _proc=proc)
-    if argv[0] == "python" and sb.python:
+    if argv[0] == INTERPRETER_WORD and sb.python:
         argv[0] = sb.python
     quoted = " ".join(_sh_quote(a) for a in argv)
     sb.write_text(f"{sb.root}/{APP_LOG}", "")
