@@ -1,6 +1,7 @@
 """Local subprocess sandbox: tests and development only.
 
-It enforces the wall-clock limit and, on POSIX, address-space and CPU limits. It
+It enforces the wall-clock limit and, on POSIX, a CPU-time limit (not an address-space
+limit: that breaks V8, I-084; ``Limits.memory_mb`` is enforced by Docker). It
 **cannot** turn the network off; ``Limits.network=False`` is recorded but not enforced,
 and a warning is logged once. Use ``docker`` or ``e2b`` for anything untrusted.
 """
@@ -72,9 +73,11 @@ class LocalSandbox:
         return resolve_under(self.root, path)
 
     def _preexec(self) -> None:  # POSIX only; the module does not exist on Windows
+        # CPU time only. RLIMIT_AS capped *virtual* address space, which V8 reserves by the
+        # tens of gigabytes (Node's TypeScript stripper died with "Cannot allocate Wasm
+        # memory" under 2 GB on CI, I-084) while limiting no real memory; the memory cap is
+        # enforced where it means something, by the Docker backend.
         resource: Any = importlib.import_module("resource")
-        mem = self.limits.memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
         cpu = max(1, int(self.limits.timeout_s * max(self.limits.cpus, 0.1)))
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
 

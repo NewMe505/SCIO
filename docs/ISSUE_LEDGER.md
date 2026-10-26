@@ -682,3 +682,11 @@ Template:
 - Fix: the profile's `syntax_check_argv` runs `module.stripTypeScriptTypes(source, {mode: "strip"})` on the file (parses exactly as the loader will, executes nothing; a syntax error and a non-erasable construct both exit 1). The scripted store uses an explicit field; the scaffold's `tsconfig.json` already sets `erasableSyntaxOnly` so `tsc` agrees once installed
 - Sweep: `grep -rn "constructor(" evals/product_scripts_node.py scio/product/scaffold.py` finds no other parameter property; the planner prompt v2 and ADR 0014 say "erasable syntax only". Guard: `test_cli_skeleton_runs_tests_and_lints_offline` feeds the gate a parameter property and expects a refusal
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-084 · The local sandbox's `RLIMIT_AS` killed Node's TypeScript stripper on Linux: "Cannot allocate Wasm memory for new instance"
+- Found: 2026-10-26 · M10 · PR #52's first CI run: the three Node tests (`test_scaffold_node_ts.py` twice, `test_same_spec_builds_in_both_stacks[node-ts]`) failed on `ubuntu-latest` with `RangeError: WebAssembly.Instance(): Out of memory` from `node:internal/deps/amaro` while every `.ts` file loaded; green on the Windows dev machine
+- Symptom: the pattern of I-074 and I-080 once more (green here, red there), this time from a limit that exists only on POSIX
+- Root cause: `LocalSandbox._preexec` set `RLIMIT_AS` to `Limits.memory_mb` (2 GB). That caps *virtual* address space; V8 reserves tens of gigabytes of it (pointer compression cage, Wasm memory) while using little real memory, so the stripper's Wasm instance could not be created. Windows has no `resource` module, so the dev machine never applied the limit
+- Fix: the local sandbox keeps the CPU-time and wall-clock limits and drops `RLIMIT_AS`; `Limits.memory_mb` is enforced by the Docker backend (`--memory`), where it measures resident memory
+- Sweep: `grep -rn "RLIMIT" scio` finds only `_preexec`; `docker.py` passes `--memory` (unchanged). Guard: the Node tests run in CI's `checks` job on Linux (`setup-node` 22), which is where the limit applied
+- Resolved: 2026-10-26 · Status: resolved
