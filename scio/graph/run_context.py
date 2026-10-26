@@ -7,7 +7,7 @@ sandbox, the effect log, the artifact store and the optional GitHub client.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from scio.aci.runtime import ToolContext
@@ -23,7 +23,7 @@ from scio.loop.exits import LoopLimits
 from scio.prompt.registry import PromptRegistry
 from scio.settings import Settings, get_settings
 from scio.state.models import Budget
-from scio.toolchain import Toolchain, get_toolchain
+from scio.toolchain import Toolchain, detect_toolchain, get_toolchain
 
 T0_TOOL_CAP = 10
 
@@ -60,6 +60,16 @@ def product_sandbox_backend(settings: Settings) -> tuple[str, str]:
     return "local", (
         f"sandbox: local; {why_not}, so the network and the registry allowlist are not enforced"
     )
+
+
+def resolve_toolchain(settings: Settings, root: Path | str | None = None) -> Toolchain:
+    """The profile a run starts with: ``settings.toolchain`` when it names one; for ``auto``
+    the one detected from ``root``'s marker files, else ``python`` (M10, ADR 0014). A clone
+    or a product's ``PRODUCT.md`` may still re-point it through ``RunContext.adopt_toolchain``."""
+    if settings.toolchain != "auto":
+        return get_toolchain(settings.toolchain)
+    detected = detect_toolchain(root) if root is not None and Path(root).is_dir() else None
+    return get_toolchain(detected or "python")
 
 
 def make_sandbox(settings: Settings, sandbox_root: Path | str, limits: Limits) -> Sandbox:
@@ -132,7 +142,7 @@ class RunContext:
             )
             harness = Harness.from_settings(settings, budget=guard)
         work = Path(work_dir) if work_dir else Path(".scio")
-        toolchain = get_toolchain(settings.toolchain)
+        toolchain = resolve_toolchain(settings, sandbox_root)
         sandbox = sandbox or make_sandbox(
             settings,
             sandbox_root,
@@ -171,6 +181,19 @@ class RunContext:
             toolchain=toolchain,
             budget_from_tier=budget_limits is None,
         )
+
+    def adopt_toolchain(self, toolchain: Toolchain) -> bool:
+        """Switch the run to ``toolchain`` (a clone's detected stack, a product's declared
+        one): the profile itself, the sandbox's registry allowlist and the escalation
+        policy's test directories. Returns True when something changed."""
+        if toolchain.name == self.toolchain.name:
+            return False
+        self.toolchain = toolchain
+        self.sandbox.limits = replace(
+            self.sandbox.limits, network_allowlist=tuple(toolchain.runtime().index_allowlist)
+        )
+        self.escalation = replace(self.escalation, test_dirs=toolchain.test_dirs)
+        return True
 
     def apply_tier_budgets(self, tier: str) -> None:
         """Resize the budget, the loop limits and the harness guard for ``tier`` (I-053).

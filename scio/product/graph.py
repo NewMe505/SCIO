@@ -29,6 +29,7 @@ from scio.harness.types import Message
 from scio.product.scaffold import progress_json, scaffold_for
 from scio.product.spec import normalise_spec, render_product_md, stack_menu
 from scio.state.models import InterviewOutput, ProductSpecOutput, ProductState, Role
+from scio.toolchain import get_toolchain
 
 Node = Callable[[ProductState], dict[str, Any]]
 MAX_REVISIONS = 2
@@ -196,6 +197,7 @@ def bootstrap(ctx: RunContext) -> Node:
         sb = ctx.sandbox
         spec = state.spec
         assert spec is not None
+        ctx.adopt_toolchain(get_toolchain(spec.stack))  # the spec's stack, not the default (M10)
         tc = ctx.toolchain
         entries: list[Any] = []
 

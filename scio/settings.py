@@ -49,8 +49,11 @@ class Settings(BaseSettings):
     effects_path: Path = Path(".scio/effects.sqlite")
     """Durable log of idempotent side effects, keyed by hash(thread_id, node, intent)."""
 
-    toolchain: str = "python"
-    """Toolchain profile for the target repository (ADR 0009); ``python`` until M10 adds more."""
+    toolchain: str = "auto"
+    """Toolchain profile for the target repository (ADR 0009, ADR 0014): ``auto`` detects it
+    from the repository's marker files (``pyproject.toml`` -> ``python``, ``package.json`` and
+    ``tsconfig.json`` -> ``node-ts``) and falls back to ``python``; a profile name forces it.
+    A product's ``PRODUCT.md`` names its stack and wins inside ``scio new`` and ``scio build``."""
 
     sandbox_backend: Literal["local", "docker", "e2b"] = "local"
     """``local`` is for tests and dev only: it cannot disable the network. Read by

@@ -72,11 +72,14 @@ def get_toolchain(name: str) -> Toolchain:
         raise KeyError(f"unknown toolchain profile {name!r}; known: {known}") from None
 
 
-def detect_toolchain(root: Path | str) -> str | None:
+def detect_toolchain(root: Path | str, exists: Callable[[str], bool] | None = None) -> str | None:
     """The profile whose marker files ``root`` holds, or None. A profile that needs every
     marker (``package.json`` and ``tsconfig.json``) is checked before one that needs any, so
-    a TypeScript repository with a stray ``requirements.txt`` is still ``node-ts``."""
+    a TypeScript repository with a stray ``requirements.txt`` is still ``node-ts``.
+    ``exists`` answers for a marker's repository-relative path (a sandbox's view, whose root
+    may not be a host path); the default looks on the host under ``root``."""
     base = Path(root)
+    present_fn = exists or (lambda rel: (base / rel).exists())
     profiles = [(name, loader().detect) for name, loader in _REGISTRY.items()]
     ordered = sorted(
         (p for p in profiles if p[1] is not None),
@@ -84,7 +87,7 @@ def detect_toolchain(root: Path | str) -> str | None:
     )
     for name, detect in ordered:
         assert detect is not None
-        present = [(base / m).exists() for m in detect.markers]
+        present = [present_fn(m) for m in detect.markers]
         if all(present) if detect.all_of else any(present):
             return name
     return None

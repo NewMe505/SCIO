@@ -12,6 +12,7 @@ from scio.graph.effects import run_effect
 from scio.graph.nodes.common import fact, git_out, slug
 from scio.graph.run_context import RunContext
 from scio.state.models import Role, SCIOState
+from scio.toolchain import detect_toolchain, get_toolchain
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
@@ -40,6 +41,11 @@ def prepare_repo(ctx: RunContext) -> Node:
                 r = sb.exec(["git", "clone", "-q", state.task.repo_url, "."], timeout_s=300)
                 if not r.ok:
                     raise RuntimeError(f"git clone failed: {r.stderr.strip()[:300]}")
+            # The clone says what stack it is (M10): adopt its profile unless one was forced.
+            if ctx.settings.toolchain == "auto":
+                detected = detect_toolchain(sb.root, lambda rel: sb.exists(f"{sb.root}/{rel}"))
+                if detected is not None:
+                    ctx.adopt_toolchain(get_toolchain(detected))
             # Repo-local excludes (not committed): never let test caches into a checkpoint.
             sb.write_text(f"{sb.root}/.git/info/exclude", ctx.toolchain.git_exclude_text())
             sb.exec(["git", "config", "user.name", "scio"], timeout_s=30)

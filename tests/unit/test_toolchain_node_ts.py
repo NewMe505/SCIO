@@ -216,3 +216,31 @@ def test_detection_by_marker_files(tmp_path: Path) -> None:
     assert detect_toolchain(tmp_path) == "node-ts"  # both markers win over a stray requirements.txt
     (tmp_path / "requirements.txt").unlink()
     assert detect_toolchain(str(tmp_path)) == "node-ts"
+
+
+def test_run_context_detects_the_stack_unless_one_is_forced(tmp_path: Path) -> None:
+    """M10: ``Settings.toolchain=auto`` detects from the root's markers; a name wins; adopting
+    another profile re-points the sandbox's registry allowlist and the escalation test dirs."""
+    from scio.graph.run_context import RunContext, resolve_toolchain
+    from scio.settings import Settings
+
+    auto = Settings(provider_override="fake", toolchain="auto")
+    assert resolve_toolchain(auto, tmp_path).name == "python"  # nothing to detect
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text("{}", encoding="utf-8")
+    assert resolve_toolchain(auto, tmp_path).name == "node-ts"
+    assert (
+        resolve_toolchain(Settings(provider_override="fake", toolchain="python")).name == "python"
+    )
+    ctx = RunContext.create(thread_id="t", sandbox_root=tmp_path, settings=auto, work_dir=tmp_path)
+    try:
+        assert ctx.toolchain.name == "node-ts"
+        assert ctx.sandbox.limits.network_allowlist == ("registry.npmjs.org",)
+        assert ctx.escalation.test_dirs == ("tests/", "test/", "__tests__/")
+        assert ctx.adopt_toolchain(python_toolchain()) is True
+        assert ctx.toolchain.name == "python"
+        assert "pypi.org" in ctx.sandbox.limits.network_allowlist
+        assert ctx.escalation.test_dirs == ("tests/", "test/")
+        assert ctx.adopt_toolchain(python_toolchain()) is False  # already there
+    finally:
+        ctx.close()
