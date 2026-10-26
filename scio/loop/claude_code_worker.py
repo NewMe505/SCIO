@@ -48,12 +48,19 @@ from scio.toolchain import Toolchain
 READ_TOOLS = ("Read", "Glob", "Grep")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 DEFAULT_MAX_TURNS = 30
+SUMMARY_MAX_TURNS = 3
+"""Turns for the typed summary on ``--resume``. Claude Code delivers ``--json-schema`` output
+through a ``StructuredOutput`` tool call and answers a payload that misses the schema with a
+tool error the model must act on in a further turn; with one turn that retry was impossible
+and the call ended ``error_max_turns`` (I-077, the first live http milestone)."""
 
 BACKEND_NOTE = (
     "\n\nThis turn runs inside Claude Code. Its built-in tools replace the ones named above: "
     "Grep and Glob for repo_search, Read for view_file, Edit and Write for edit_file, and "
-    "Bash for run_tests ({test_cmd}). Keep every path inside the repository root, never run "
-    "git commands that change history, and stop when the tests you were asked for pass."
+    "Bash for run_tests ({test_cmd}). Dependencies are installed by the orchestrator from the "
+    "product's approved list before your turn; never install packages yourself, ask for a "
+    "design decision instead. Keep every path inside the repository root, never run git "
+    "commands that change history, and stop when the tests you were asked for pass."
 )
 
 
@@ -64,6 +71,11 @@ def allowed_tools_for(tool_names: tuple[str, ...], toolchain: Toolchain) -> list
         rules += READ_TOOLS
     if "edit_file" in tool_names:
         rules += EDIT_TOOLS
+    if "delete_file" in tool_names:
+        rules += ["Bash(rm *)"]  # Claude Code has no delete tool; rm inside the sandbox root
+    if "run_app" in tool_names:
+        rules += [f"Bash({' '.join(toolchain.runtime().app_argv)} *)"]
+    # install_deps has no rule on purpose: the install phase runs outside the turn (M9)
     if "run_tests" in tool_names:
         test_bin = toolchain.test_argv(filter=None, path=None)[0]
         rules += [f"Bash({test_bin} *)", f"Bash(python -m {toolchain.test_runner} *)"]
@@ -293,7 +305,7 @@ class ClaudeCodeWorker:
                 "--tools",
                 "",
                 "--max-turns",
-                "1",
+                str(SUMMARY_MAX_TURNS),
                 "--model",
                 model,
                 "--json-schema",
@@ -301,7 +313,18 @@ class ClaudeCodeWorker:
             ]
             self.calls.append(list(argv))
             res = self._run(argv, cwd=self.sandbox.root, stdin=ask, timeout_s=self.timeout_s)
-            data = parse_result(res)
+            try:
+                data = parse_result(res)
+            except FatalError as exc:
+                if "error_max_turns" not in str(exc):
+                    raise
+                # Claude Code's schema check refused every attempt within the turn cap
+                # (I-077): re-ask once with the schema's required keys spelled out.
+                last_error = (
+                    "the structured output never matched the schema within the turn cap; "
+                    f"required keys: {', '.join(schema.get('required', []))}"
+                )
+                continue
             self._account(data, model, tags)
             payload = data.get("structured_output")
             text = json.dumps(payload) if payload is not None else str(data.get("result") or "")

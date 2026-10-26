@@ -5,7 +5,7 @@ source_suffixes: [".py"]
 test_dirs: ["tests/", "test/"]
 test_file_prefix: "test_"
 # Written to .git/info/exclude (directories get a trailing slash) and used as copytree ignores.
-cache_excludes: ["__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache"]
+cache_excludes: ["__pycache__", "*.pyc", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".coverage*", "htmlcov"]  # the last two: coverage artifacts (M9)
 dependency_files:
   - pyproject.toml
   - requirements.txt
@@ -34,3 +34,37 @@ lint:
   clean_exit_codes: [0, 127]   # 127: the linter is not installed; not the agent's problem
   findings_exit_codes: [1]
 script_argv: [python]
+# The product-ready quality bar (ADR 0007 decision 5), run by `integrate` after the suite and
+# lint (M9). A check whose tool is absent is reported as skipped, never counted as a pass; a
+# product's own CI installs the tools. Outputs go under .scio/sandbox/, which is git-ignored.
+checks:
+  - name: coverage
+    argv: [python, -m, pytest, -q, -p, "no:cacheprovider", --no-header, --cov, --cov-report=term-missing:skip-covered, --cov-fail-under=80]
+    pass_exit_codes: [0]
+    skip_exit_codes: [4]        # pytest usage error: pytest-cov is not installed
+    skip_patterns: ["unrecognized arguments: --cov", "No module named"]
+    timeout_s: 600
+  - name: build
+    argv: [python, -m, build, --wheel, --outdir, .scio/sandbox/dist]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: ["No module named build"]
+    timeout_s: 600
+  - name: audit
+    argv: [python, -m, pip_audit, --progress-spinner, "off"]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: ["No module named pip_audit"]
+    timeout_s: 600
+# Runtime (M9): the product's own environment, the install phase and how the app is started.
+# `python` in every argv is rewritten by the sandbox to the product environment's interpreter
+# once `ensure_product_env` has created it. The venv is plain (no --system-site-packages: the
+# base interpreter's packages differ per machine, I-074); on a local sandbox a .pth file makes
+# SCIO's own environment visible so `test_tools` need no download, elsewhere they are installed.
+runtime:
+  venv_argv: [python, -m, venv]
+  venv_python: { posix: bin/python, windows: Scripts/python.exe }
+  install_argv: [python, -m, pip, install, --disable-pip-version-check, --no-input, --quiet]
+  index_allowlist: [pypi.org, files.pythonhosted.org]
+  app_argv: [python, -m]
+  test_tools: ["pytest>=8.3", "pytest-cov>=6.0"]

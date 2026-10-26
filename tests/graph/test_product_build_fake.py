@@ -426,6 +426,10 @@ def test_integration_checks_are_ground_truth_on_the_milestone_branch(tmp_path: P
     try:
         text, ok = integration_checks(ctx)
         assert ok and "[lint] clean" in text and "[tests] passed" in text
+        # M9: the profile's quality bar runs after tests and lint; an absent tool is a skip
+        for name in ("coverage", "build", "audit"):
+            line = next(ln for ln in text.splitlines() if ln.startswith(f"[{name}]"))
+            assert " passed" in line or " skipped: tool absent" in line, line
         (repo / "tests" / "test_broken.py").write_text(
             "def test_broken():\n    assert 1 == 2\n", encoding="utf-8", newline="\n"
         )
@@ -586,3 +590,47 @@ def test_cli_build_status_and_report(
     out = capsys.readouterr().out
     assert f"build thread build-{PRODUCT}-m2" in out and "current M2" in out
     assert "P3 a1 T1 passed" in out and "PAUSED" in out
+
+
+# ---------- M9: a dependency and an HTTP server through the whole loop ----------
+
+
+def test_http_product_with_a_dependency_builds_and_passes_black_box_acceptance(
+    tmp_path: Path,
+) -> None:
+    """M9 done criterion on the Fake: ``todo_api`` approves ``pyyaml`` (present offline through
+    the host's packages), the install phase creates the product environment, P1 and P2 run
+    through the task graph, and ``integrate`` starts the server, runs the black-box acceptance
+    tests against it, and merges the milestone."""
+    from evals.product_scripts_http import DEPENDENCY
+
+    harness = _bootstrap(tmp_path, ScriptedResponder(product="todo_api", milestone_size=2))
+    repo = tmp_path / "product"
+    md = (repo / "PRODUCT.md").read_text(encoding="utf-8")
+    assert "- kind: http" in md and f"- {DEPENDENCY}" in md
+    assert (repo / "tests" / "acceptance" / "test_acceptance.py").is_file()
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-4:]
+        s = out.state
+        assert [(r.feature_id, r.status) for r in s.feature_runs] == [
+            ("P1", "passed"),
+            ("P2", "passed"),
+        ]
+        assert any(
+            "product environment created" in e.text and DEPENDENCY in e.text for e in s.ledger
+        )
+        # the ledger says which sandbox the build ran in and what a local one does not enforce
+        notices = [e.text for e in s.ledger if e.text.startswith("sandbox: local")]
+        assert notices and "not enforced" in notices[0]
+        assert s.integration and "[acceptance] passed (http http://127.0.0.1:" in s.integration
+        assert "[tests] passed" in s.integration and "[lint] clean" in s.integration
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    assert (repo / "todo_api" / "store.py").read_text(encoding="utf-8").startswith('"""YAML')
+    assert (repo / ".scio" / "sandbox" / "venv").is_dir()
+    assert _git(repo, "status", "--porcelain") == ""  # the black-box run left no junk behind
+    _ci_green(repo)

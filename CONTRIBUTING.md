@@ -26,6 +26,11 @@ CI checks docs: links, runnable examples, architecture diagram vs. the compiled 
 - docs checks
 - regression eval suite
 
+## Tests and the environment
+- `Settings` is environment-backed. A test of a `Settings` field constructs `Settings(field=...)` explicitly and never relies on the default: CI exports values (`SCIO_PROVIDER_OVERRIDE=fake`, `SCIO_PRODUCT_SANDBOX_BACKEND=local`) that a bare `Settings()` inherits (I-080).
+- A test that depends on a tool being importable asserts where it comes from (`__file__` under the expected environment), not only that it imports; the dev machine's global packages are not the runner's (I-074).
+- Run the suite with `uv run python -m pytest`: some machines' application-control policies block the venv's `pytest.exe` launcher (I-075).
+
 ## Continuous improvement protocols
 These three protocols are mandatory for humans and agents. `CLAUDE.md` restates them for AI sessions.
 

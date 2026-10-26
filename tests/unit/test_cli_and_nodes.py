@@ -75,3 +75,16 @@ def test_diff_stat_counts_untracked_files_as_changes(tmp_path) -> None:
     (repo / "a.py").write_text("x = 2\n", encoding="utf-8", newline="\n")
     stat = diff_stat(sb, base)
     assert "a.py" in stat and stat.endswith(" new file: tests/test_new.py")
+
+
+def test_python_m_scio_is_the_console_entry_point() -> None:
+    """``python -m scio`` must keep working: the venv's ``scio.exe`` launcher is blocked by
+    Application Control on some machines (I-075)."""
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "-m", "scio", "--help"], capture_output=True, text=True, timeout=120
+    )
+    assert r.returncode == 0, r.stderr
+    assert "usage: scio" in r.stdout and "build" in r.stdout

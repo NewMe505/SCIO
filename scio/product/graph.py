@@ -446,6 +446,19 @@ def run_product(ctx: RunContext, *, prompt: str, gh_repo: str | None = None) -> 
     return _outcome(raw)
 
 
+def product_target_dir(checkpoint_dsn: str, thread_id: str) -> str | None:
+    """The target directory a product thread was started with, from its checkpoint; None
+    when the thread has none. ``scio new --thread X`` without ``--dir`` resumes there instead
+    of in a default directory (I-076: the first live http bootstrap landed under
+    ``.scio/products/<thread>`` because the resume calls omitted ``--dir``)."""
+    config = {"configurable": {"thread_id": thread_id}}
+    with open_checkpointer(checkpoint_dsn) as saver:
+        graph: Any = build_product_graph(None).compile(checkpointer=saver)
+        values = graph.get_state(config).values
+    target = values.get("target_dir") if values else None
+    return str(target) if target else None
+
+
 def resume_product(ctx: RunContext, decision: str | None) -> ProductOutcome:
     config = {"configurable": {"thread_id": ctx.thread_id}}
     with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:

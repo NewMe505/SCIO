@@ -63,19 +63,26 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
         ),
         f"{pkg}/__init__.py": f'"""{spec.title}."""\n\n__version__ = "0.1.0"\n',
         f"{pkg}/__main__.py": (f"from {pkg}.cli import main\n\nraise SystemExit(main())\n"),
-        f"{pkg}/cli.py": (
-            '"""Command line entry point: the walking skeleton."""\n\n'
-            "import argparse\n\n"
-            f"from {pkg} import __version__\n\n\n"
-            "def main(argv=None):\n"
-            f'    parser = argparse.ArgumentParser(prog="{pkg}")\n'
-            '    parser.add_argument("--version", action="store_true", help="print the version")\n'
-            "    args = parser.parse_args(argv)\n"
-            "    if args.version:\n"
-            "        print(__version__)\n"
-            "        return 0\n"
-            "    parser.print_usage()\n"
-            "    return 2\n"
+        f"{pkg}/cli.py": _http_cli(pkg) if spec.app.kind == "http" else _cli(pkg),
+        # Packages, so a test module may share its basename with one in another directory
+        # (pytest's import-file-mismatch error otherwise, M9).
+        "tests/__init__.py": "",
+        "tests/acceptance/__init__.py": "",
+        "tests/acceptance/conftest.py": (
+            '"""Black-box acceptance tests: scio build runs them against the started app."""\n\n'
+            "import os\n\n"
+            "import pytest\n\n\n"
+            "@pytest.fixture\n"
+            "def app_url():\n"
+            '    url = os.environ.get("APP_URL")\n'
+            "    if not url:\n"
+            '        pytest.skip("APP_URL not set: scio build starts the app for these tests")\n'
+            "    return url\n"
+        ),
+        "tests/acceptance/test_acceptance.py": (
+            _http_acceptance(pkg, spec.app.health_path)
+            if spec.app.kind == "http"
+            else _cli_acceptance(pkg)
         ),
         "tests/conftest.py": (
             "import pathlib\nimport sys\n\n"
@@ -130,6 +137,104 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             "walking skeleton, CI, smoke test.\n"
         ),
     }
+
+
+def _cli(pkg: str) -> str:
+    return (
+        '"""Command line entry point: the walking skeleton."""\n\n'
+        "import argparse\n\n"
+        f"from {pkg} import __version__\n\n\n"
+        "def main(argv=None):\n"
+        f'    parser = argparse.ArgumentParser(prog="{pkg}")\n'
+        '    parser.add_argument("--version", action="store_true", help="print the version")\n'
+        "    args = parser.parse_args(argv)\n"
+        "    if args.version:\n"
+        "        print(__version__)\n"
+        "        return 0\n"
+        "    parser.print_usage()\n"
+        "    return 2\n"
+    )
+
+
+def _http_cli(pkg: str) -> str:
+    """A walking skeleton that serves: ``serve --port N`` answers the health path (M9)."""
+    return (
+        '"""Command line entry point: the walking skeleton with a health endpoint."""\n\n'
+        "import argparse\n"
+        "import json\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n\n"
+        f"from {pkg} import __version__\n\n"
+        'HEALTH_PATH = "/health"\n\n\n'
+        "class Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path == HEALTH_PATH:\n"
+        '            body = json.dumps({"status": "ok", "version": __version__}).encode()\n'
+        "            self.send_response(200)\n"
+        '            self.send_header("Content-Type", "application/json")\n'
+        "            self.end_headers()\n"
+        "            self.wfile.write(body)\n"
+        "            return\n"
+        "        self.send_response(404)\n"
+        "        self.end_headers()\n\n"
+        "    def log_message(self, format, *args):\n"
+        "        return\n\n\n"
+        "def serve(port):\n"
+        '    server = HTTPServer(("127.0.0.1", port), Handler)\n'
+        '    print(f"serving on http://127.0.0.1:{port}", flush=True)\n'
+        "    try:\n"
+        "        server.serve_forever()\n"
+        "    except KeyboardInterrupt:\n"
+        "        pass\n"
+        "    finally:\n"
+        "        server.server_close()\n"
+        "    return 0\n\n\n"
+        "def main(argv=None):\n"
+        f'    parser = argparse.ArgumentParser(prog="{pkg}")\n'
+        '    parser.add_argument("--version", action="store_true", help="print the version")\n'
+        '    sub = parser.add_subparsers(dest="cmd")\n'
+        '    run = sub.add_parser("serve", help="start the HTTP server")\n'
+        '    run.add_argument("--port", type=int, default=8000)\n'
+        "    args = parser.parse_args(argv)\n"
+        "    if args.version:\n"
+        "        print(__version__)\n"
+        "        return 0\n"
+        '    if args.cmd == "serve":\n'
+        "        return serve(args.port)\n"
+        "    parser.print_usage()\n"
+        "    return 2\n"
+    )
+
+
+def _cli_acceptance(pkg: str) -> str:
+    return (
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n\n"
+        f"from {pkg} import __version__\n\n"
+        "ROOT = Path(__file__).resolve().parents[2]\n\n\n"
+        "def test_version_command_black_box():\n"
+        "    out = subprocess.run(\n"
+        f'        [sys.executable, "-m", "{pkg}", "--version"],\n'
+        "        cwd=ROOT,\n"
+        "        capture_output=True,\n"
+        "        text=True,\n"
+        "    )\n"
+        "    assert out.returncode == 0\n"
+        "    assert out.stdout.strip() == __version__\n"
+    )
+
+
+def _http_acceptance(pkg: str, health_path: str) -> str:
+    return (
+        "import json\n"
+        "import urllib.request\n\n"
+        f"from {pkg} import __version__\n\n\n"
+        "def test_health_endpoint_black_box(app_url):\n"
+        f'    with urllib.request.urlopen(app_url + "{health_path}", timeout=5) as resp:\n'
+        "        assert resp.status == 200\n"
+        "        body = json.loads(resp.read())\n"
+        '    assert body["status"] == "ok" and body["version"] == __version__\n'
+    )
 
 
 def scaffold_for(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:

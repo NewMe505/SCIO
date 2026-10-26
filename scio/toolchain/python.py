@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from scio.state.signatures import error_signature as _python_error_signature
-from scio.toolchain.base import TestOutcome
+from scio.toolchain.base import QualityCheck, Runtime, TestOutcome
 
 PROFILES_DIR = Path(__file__).resolve().parent.parent.parent / "configs" / "profiles"
 
@@ -32,6 +32,17 @@ def failures_only(output: str) -> str:
 
 def has_summary(output: str) -> bool:
     return bool(_SUMMARY_RE.search(output))
+
+
+DEFAULT_RUNTIME = Runtime(
+    venv_argv=("python", "-m", "venv"),
+    venv_python_posix="bin/python",
+    venv_python_windows="Scripts/python.exe",
+    install_argv=("python", "-m", "pip", "install", "--disable-pip-version-check"),
+    index_allowlist=("pypi.org", "files.pythonhosted.org"),
+    app_argv=("python", "-m"),
+    test_tools=("pytest>=8.3", "pytest-cov>=6.0"),
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,14 @@ class PythonToolchain:
     lint_clean_codes: frozenset[int] = frozenset({0, 127})
     lint_findings_codes: frozenset[int] = frozenset({1})
     script_base_argv: tuple[str, ...] = ("python",)
+    checks: tuple[QualityCheck, ...] = ()
+    runtime_config: Runtime = field(default_factory=lambda: DEFAULT_RUNTIME)
+
+    def quality_checks(self) -> tuple[QualityCheck, ...]:
+        return self.checks
+
+    def runtime(self) -> Runtime:
+        return self.runtime_config
 
     # --- files ---
     def is_source(self, path: str) -> bool:
@@ -162,4 +181,31 @@ def load_python_profile(path: Path | None = None) -> PythonToolchain:
         lint_clean_codes=frozenset(lint["clean_exit_codes"]),
         lint_findings_codes=frozenset(lint["findings_exit_codes"]),
         script_base_argv=tuple(data["script_argv"]),
+        checks=tuple(
+            QualityCheck(
+                name=str(c["name"]),
+                argv=tuple(str(a) for a in c["argv"]),
+                pass_exit_codes=frozenset(c.get("pass_exit_codes", [0])),
+                skip_exit_codes=frozenset(c.get("skip_exit_codes", [])),
+                skip_patterns=tuple(c.get("skip_patterns", [])),
+                timeout_s=int(c.get("timeout_s", 600)),
+            )
+            for c in data.get("checks", [])
+        ),
+        runtime_config=_runtime(data.get("runtime")),
+    )
+
+
+def _runtime(data: dict[str, Any] | None) -> Runtime:
+    if not data:
+        return DEFAULT_RUNTIME
+    python = data.get("venv_python", {})
+    return Runtime(
+        venv_argv=tuple(str(a) for a in data["venv_argv"]),
+        venv_python_posix=str(python.get("posix", "bin/python")),
+        venv_python_windows=str(python.get("windows", "Scripts/python.exe")),
+        install_argv=tuple(str(a) for a in data["install_argv"]),
+        index_allowlist=tuple(str(h) for h in data.get("index_allowlist", [])),
+        app_argv=tuple(str(a) for a in data["app_argv"]),
+        test_tools=tuple(str(t) for t in data.get("test_tools", [])),
     )

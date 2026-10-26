@@ -24,6 +24,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from scio.aci.runtime import ToolContext, ensure_product_env
 from scio.aci.sandbox.base import Sandbox
 from scio.aci.tools import find_commit, git_push, head_sha
 from scio.context.artifacts import ArtifactStore
@@ -32,11 +33,12 @@ from scio.graph.effects import run_effect
 from scio.graph.nodes.common import decision, git_out
 from scio.graph.nodes.common import fact as ledger_fact
 from scio.graph.run import resume_graph, run_graph, thread_started
-from scio.graph.run_context import T0_TOOL_CAP, RunContext
+from scio.graph.run_context import T0_TOOL_CAP, RunContext, product_sandbox_backend
 from scio.harness.budget import BudgetGuard, BudgetLimits, BudgetsConfig
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
 from scio.loop.exits import LoopLimits
+from scio.product.acceptance import run_acceptance
 from scio.product.progress import (
     PRODUCT_MD,
     PROGRESS_PATH,
@@ -156,6 +158,14 @@ def total_usd(state: ProductBuildState) -> float:
     return round(state.budgets.usd_used + sum(r.usd for r in state.feature_runs), 4)
 
 
+def product_env(ctx: RunContext, spec: ProductSpec) -> str:
+    """Make sure this process runs the product's environment (M9): idempotent, so every node
+    that executes commands calls it; a resumed build has a fresh context without it."""
+    summary = ensure_product_env(ctx.sandbox, ctx.toolchain, tuple(spec.dependencies))
+    ctx.tool_context = ToolContext(toolchain=ctx.toolchain, approved=tuple(spec.dependencies))
+    return summary
+
+
 def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
     """The task graph's context for one feature run: the same sandbox (the product
     repository), effect log and prompts; its own thread, tier-pinned budget, cost ledger and
@@ -192,6 +202,7 @@ def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
         ),
         github=None,
         escalation=ctx.escalation,
+        tool_context=ctx.tool_context,
         tier=tier,
         tier_pin=tier,
         toolchain=ctx.toolchain,
@@ -371,6 +382,15 @@ def load(ctx: RunContext) -> Node:
                 f"{len(progress.milestones)} milestone(s) done"
             )
         )
+        # Which sandbox this build runs in and why (M9): Docker by default when it is there;
+        # a local fallback says what it does not enforce.
+        entries.append(fact(product_sandbox_backend(ctx.settings)[1]))
+        # The install phase (M9): the product environment with the approved dependencies,
+        # network open for this step only; every later command runs inside it, offline.
+        try:
+            entries.append(fact(product_env(ctx, spec)))
+        except RuntimeError as exc:
+            return _halt(ctx, "load_failed", f"install phase: {exc}")
         return {"spec": spec, "phase": "plan", "ledger": entries}
 
     return node
@@ -587,6 +607,7 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
         attempt = previous.attempt + 1 if previous is not None else 1
         thread = f"{ctx.thread_id}-{feat.id.lower()}-a{attempt}"
         tier = feat.tier.value
+        product_env(ctx, spec)  # a resumed process has no environment yet (M9)
         fctx = feature_context(ctx, thread, tier)
         run = FeatureRun(
             feature_id=feat.id,
@@ -715,30 +736,46 @@ def after_feature(state: ProductBuildState) -> Literal["feature", "integrate", "
     return "feature" if state.next_feature() is not None else "integrate"
 
 
-def integration_checks(ctx: RunContext) -> tuple[str, bool]:
-    """Full suite and lint under the toolchain profile on the current checkout."""
+def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tuple[str, bool]:
+    """The quality bar on the current checkout: lint, the full suite, then the profile's
+    quality checks (coverage, build, audit, ...). A check whose tool is absent is reported
+    as skipped and does not fail the milestone; a failing one does (M9)."""
     sb, tc = ctx.sandbox, ctx.toolchain
     lint = sb.exec(tc.lint_argv("."), timeout_s=120)
     findings = tc.lint_findings(lint.exit_code, lint.stdout, lint.stderr)
     tests = sb.exec(tc.test_argv(filter=None, path=None), timeout_s=sb.limits.timeout_s)
     outcome = tc.test_outcome(tests.exit_code, tests.stdout)
     ok = not findings and outcome == "passed"
-    text = "\n".join(
-        [
-            f"[lint] {'clean' if not findings else findings[:1500]}",
-            f"[tests] {outcome}",
-            tests.output[-2500:],
-        ]
-    )
-    return text, ok
+    lines = [
+        f"[lint] {'clean' if not findings else findings[:1500]}",
+        f"[tests] {outcome}",
+        tests.output[-2500:],
+    ]
+    for check in tc.quality_checks():
+        r = sb.exec(list(check.argv), timeout_s=check.timeout_s)
+        result = check.outcome(r.exit_code, r.output)
+        tail = r.output.strip().splitlines()[-1][:200] if r.output.strip() else ""
+        if result == "skipped":
+            lines.append(f"[{check.name}] skipped: tool absent ({' '.join(check.argv[:3])})")
+        elif result == "passed":
+            lines.append(f"[{check.name}] passed" + (f": {tail}" if tail else ""))
+        else:
+            ok = False
+            lines.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-1500:]}")
+    if spec is not None:
+        acceptance, acc_ok = run_acceptance(ctx, spec)
+        lines.append(acceptance)
+        ok = ok and acc_ok
+    return "\n".join(lines), ok
 
 
 def integrate(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         plan = state.milestone
-        assert plan is not None
+        assert plan is not None and state.spec is not None
+        product_env(ctx, state.spec)
         _git(ctx, "checkout", "-q", plan.branch)
-        text, ok = integration_checks(ctx)
+        text, ok = integration_checks(ctx, state.spec)
         entries = [
             fact(
                 f"integration checks on {plan.branch}: {'green' if ok else 'FAILED'}",

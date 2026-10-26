@@ -140,3 +140,40 @@ def test_feature_task_is_the_typed_handoff_to_the_task_graph() -> None:
     assert issue_title(f) == "P2: Feature 2"
     body = issue_body(spec, plan, f, "T1")
     assert "- [ ] c2a" in body and "<!-- scio:feature:P2 -->" in body and "M1" in body
+
+
+def test_walking_skeleton_criteria_never_need_an_installed_entry_point() -> None:
+    """M9: two live planners asked for `todo --version` through a console script that no
+    sandbox installs; the normaliser rewrites such P1 criteria to the module form."""
+    from scio.product.spec import normalise_spec
+    from scio.state.models import ProductSpecOutput
+
+    out = ProductSpecOutput(
+        product_name="tagtodo",
+        title="t",
+        vision="v",
+        users=["u"],
+        features=[
+            ProductFeature(
+                id="P1",
+                description="Walking skeleton with a `tagtodo` console entry point",
+                acceptance=[
+                    "`tagtodo --version` prints exactly `tagtodo 0.1.0` and exits 0",
+                    "`python -m tagtodo --version` prints the version and exits 0",
+                    "The console script is installed with pip install -e .",
+                    "tests/test_smoke.py passes under pytest",
+                ],
+            ),
+            ProductFeature(id="P2", description="add", acceptance=["`tagtodo add x` stores x"]),
+        ],
+        quality_bar=["q"],
+        stack="python",
+    )
+    spec, notes = normalise_spec(out)
+    p1 = spec.features[0]
+    assert p1.acceptance == [
+        "`python -m tagtodo --version` prints the version and exits 0",
+        "tests/test_smoke.py passes under pytest",
+    ]
+    assert any("2 rewritten" in n for n in notes)
+    assert spec.features[1].acceptance == ["`tagtodo add x` stores x"]  # later features untouched

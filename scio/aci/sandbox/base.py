@@ -26,6 +26,9 @@ class Limits:
     memory_mb: int = 2048
     cpus: float = 1.0
     network: bool = False
+    network_allowlist: tuple[str, ...] = ()
+    """Hosts a network-open call (the install phase) may reach; enforced by backends that
+    can (Docker through its egress proxy, M9). Empty means unrestricted when open."""
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,9 @@ class Sandbox(Protocol):
     root: str
     """Absolute path of the working tree *as seen inside the sandbox*."""
     limits: Limits
+    python: str | None
+    """Interpreter that ``python`` in an argv is rewritten to (the product environment once
+    ``ensure_product_env`` created it, M9); None means the backend's default."""
 
     def exec(
         self,
@@ -58,13 +64,22 @@ class Sandbox(Protocol):
         cwd: str | None = None,
         timeout_s: int | None = None,
         env: Mapping[str, str] | None = None,
-    ) -> ExecResult: ...
+        network: bool | None = None,
+    ) -> ExecResult:
+        """Run ``argv``. ``network=True`` opens the network for this one call (the install
+        phase, M9); None keeps ``limits.network``."""
+        ...
 
     def read_text(self, path: str) -> str: ...
 
     def write_text(self, path: str, content: str) -> None: ...
 
     def exists(self, path: str) -> bool: ...
+
+    def delete(self, path: str) -> None:
+        """Remove one file under ``root`` (M9, ``delete_file``). Directories are refused;
+        a missing file is not an error."""
+        ...
 
     def resolve(self, path: str) -> str:
         """Absolute, normalized sandbox path under ``root``; raises ``PathEscapeError``."""

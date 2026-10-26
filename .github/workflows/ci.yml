@@ -10,6 +10,7 @@ permissions:
 
 env:
   SCIO_PROVIDER_OVERRIDE: fake
+  SCIO_PRODUCT_SANDBOX_BACKEND: local  # the Fake CLI tests never probe the runner's daemon
   PYTHONUTF8: "1"
 
 jobs:
@@ -56,3 +57,29 @@ jobs:
           name: api-docs
           path: docs/api
           retention-days: 14
+
+  # The Docker sandbox for real (M9, ADR 0013 decision 10): the runner has a daemon, the dev
+  # machine does not (I-016). Persistent container, internal network, the egress proxy
+  # admitting the registry allowlist only, a product environment inside the container, an
+  # http app started and probed inside it.
+  docker-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SCIO_SANDBOX_DOCKER_IMAGE: scio-sandbox:ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras --group dev
+
+      - name: Build the sandbox image
+        run: docker build -t scio-sandbox:ci -f docker/sandbox.Dockerfile docker
+
+      - name: Docker sandbox live tests
+        run: uv run pytest tests/live/test_docker_live.py -p no:cacheprovider -v -rfEs

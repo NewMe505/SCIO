@@ -134,6 +134,7 @@ Template:
 - Root cause: environment
 - Fix: `tests/live/test_docker_live.py` runs the real `DockerSandbox` (exec, files through the mount, network off, timeout kill, non-zero exit) wherever a Docker daemon is reachable and skips elsewhere. GitHub's ubuntu runners have Docker, so the project's own CI exercises it on every PR from this change on. The E2B half is split out as I-029
 - Sweep: the Docker live test also checks that a timed-out container is actually gone (`docker ps` empty), which the unit test could only assert by command construction
+- Update 2026-10-26 (M9, ADR 0013 decision 10): the live file now covers the persistent container, the internal network, the egress proxy's allowlist, the product environment and an http app inside the container, and git on the mount, in CI's own `docker-live` job; the dev machine still has no daemon, so every Docker change is first run by CI
 - Resolved: 2026-10-10 (Docker) · Status: resolved
 
 ### I-030 · `import scio.prompt` alone was a circular import since M1
@@ -577,3 +578,83 @@ Template:
 - Fix: `coerce_lengths` in `scio/loop/claude_code_worker.py` truncates string fields that exceed their `max_length` (from the model's field constraints) and re-validates locally before any re-ask; a re-ask now only happens for errors that are not length overflows; the re-ask text names the field caps
 - Sweep: `AgentLoop` goes through `structured_call` (API repair loop) where the same overflow would also re-ask; `grep -n "max_length" scio/state/models.py` lists every capped prose field (summary 800, guidance 2800, reasoning 2000, rationale 400/600/800, description 400, vision 1200, notes 400). Guard: `test_worker_trims_overlong_prose_fields_instead_of_failing`
 - Resolved: 2026-10-12 · Status: resolved
+
+### I-071 · A `\n` escape passed through a shell-embedded Python patch became a real newline (recurrence of I-010, I-027)
+- Found: 2026-10-13 · M9 · appending two tests to `tests/unit/test_aci_tools.py` through a `python - <<'EOF'` heredoc whose string literals contained `\n`
+- Symptom: `ruff format` refused the file: `missing closing quote in string literal` at the two lines where `"X = 1\n"` had been written as a quote, a newline and a quote
+- Root cause: pre-flight item 6 says never pass a backslash through a shell-embedded script; the patch did, and the double escaping guessed for the heredoc was wrong. The lint step in the same command caught it before any test ran, which is the mechanical guard from I-027 doing its job
+- Fix: the two lines rewritten with the file edit tool
+- Sweep: the other shell-embedded patches of this milestone (`test_sandbox.py` fake, `backends.py`, `nightly_live.py`) carried no backslashes. Guard: unchanged (lint or import immediately after every shell patch); the rule stands, the habit slipped
+- Resolved: 2026-10-13 · Status: resolved
+
+### I-072 · Three more shell-embedded patches mangled backslashes in one session (I-071 recurred twice within the hour)
+- Found: 2026-10-13 · M9 · `python - <<'EOF'` patches of `scio/product/scaffold.py` and `scio/product/build.py`: the first aborted with a `SyntaxError` inside the patch script, the second failed its anchor assertion because the anchor text contained `\n`, so nothing was written and the work was redone with the file tools
+- Symptom: wasted turns; no corrupted file (every patch asserted its anchors or crashed before writing, and the lint-after-patch rule caught the one that did write, I-071)
+- Root cause: the habit of patching source through a shell heredoc whenever an edit spans several places, against pre-flight item 6, which exists because of exactly this (I-001, I-010, I-027). Double-escaping the backslashes for the heredoc is guesswork; the shell wrapper and the heredoc disagree on when `\n` is a newline
+- Fix: no code change. Rule tightened for the assistant: any patch whose text contains a backslash, a quote-heavy Python literal, or a regex is done with the Edit/Write tools, one edit per site, never through a heredoc; heredocs are for appending prose to Markdown and for short shell lists only
+- Sweep: this session's remaining heredoc patches (ledger and changelog appends, yaml appends) carried no backslashes. Guard: the assistant's project memory records the rule (feedback memory `scio-no-shell-patches`), so it is loaded in every session
+- Resolved: 2026-10-13 · Status: resolved
+
+### I-073 · Two test modules with the same basename broke a product's whole suite (pytest import file mismatch)
+- Found: 2026-10-13 · M9 · the Fake `todo_api` product: P2's scripted coder added `tests/test_todos.py` next to the scaffold's `tests/acceptance/test_todos.py`; every `pytest` run in the repository then failed at collection with `import file mismatch ... use a unique basename`, so verify failed on every iteration and the feature stalled
+- Symptom: a feature that was correct could never pass verify; the debugger's turns could not see the cause because the error names pytest's import rules, not the code
+- Root cause: the scaffold's `tests/` and `tests/acceptance/` were plain directories, so pytest imported both files as top-level module `test_todos`; any product that keeps unit and acceptance tests with matching names hits this
+- Fix: the scaffold ships `tests/__init__.py` and `tests/acceptance/__init__.py`, so modules are package-qualified and basenames may repeat; the scripted acceptance test was also renamed
+- Sweep: `evals/tasks/*/repo/tests` fixtures are single directories (no nesting), unaffected; SCIO's own `tests/` already has `__init__.py` files. Guard: `test_http_product_with_a_dependency_builds_and_passes_black_box_acceptance` keeps a unit test and an acceptance test with related names in the two directories
+- Resolved: 2026-10-13 · Status: resolved
+
+### I-074 · The product environment saw the base interpreter's packages, not SCIO's: CI had no pytest and every Fake product build stalled
+- Found: 2026-10-26 · M9 · PR #50's CI run (38453958604) failed 8 tests that pass on the dev machine: `test_product_env_is_created_once_and_rewrites_python` with `ModuleNotFoundError: No module named 'pytest'` inside the product venv, and the seven `test_product_build_fake.py` builds stalled at `tests (iteration 4, stall 3)` because every verify ran pytest in that venv
+- Symptom: green locally, red on `ubuntu-latest`; the stall messages named the feature, not the environment
+- Root cause: `venv_argv` used `--system-site-packages`. Under `uv run` the "system" of a new venv is the **base** interpreter (`sys._base_executable`), not the dev `.venv` the process runs in. The dev machine's base Python 3.12 happens to have pytest 9.1.1 installed globally, so the product venv could import it there; the runner's uv-managed Python has nothing. The design intent ("the host's test tools are visible") was met by accident on one machine
+- Fix: the venv is plain; on a `LocalSandbox`, `link_host_env` writes `scio_host_env.pth` into the venv's site-packages naming the running process's `sysconfig` purelib, so exactly SCIO's environment (pytest, pytest-cov, pyyaml) is visible and a product's own installs still precede it on `sys.path`; on any other sandbox the new `Runtime.test_tools` (profile `runtime.test_tools`) are installed with the approved packages during the network-open creation call
+- Sweep: `grep -rn "system-site-packages\|system_site" scio evals tests docs configs` found the yaml, `DEFAULT_RUNTIME`, ADR 0013 decision 1, the `todo_api` script docstring and the runtime docstring; all updated. No other place creates an interpreter environment (`grep -rn "venv" scio` shows only `scio/aci/runtime.py`). Guard: the unit test now asserts the `.pth` file exists with the host purelib and that `pytest.__file__` resolves under it; `test_non_local_sandbox_installs_the_test_tools_on_creation` covers the remote branch. Lesson for LESSONS_LEARNED: a test that passes only because of what the dev machine has installed globally is a CI failure waiting to happen; assert *where* a tool comes from, not only that it imports
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-075 · Windows Application Control blocks the venv's `pytest.exe` and `scio.exe` launchers
+- Found: 2026-10-26 · M9 · `uv run pytest` on the dev machine: `error: Failed to spawn: pytest. Caused by: An Application Control policy has blocked this file. (os error 4551)`; `uv run scio` fails the same way, while `uv run ruff`, `mypy` and `pdoc` run
+- Symptom: the CI-equivalent command in CLAUDE.md cannot run as written; any session that follows it stops at pytest
+- Root cause: the two are uv's 46 KB unsigned trampoline launchers (`.venv/Scripts/*.exe`) with per-file hashes; the machine's Application Control (Smart App Control) policy decides per hash and blocks those two. Environment, not code
+- Fix: run the module forms, `uv run python -m pytest` and `uv run python -m scio`; `scio/__main__.py` added so the second exists. CLAUDE.md's CI-equivalent line and the live-run command notes use the module forms. CI (`ubuntu-latest`) is unaffected and keeps `uv run pytest`
+- Sweep: `grep -rn "uv run pytest\|uv run scio" CLAUDE.md CONTRIBUTING.md README.md docs scripts` lists README examples (left for users on ordinary machines) and the workflow (Linux, left). Guard: `test_python_m_scio_is_the_console_entry_point` in `tests/unit/test_cli_and_nodes.py`
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-076 · `scio new --thread X --decision ...` without `--dir` bootstrapped the product under `.scio/products/<thread>`, not where the thread started
+- Found: 2026-10-26 · M9 live http milestone · `scio new --prompt ... --dir <P>` paused for the interview; the two resume calls passed only `--thread` and `--decision`; the approval payload still showed `target_dir: <P>`, but the bootstrap committed into `SCIO/.scio/products/new-http1` and `<P>` stayed empty
+- Symptom: a "done" bootstrap with a commit hash and an empty target directory; `scio build --product <P>` says "run scio new first"
+- Root cause: `_new` computed `target = args.dir or .scio/products/<thread>` on every call and passed it as the sandbox root, so on resume the CLI's default replaced the directory the thread was started in; the state's `target_dir` was only informational. The Fake CLI test passed `--dir` on every call, so the path was never exercised
+- Fix: on resume the CLI reads `target_dir` from the thread's checkpoint (`product_target_dir`) and uses it; a different `--dir` is reported and ignored; a thread with no checkpoint is a usage error (exit 2). The live product was moved by hand to `<P>` (a fresh repository, nothing else referenced the path)
+- Sweep: `scio build --product DIR` and `scio status --product DIR` take the directory explicitly on every call and `scio report --thread` reads state only; no other command derives a path on resume (`grep -n "products\|args.dir" scio/cli.py`). Guard: `test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt` resumes once without `--dir` and once with a different one
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-077 · The Claude Code worker's typed summary died `error_max_turns` when the model's first structured answer missed the schema
+- Found: 2026-10-26 · M9 live http milestone (`build-bookmarks_api-m1`, feature P1) · the explorer's `localize` turn ended normally; the `--resume ... --tools "" --max-turns 1 --json-schema` summary call returned `Reached maximum number of turns (1) (subtype=error_max_turns)` and `parse_result` raised `FatalError`; the build crashed before any code was written ($0.34 estimated so far)
+- Symptom: a fatal crash in a step that has no tools and one question to answer; the previous live milestone (44 runs) never hit it
+- Root cause: Claude Code delivers `--json-schema` output through a `StructuredOutput` tool call. The session transcript (`~/.claude/projects/<product>/2ded7e72....jsonl`) shows the model's payload omitted the required `question` key, Claude Code answered the tool call with `Output does not match required schema: root: must have required property 'question'`, and the retry would have been a second turn, which `--max-turns 1` forbade. SCIO's own re-ask loop never ran because the failure arrived as a run error, not an invalid payload
+- Fix: `SUMMARY_MAX_TURNS = 3` for the worker's summary and `STRUCTURED_MAX_TURNS = 3` for the provider's schema calls (a plain completion keeps one turn); a summary attempt that still ends `error_max_turns` is re-asked once with the schema's required keys named, and only then fatal
+- Sweep: `grep -rn '"--max-turns"' scio` lists the worker's first turn (the loop's cap, unchanged), the worker's summary and the provider's `_invoke`: both schema paths fixed. Guard: `test_worker_summary_capped_by_claude_codes_schema_check_is_re_asked`; the provider argv test asserts three turns for a schema call
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-078 · `DockerSandbox.exists` said the product environment was missing after it was created, so every call re-created and re-installed it
+- Found: 2026-10-26 · M9 · first `docker-live` CI run (40372435283): `test_product_environment_lives_inside_the_container` got "created" from the second `ensure_product_env` instead of "reused"
+- Symptom: a Docker product build would run `python -m venv` and the pip install before every feature and before `integrate` (slow, and a network-open call each time), while the venv itself worked
+- Root cause: a venv's `bin/python` is a symlink to the interpreter inside the container (`/usr/local/bin/python`); on the host side of the mount `Path.exists()` follows it to a path that does not exist and answers False. The local sandbox never sees this (its symlink targets are host paths), and the unit tests drove Docker through an injected runner that creates no files
+- Fix: `DockerSandbox.exists` is true for a symlink whose target is absent (`exists() or is_symlink()`)
+- Sweep: `grep -n "\.exists()" scio/aci/sandbox/*.py`: `LocalSandbox.exists` (host targets, fine), `E2BSandbox.exists` (asks the sandbox, fine). Guard: the Docker unit test creates a dangling symlink and asserts `exists`; the live test asserts "reused"
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-079 · The live Docker test expected the egress proxy's refusal as an HTTP 403 response; urllib reports a refused CONNECT as `URLError`
+- Found: 2026-10-26 · M9 · same CI run: `test_install_phase_reaches_the_registry_only_through_the_proxy` got `FAIL URLError` for `https://example.com/` while `https://pypi.org/simple/` answered OK
+- Symptom: a red test for behaviour that was correct: the proxy refused the host (the allowlisted host went through)
+- Root cause: for an https URL the client sends `CONNECT`; a non-2xx reply to the tunnel request is `URLError("Tunnel connection failed: 403 Forbidden")` in urllib, never an `HTTPError`. The test was written on a machine with no Docker, from the proxy's point of view rather than the client's
+- Fix: the probe prints the exception text and the test asserts `URLError` with `403` in it
+- Sweep: the unit test of the proxy (`test_egress_proxy.py`) reads the raw `HTTP/1.1 403` line, which is what the proxy sends and is unaffected. Lesson: a live test written without the live system is a hypothesis; the first CI run is its experiment (two of nine were wrong)
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-080 · Three new tests read `SCIO_PRODUCT_SANDBOX_BACKEND` from the environment and failed only on CI, where the same commit had just set it
+- Found: 2026-10-26 · M9 · CI run 40373061815 `checks`: `test_product_sandbox_backend.py` (two tests) got `local` where they assumed `auto`, and the Fake http build test found the ledger notice without "not enforced"; green on the dev machine, where the variable is unset
+- Symptom: the pattern of I-074 again (green here, red there), this time created in the same commit: `ci.yml` gained `SCIO_PRODUCT_SANDBOX_BACKEND: local` so the Fake CLI tests never probe the runner's daemon, and tests built with a bare `Settings()` inherited it
+- Root cause: `Settings()` is environment-backed (pydantic-settings); a test that means `auto` must say so. The explicit-local notice also omitted what it does not enforce, so the Fake test's assertion depended on how the backend was chosen
+- Fix: every `Settings` in the unit test names `product_sandbox_backend`; the explicit `local` notice says "the network and the registry allowlist are not enforced" like the fallbacks do
+- Sweep: `grep -rn "Settings()" tests/unit tests/graph` lists tests of fields that no CI variable sets (`provider_override` is set to `fake` there and every such test sets it explicitly already). Rule for `CONTRIBUTING`: a test of a `Settings` field constructs `Settings(field=...)`; never rely on the default when CI exports a value for it
+- Resolved: 2026-10-26 · Status: resolved

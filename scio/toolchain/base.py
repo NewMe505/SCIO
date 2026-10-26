@@ -8,10 +8,54 @@ profile reproduces the pre-M6 behaviour exactly; M10 adds ``node-ts``.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 TestOutcome = Literal["passed", "failed", "no_tests", "broken"]
 """``broken``: the runner itself could not run (collection error, bad invocation)."""
+
+CheckOutcome = Literal["passed", "failed", "skipped"]
+"""``skipped``: the check's tool is absent; reported, never counted as a pass (M9)."""
+
+
+@dataclass(frozen=True)
+class QualityCheck:
+    """One command of the product-ready quality bar (coverage, build, audit, ...)."""
+
+    name: str
+    argv: tuple[str, ...]
+    pass_exit_codes: frozenset[int] = frozenset({0})
+    skip_exit_codes: frozenset[int] = frozenset()
+    skip_patterns: tuple[str, ...] = ()
+    """Output fragments that mean the tool is absent (``No module named ...``)."""
+    timeout_s: int = 600
+
+    def outcome(self, exit_code: int, output: str) -> CheckOutcome:
+        if exit_code in self.pass_exit_codes:
+            return "passed"
+        if exit_code in self.skip_exit_codes or any(p in output for p in self.skip_patterns):
+            return "skipped"
+        return "failed"
+
+
+@dataclass(frozen=True)
+class Runtime:
+    """How a product environment is created, filled and started (M9)."""
+
+    venv_argv: tuple[str, ...]
+    """Creates the environment at the appended path (``python -m venv ...``)."""
+    venv_python_posix: str
+    venv_python_windows: str
+    install_argv: tuple[str, ...]
+    """Installs the appended package specs into the environment."""
+    index_allowlist: tuple[str, ...]
+    """Hosts the install phase may reach (enforced by sandboxes that can)."""
+    app_argv: tuple[str, ...]
+    """Starts the app: the module name and its arguments are appended."""
+    test_tools: tuple[str, ...] = ()
+    """Requirement specs the test and quality commands need (runner, coverage plugin). A
+    local sandbox sees them through SCIO's own environment; any other sandbox installs them
+    into the product environment when it is created (I-074)."""
 
 
 @runtime_checkable
@@ -58,6 +102,13 @@ class Toolchain(Protocol):
     def lint_argv(self, target: str) -> list[str]: ...
     def lint_findings(self, exit_code: int, stdout: str, stderr: str) -> str | None: ...
     def script_argv(self, script: str) -> list[str]: ...
+    def quality_checks(self) -> tuple[QualityCheck, ...]:
+        """The quality bar beyond tests and lint, in run order (M9)."""
+        ...
+
+    def runtime(self) -> Runtime:
+        """Environment, install and app commands (M9)."""
+        ...
 
     # --- parsers ---
     def error_signature(self, text: str) -> str: ...

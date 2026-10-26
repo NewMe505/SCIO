@@ -30,7 +30,15 @@ from scio.state.models import (
 )
 
 Node = Callable[[SCIOState], dict[str, Any]]
-WRITER_TOOLS = ("repo_search", "view_file", "edit_file", "run_tests")
+WRITER_TOOLS = (
+    "repo_search",
+    "view_file",
+    "edit_file",
+    "delete_file",
+    "run_tests",
+    "install_deps",
+    "run_app",
+)
 
 
 def _diff_text(ctx: RunContext, state: SCIOState) -> str:
@@ -110,7 +118,9 @@ def implement(ctx: RunContext) -> Node:
             return {"exit_reason": ExitReason.ESCALATE_HUMAN, "task_ledger": [entry]}
         last_ref = state.artifacts.get("verify:last")
         last_verify = ctx.artifacts.head(last_ref, 3000) if last_ref else None
-        toolbox = ToolBox(ctx.sandbox, WRITER_TOOLS, human_gate=False, role="coder")
+        toolbox = ToolBox(
+            ctx.sandbox, WRITER_TOOLS, human_gate=False, role="coder", context=ctx.tool_context
+        )
         loop = make_worker(ctx, toolbox, "coder")
         msg = step_message(
             state.task,
@@ -144,7 +154,9 @@ def debug(ctx: RunContext) -> Node:
     def node(state: SCIOState) -> dict[str, Any]:
         last_ref = state.artifacts.get("verify:last")
         failing = ctx.artifacts.head(last_ref, 4000) if last_ref else "(no verify output)"
-        toolbox = ToolBox(ctx.sandbox, WRITER_TOOLS, human_gate=False, role="debugger")
+        toolbox = ToolBox(
+            ctx.sandbox, WRITER_TOOLS, human_gate=False, role="debugger", context=ctx.tool_context
+        )
         loop = make_worker(ctx, toolbox, "debugger")
         msg = debug_message(
             state.current_step(),

@@ -71,6 +71,10 @@ class GitCheckpointInput(BaseModel):
     message: str = Field(description="Conventional Commit message, e.g. 'feat: add slugify (F1)'")
 
 
+class DeleteFileInput(BaseModel):
+    path: str = Field(description="Absolute path of the file to delete (files only)")
+
+
 # ---------- helpers ----------
 
 
@@ -222,7 +226,7 @@ def edit_file(sandbox: Sandbox, inp: EditFileInput, toolchain: Toolchain | None 
         problems = _lint(sandbox, path, tc)
         if problems:
             if before is None:
-                sandbox.write_text(path, "")  # cannot delete through the protocol; leave empty
+                sandbox.delete(path)  # a rejected new file leaves nothing behind (M9)
             else:
                 sandbox.write_text(path, before)
             shown = truncate(problems, max_chars=1500, hint="fix the first error")
@@ -230,6 +234,24 @@ def edit_file(sandbox: Sandbox, inp: EditFileInput, toolchain: Toolchain | None 
     added = after.count("\n") - (before.count("\n") if before else 0)
     verb = "created" if before is None else "edited"
     return f"{verb} {path} ({added:+d} lines)"
+
+
+# ---------- delete_file ----------
+
+
+def delete_file(sandbox: Sandbox, inp: DeleteFileInput) -> str:
+    """Remove one file inside the repository. Directories and ``.git`` are refused."""
+    path = _abs(sandbox, inp.path)
+    rel = path[len(sandbox.root) :].replace("\\", "/").lstrip("/")
+    if rel == ".git" or rel.startswith(".git/"):
+        raise ToolError("delete rejected: never touch .git")
+    if not sandbox.exists(path):
+        return f"nothing to delete: {path} does not exist"
+    try:
+        sandbox.delete(path)
+    except IsADirectoryError as exc:
+        raise ToolError(f"delete rejected: {exc}") from exc
+    return f"deleted {path}"
 
 
 # ---------- run_tests ----------

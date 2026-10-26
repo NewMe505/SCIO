@@ -21,7 +21,15 @@ from scio.state.models import ExitReason, Role, SCIOState, Verdict
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
-CODER_TOOLS = ("repo_search", "view_file", "edit_file", "run_tests")
+CODER_TOOLS = (
+    "repo_search",
+    "view_file",
+    "edit_file",
+    "delete_file",
+    "run_tests",
+    "install_deps",
+    "run_app",
+)
 DOCUMENTER_TOOLS = ("repo_search", "view_file", "edit_file", "run_tests")
 
 
@@ -47,6 +55,7 @@ def t0_loop(ctx: RunContext) -> Node:
             human_gate=False,
             max_calls=ctx.limits.max_tool_calls_per_iter,
             role="coder",
+            context=ctx.tool_context,
         )
         loop = make_worker(ctx, toolbox, "coder")
         msg = coder_message(

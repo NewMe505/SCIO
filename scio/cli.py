@@ -24,7 +24,7 @@ from typing import Any
 
 from scio.graph.nodes.common import acceptance_from_issue_body
 from scio.graph.run import RunOutcome, resume_graph, run_graph
-from scio.graph.run_context import RunContext
+from scio.graph.run_context import RunContext, product_sandbox_backend
 from scio.harness.core import Harness
 from scio.settings import get_settings
 from scio.state.models import TaskSpec
@@ -126,6 +126,10 @@ def _build(args: argparse.Namespace) -> int:
         return 2
     progress = ProgressFile.from_json(progress_path.read_text(encoding="utf-8"))
     settings = get_settings()
+    # Docker by default for product builds when it is there (M9); the reason lands in the
+    # build ledger from `load`.
+    backend, _reason = product_sandbox_backend(settings)
+    settings = settings.model_copy(update={"sandbox_backend": backend})
     gh_repo = args.gh or settings.gh_repo
     harness = _scripted_harness(settings)
     github = GitHubClient(gh_repo) if gh_repo else None
@@ -206,7 +210,21 @@ def _new(args: argparse.Namespace) -> int:
         print("scio new --prompt also needs --dir (the target directory)", file=sys.stderr)
         return 2
     thread = args.thread or f"new-{uuid.uuid4().hex[:8]}"
-    target = args.dir or Path(".scio") / "products" / thread
+    target: Path
+    if resuming:
+        # The thread's checkpoint knows where the product lives (I-076): a resume that omits
+        # --dir, or names another one, continues in the recorded directory.
+        from scio.product.graph import product_target_dir
+
+        recorded = product_target_dir(settings.checkpoint_dsn, thread)
+        if recorded is None:
+            print(f"no product thread {thread!r} to resume (start with --prompt and --dir)")
+            return 2
+        target = Path(recorded)
+        if args.dir is not None and Path(args.dir).resolve() != target.resolve():
+            print(f"note: thread {thread} was started in {target}; --dir {args.dir} ignored")
+    else:
+        target = args.dir
     ctx = RunContext.create(
         thread_id=thread,
         sandbox_root=target,

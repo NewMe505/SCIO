@@ -117,7 +117,7 @@ def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None
     assert (
         "--restricted" in argv
         and _flag(argv, "--tools") == ""
-        and _flag(argv, "--max-turns") == "1"
+        and _flag(argv, "--max-turns") == "3"  # room for Claude Code's own schema retry (I-077)
     )
     assert "--no-session-persistence" in argv and _flag(argv, "--model") == HAIKU
     assert _flag(argv, "--effort") == "low" and json.loads(_flag(argv, "--json-schema")) == schema
@@ -365,6 +365,36 @@ def test_worker_retries_an_invalid_summary_once_then_fails(tmp_path: Path) -> No
     assert len(fake.calls) == 3 and "previous reply was invalid" in (fake.calls[2][2] or "")
 
 
+def test_worker_summary_capped_by_claude_codes_schema_check_is_re_asked(tmp_path: Path) -> None:
+    """I-077: the first live http milestone died in the explorer's summary: the model's first
+    StructuredOutput missed a required key, Claude Code bounced it, and `--max-turns 1` left no
+    turn for the retry, so the run ended `error_max_turns`. The summary call now has three turns
+    and a capped attempt is re-asked with the required keys named instead of being fatal."""
+    settings = Settings(provider_override="fake")
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    good = {
+        "step_id": "S1", "summary": "done", "files_touched": [], "confidence": "high",
+        "needs_design_decision": False, "design_question": None, "next_action": "verify",
+        "tests_added": [], "sweep": None,
+    }  # fmt: skip
+    capped = _result(
+        subtype="error_max_turns", is_error=True, result="Reached maximum number of turns (3)"
+    )
+    fake = FakeClaude([STREAM, capped, _result(structured_output=good)])
+    worker = ClaudeCodeWorker(
+        harness, LocalSandbox(tmp_path), PromptRegistry(), "coder",
+        toolchain=python_toolchain(), tool_names=("edit_file",), runner=fake,
+    )  # fmt: skip
+    result = worker.run("task")
+    assert isinstance(result.output, WorkerOutput) and result.output.summary == "done"
+    assert len(fake.calls) == 3
+    summary_argv = fake.calls[1][0]
+    assert _flag(summary_argv, "--max-turns") == "3" and _flag(summary_argv, "--tools") == ""
+    re_ask = fake.calls[2][2] or ""
+    assert "never matched the schema" in re_ask and "required keys: step_id" in re_ask
+
+
 def test_worker_without_a_result_line_fails_loudly(tmp_path: Path) -> None:
     settings = Settings(provider_override="fake")
     config = ModelsConfig.load(settings.models_path)
@@ -463,3 +493,27 @@ def test_worker_trims_overlong_prose_fields_instead_of_failing(tmp_path: Path) -
     assert len(fake.calls) == 2  # no re-ask was needed
     with pytest.raises(Exception, match="step_id"):  # a structural error is not trimmed away
         validate_with_trimming(WorkerOutput, {"summary": "s"})
+
+
+def test_claude_code_backend_requires_the_local_sandbox(tmp_path: Path) -> None:
+    """ADR 0012 boundary enforced (M9): the binary runs on the host in the sandbox root."""
+    from scio.aci.toolbox import ToolBox
+    from scio.graph.run_context import RunContext
+    from scio.loop.backends import make_worker
+
+    settings = Settings(
+        provider_override="fake", worker_backend="claude_code", sandbox_backend="docker"
+    )
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    sandbox = LocalSandbox(tmp_path)  # injected, so no Docker daemon is needed for the check
+    ctx = RunContext.create(
+        thread_id="t", sandbox_root=tmp_path, settings=settings, harness=harness, sandbox=sandbox
+    )
+    try:
+        toolbox = ToolBox(sandbox, ("edit_file", "delete_file"), human_gate=False, role="coder")
+        with pytest.raises(ValueError, match="SCIO_SANDBOX_BACKEND=local"):
+            make_worker(ctx, toolbox, "coder")
+        assert "Bash(rm *)" in allowed_tools_for(("edit_file", "delete_file"), python_toolchain())
+    finally:
+        ctx.close()
