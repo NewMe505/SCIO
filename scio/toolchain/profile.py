@@ -79,6 +79,8 @@ class ProfileToolchain:
     lint_absent_patterns: tuple[str, ...] = ()
     """Output fragments that mean the linter is not installed (clean, like exit 127)."""
     syntax_check_base_argv: tuple[str, ...] | None = None
+    health_probe_base_argv: tuple[str, ...] = ()
+    """Exits 0 when ``{url}`` answers below 400; run inside a non-local sandbox."""
     checks: tuple[QualityCheck, ...] = ()
     acceptance_dir: str = "tests/acceptance"
     skeleton_command_template: str = ""
@@ -175,6 +177,9 @@ class ProfileToolchain:
     def script_argv(self, script: str) -> list[str]:
         return [*self.script_base_argv, script]
 
+    def health_probe_argv(self, url: str) -> list[str]:
+        return [a.replace("{url}", url) for a in self.health_probe_base_argv]
+
     # --- parsers ---
     def error_signature(self, text: str) -> str:
         return self.parsers.error_signature(text)
@@ -215,6 +220,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         lint_findings_codes=frozenset(lint["findings_exit_codes"]),
         lint_absent_patterns=tuple(lint.get("absent_patterns", [])),
         syntax_check_base_argv=tuple(str(a) for a in syntax) if syntax else None,
+        health_probe_base_argv=tuple(str(a) for a in data.get("health_probe_argv", [])),
         script_base_argv=tuple(data["script_argv"]),
         checks=tuple(
             QualityCheck(

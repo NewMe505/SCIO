@@ -37,6 +37,11 @@ lint:
   absent_patterns: ["Cannot find module"]   # eslint not installed; not the agent's problem
 syntax_check_argv: [node, --check]          # parses one file, TypeScript included
 script_argv: [node]
+# Exits 0 when {url} answers below 400; used to probe an app started inside a sandbox (M10).
+health_probe_argv:
+  - node
+  - -e
+  - "fetch('{url}').then(r => process.exit(r.status < 400 ? 0 : 1), () => process.exit(1))"
 acceptance_dir: tests/acceptance
 skeleton_command: "node src/main.ts --version"
 command_words: [node, npm, npx]

@@ -1,13 +1,18 @@
-"""Walking-skeleton scaffolds per toolchain profile (ADR 0010).
+"""Walking-skeleton scaffolds per toolchain profile (ADR 0010, ADR 0014).
 
-A scaffold is a mapping of repository-relative paths to file text. The ``python`` scaffold
-installs nothing beyond the standard library: a package with ``--version``, one smoke test,
-CI running the profile's lint and test commands, README, CHANGELOG, LICENSE, ``.gitignore``
-from the profile's cache excludes, and the product memory files.
+A scaffold is a mapping of repository-relative paths to file text. Each stack's scaffold
+installs nothing: the ``python`` one is a package with ``--version`` and one pytest smoke
+test; the ``node-ts`` one is a TypeScript entry file run by Node 22's type stripping with one
+``node:test`` smoke test. Both ship black-box acceptance tests under the profile's
+``acceptance_dir`` that skip until ``scio build`` starts the app, CI running the profile's
+lint and test commands, README, CHANGELOG, LICENSE, ``.gitignore`` from the profile's cache
+excludes, and the product memory files. ``scaffold_for`` picks by ``spec.stack``.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from scio.product.progress import ProgressFile
@@ -45,13 +50,51 @@ def progress_json(spec: ProductSpec, *, bootstrap_commit: str | None) -> str:
     return ProgressFile.initial(spec, bootstrap_commit=bootstrap_commit).to_json()
 
 
+def _common_files(
+    spec: ProductSpec,
+    tc: Toolchain,
+    *,
+    owner: str,
+    run_cmd: str,
+    develop_cmds: list[str],
+    skeleton_summary: str,
+) -> dict[str, str]:
+    """The stack-neutral part of every scaffold: README, CHANGELOG, LICENSE, .gitignore,
+    NOTES."""
+    gitignore = "".join(f"{p}\n" if "*" in p else f"{p}/\n" for p in tc.cache_excludes)
+    return {
+        "README.md": (
+            f"# {spec.title}\n\n{spec.vision}\n\n"
+            "## Run\n\n```\n"
+            f"{run_cmd}\n"
+            "```\n\n## Develop\n\n```\n" + "\n".join(develop_cmds) + "\n```\n\n"
+            "Product specification: [PRODUCT.md](PRODUCT.md). "
+            "Progress: `.scio/product/progress.json`.\n"
+        ),
+        "CHANGELOG.md": (
+            f"# Changelog\n\n## [Unreleased]\n### Added\n- Walking skeleton: {skeleton_summary}, "
+            "CI (SCIO bootstrap).\n"
+        ),
+        "LICENSE": MIT.format(year=datetime.now(UTC).year, owner=owner),
+        ".gitignore": gitignore + ".scio/sandbox/\n.scio/ledger/\n.scio/artifacts/\n",
+        "NOTES.md": (
+            "# Notes\n\nWorking notes SCIO and humans leave for the next session. "
+            "Newest first.\n\n"
+            f"- Bootstrapped by `scio new` ({datetime.now(UTC).date().isoformat()}): "
+            "walking skeleton, CI, smoke test.\n"
+        ),
+    }
+
+
+# ---------- python ----------
+
+
 def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:
     tc: Toolchain = get_toolchain("python")
     pkg = spec.name
     test_cmd = " ".join(tc.test_argv(filter=None, path=None))
     lint_cmd = " ".join(tc.lint_argv("."))
-    gitignore = "".join(f"{p}\n" if "*" in p else f"{p}/\n" for p in tc.cache_excludes)
-    return {
+    files = {
         "pyproject.toml": (
             "[project]\n"
             f'name = "{pkg}"\n'
@@ -67,8 +110,8 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
         # Packages, so a test module may share its basename with one in another directory
         # (pytest's import-file-mismatch error otherwise, M9).
         "tests/__init__.py": "",
-        "tests/acceptance/__init__.py": "",
-        "tests/acceptance/conftest.py": (
+        f"{tc.acceptance_dir}/__init__.py": "",
+        f"{tc.acceptance_dir}/conftest.py": (
             '"""Black-box acceptance tests: scio build runs them against the started app."""\n\n'
             "import os\n\n"
             "import pytest\n\n\n"
@@ -79,7 +122,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             '        pytest.skip("APP_URL not set: scio build starts the app for these tests")\n'
             "    return url\n"
         ),
-        "tests/acceptance/test_acceptance.py": (
+        f"{tc.acceptance_dir}/test_acceptance.py": (
             _http_acceptance(pkg, spec.app.health_path)
             if spec.app.kind == "http"
             else _cli_acceptance(pkg)
@@ -111,32 +154,20 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             "      - run: pip install ruff pytest\n"
             f"      - run: {lint_cmd}\n"
             f"      - run: {test_cmd}\n"
-            f"      - run: python -m {pkg} --version\n"
-        ),
-        "README.md": (
-            f"# {spec.title}\n\n{spec.vision}\n\n"
-            "## Run\n\n```\n"
-            f"python -m {pkg} --version\n"
-            "```\n\n## Develop\n\n```\n"
-            "pip install ruff pytest\n"
-            f"{lint_cmd}\n{test_cmd}\n"
-            "```\n\n"
-            "Product specification: [PRODUCT.md](PRODUCT.md). "
-            "Progress: `.scio/product/progress.json`.\n"
-        ),
-        "CHANGELOG.md": (
-            "# Changelog\n\n## [Unreleased]\n### Added\n"
-            "- Walking skeleton: package, `--version`, smoke test, CI (SCIO bootstrap).\n"
-        ),
-        "LICENSE": MIT.format(year=datetime.now(UTC).year, owner=owner),
-        ".gitignore": gitignore + ".scio/sandbox/\n.scio/ledger/\n.scio/artifacts/\n",
-        "NOTES.md": (
-            "# Notes\n\nWorking notes SCIO and humans leave for the next session. "
-            "Newest first.\n\n"
-            f"- Bootstrapped by `scio new` ({datetime.now(UTC).date().isoformat()}): "
-            "walking skeleton, CI, smoke test.\n"
+            f"      - run: {tc.skeleton_command(pkg)}\n"
         ),
     }
+    files.update(
+        _common_files(
+            spec,
+            tc,
+            owner=owner,
+            run_cmd=tc.skeleton_command(pkg),
+            develop_cmds=["pip install ruff pytest", lint_cmd, test_cmd],
+            skeleton_summary="package, `--version`, smoke test",
+        )
+    )
+    return files
 
 
 def _cli(pkg: str) -> str:
@@ -237,7 +268,256 @@ def _http_acceptance(pkg: str, health_path: str) -> str:
     )
 
 
+# ---------- node-ts ----------
+
+NODE_DEV_DEPENDENCIES = {
+    "typescript": "^5.8",
+    "eslint": "^9.20",
+    "@eslint/js": "^9.20",
+    "typescript-eslint": "^8.25",
+    "@types/node": "^22.13",
+}
+"""The product's own quality tools; its CI installs them, SCIO's sandbox never does."""
+
+
+def _npm_dependency(spec: str) -> tuple[str, str]:
+    """``zod@^3`` -> (``zod``, ``^3``); ``@scope/x`` -> (``@scope/x``, ``*``)."""
+    s = spec.strip()
+    body = s[1:] if s.startswith("@") else s
+    name, sep, rng = body.partition("@")
+    name = ("@" if s.startswith("@") else "") + name
+    return name, (rng if sep and rng else "*")
+
+
+def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:
+    """A TypeScript walking skeleton that needs no download: Node 22 strips the types,
+    ``node:test`` runs the tests. Type checking and lint run once the product's own
+    devDependencies are installed (its CI does; SCIO's quality bar reports them as skipped
+    until then)."""
+    tc: Toolchain = get_toolchain("node-ts")
+    pkg = spec.name
+    http = spec.app.kind == "http"
+    test_cmd = " ".join(f'"{a}"' if "*" in a else a for a in tc.test_argv(filter=None, path=None))
+    package = {
+        "name": pkg.replace("_", "-"),
+        "version": "0.1.0",
+        "description": spec.title,
+        "private": True,
+        "type": "module",
+        "engines": {"node": ">=22.18"},
+        "scripts": {
+            "start": tc.skeleton_command(pkg).replace(" --version", ""),
+            "test": test_cmd,
+            "lint": "eslint .",
+            "typecheck": "tsc --noEmit",
+            "build": "tsc -p tsconfig.build.json",
+        },
+        "dependencies": dict(_npm_dependency(d) for d in spec.dependencies),
+        "devDependencies": NODE_DEV_DEPENDENCIES,
+    }
+    files = {
+        "package.json": json.dumps(package, indent=2) + "\n",
+        "tsconfig.json": json.dumps(
+            {
+                "compilerOptions": {
+                    "target": "es2022",
+                    "module": "nodenext",
+                    "moduleResolution": "nodenext",
+                    "strict": True,
+                    "noEmit": True,
+                    "allowImportingTsExtensions": True,
+                    "erasableSyntaxOnly": True,
+                    "verbatimModuleSyntax": True,
+                    "types": ["node"],
+                    "skipLibCheck": True,
+                },
+                "include": ["src", "tests"],
+            },
+            indent=2,
+        )
+        + "\n",
+        "tsconfig.build.json": json.dumps(
+            {
+                "extends": "./tsconfig.json",
+                "compilerOptions": {
+                    "noEmit": False,
+                    "allowImportingTsExtensions": False,
+                    "rewriteRelativeImportExtensions": True,
+                    "outDir": "dist",
+                },
+                "include": ["src"],
+            },
+            indent=2,
+        )
+        + "\n",
+        "eslint.config.js": (
+            'import js from "@eslint/js";\n'
+            'import tseslint from "typescript-eslint";\n\n'
+            "export default tseslint.config(\n"
+            '  { ignores: ["dist/", "node_modules/", ".scio/", "coverage/"] },\n'
+            "  js.configs.recommended,\n"
+            "  ...tseslint.configs.recommended,\n"
+            ");\n"
+        ),
+        "src/version.ts": f'/** {spec.title}. */\nexport const VERSION = "0.1.0";\n',
+        "src/cli.ts": _node_http_cli(pkg, spec.app.health_path) if http else _node_cli(pkg),
+        "src/main.ts": (
+            'import { main } from "./cli.ts";\n\nprocess.exitCode = main(process.argv.slice(2));\n'
+        ),
+        "tests/smoke.test.ts": (
+            'import { test } from "node:test";\n'
+            'import assert from "node:assert/strict";\n'
+            'import { spawnSync } from "node:child_process";\n\n'
+            'import { main } from "../src/cli.ts";\n'
+            'import { VERSION } from "../src/version.ts";\n\n'
+            'test("the entry file prints the version", () => {\n'
+            '  const out = spawnSync(process.execPath, ["src/main.ts", "--version"], {\n'
+            '    encoding: "utf8",\n'
+            "  });\n"
+            "  assert.equal(out.status, 0);\n"
+            "  assert.equal(out.stdout.trim(), VERSION);\n"
+            "});\n\n"
+            'test("no arguments is a usage error", () => {\n'
+            "  assert.equal(main([]), 2);\n"
+            "});\n"
+        ),
+        f"{tc.acceptance_dir}/acceptance.test.ts": (
+            _node_http_acceptance(spec.app.health_path) if http else _node_cli_acceptance()
+        ),
+        ".github/workflows/ci.yml": (
+            "name: ci\n"
+            "on: [push, pull_request]\n"
+            "jobs:\n"
+            "  checks:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - uses: actions/setup-node@v4\n"
+            "        with:\n"
+            '          node-version: "22"\n'
+            "      - run: npm install\n"
+            "      - run: npm run lint\n"
+            "      - run: npm run typecheck\n"
+            "      - run: npm test\n"
+            f"      - run: {tc.skeleton_command(pkg)}\n"
+        ),
+    }
+    files.update(
+        _common_files(
+            spec,
+            tc,
+            owner=owner,
+            run_cmd=tc.skeleton_command(pkg),
+            develop_cmds=["npm install", "npm run lint", "npm run typecheck", "npm test"],
+            skeleton_summary="TypeScript entry file, `--version`, node:test smoke test",
+        )
+    )
+    return files
+
+
+def _node_cli(pkg: str) -> str:
+    return (
+        "/** Command line entry point: the walking skeleton. */\n"
+        'import { VERSION } from "./version.ts";\n\n'
+        "export function main(argv: readonly string[]): number {\n"
+        '  if (argv[0] === "--version") {\n'
+        "    console.log(VERSION);\n"
+        "    return 0;\n"
+        "  }\n"
+        '  console.error("usage: node src/main.ts --version");\n'
+        "  return 2;\n"
+        "}\n"
+    )
+
+
+def _node_http_cli(pkg: str, health_path: str) -> str:
+    """A walking skeleton that serves: ``serve --port N`` answers the health path."""
+    return (
+        "/** Command line entry point: the walking skeleton with a health endpoint. */\n"
+        'import { createServer } from "node:http";\n\n'
+        'import { VERSION } from "./version.ts";\n\n'
+        f'export const HEALTH_PATH = "{health_path}";\n\n'
+        "export function serve(port: number): number {\n"
+        "  const server = createServer((req, res) => {\n"
+        '    if (req.method === "GET" && req.url === HEALTH_PATH) {\n'
+        '      res.writeHead(200, { "Content-Type": "application/json" });\n'
+        '      res.end(JSON.stringify({ status: "ok", version: VERSION }));\n'
+        "      return;\n"
+        "    }\n"
+        "    res.writeHead(404);\n"
+        "    res.end();\n"
+        "  });\n"
+        '  server.listen(port, "127.0.0.1", () => {\n'
+        "    console.log(`serving on http://127.0.0.1:${port}`);\n"
+        "  });\n"
+        '  process.on("SIGTERM", () => server.close());\n'
+        "  return 0;\n"
+        "}\n\n"
+        "export function main(argv: readonly string[]): number {\n"
+        '  if (argv[0] === "--version") {\n'
+        "    console.log(VERSION);\n"
+        "    return 0;\n"
+        "  }\n"
+        '  if (argv[0] === "serve") {\n'
+        '    const at = argv.indexOf("--port");\n'
+        "    const port = at >= 0 ? Number(argv[at + 1]) : 8000;\n"
+        "    return serve(port);\n"
+        "  }\n"
+        '  console.error("usage: node src/main.ts --version | serve --port N");\n'
+        "  return 2;\n"
+        "}\n"
+    )
+
+
+def _node_cli_acceptance() -> str:
+    return (
+        "/** Black-box acceptance: the entry file as a user runs it. */\n"
+        'import { test } from "node:test";\n'
+        'import assert from "node:assert/strict";\n'
+        'import { spawnSync } from "node:child_process";\n\n'
+        'import { VERSION } from "../../src/version.ts";\n\n'
+        'test("--version prints the version", () => {\n'
+        '  const out = spawnSync(process.execPath, ["src/main.ts", "--version"], {\n'
+        '    encoding: "utf8",\n'
+        "  });\n"
+        "  assert.equal(out.status, 0);\n"
+        "  assert.equal(out.stdout.trim(), VERSION);\n"
+        "});\n"
+    )
+
+
+def _node_http_acceptance(health_path: str) -> str:
+    return (
+        "/** Black-box acceptance: scio build starts the app and sets APP_URL. */\n"
+        'import { test } from "node:test";\n'
+        'import assert from "node:assert/strict";\n\n'
+        'import { VERSION } from "../../src/version.ts";\n\n'
+        "const APP_URL = process.env.APP_URL;\n\n"
+        "test(\n"
+        '  "the health endpoint answers",\n'
+        '  { skip: APP_URL ? false : "APP_URL not set: scio build starts the app" },\n'
+        "  async () => {\n"
+        f"    const res = await fetch(`${{APP_URL}}{health_path}`);\n"
+        "    assert.equal(res.status, 200);\n"
+        "    const body = (await res.json()) as { status: string; version: string };\n"
+        '    assert.equal(body.status, "ok");\n'
+        "    assert.equal(body.version, VERSION);\n"
+        "  },\n"
+        ");\n"
+    )
+
+
+SCAFFOLDS: dict[str, Callable[..., dict[str, str]]] = {
+    "python": python_scaffold,
+    "node-ts": node_ts_scaffold,
+}
+
+
 def scaffold_for(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:
-    if spec.stack == "python":
-        return python_scaffold(spec, owner=owner)
-    raise KeyError(f"no scaffold for stack {spec.stack!r}")
+    try:
+        build = SCAFFOLDS[spec.stack]
+    except KeyError:
+        raise KeyError(
+            f"no scaffold for stack {spec.stack!r}; known: {sorted(SCAFFOLDS)}"
+        ) from None
+    return build(spec, owner=owner)

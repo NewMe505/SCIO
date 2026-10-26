@@ -288,7 +288,13 @@ def test_allowed_tools_follow_the_toolbox() -> None:
     assert allowed_tools_for(("repo_search", "view_file"), tc) == ["Read", "Glob", "Grep"]
     rules = allowed_tools_for(("repo_search", "view_file", "edit_file", "run_tests"), tc)
     assert rules[:6] == ["Read", "Glob", "Grep", "Edit", "Write", "MultiEdit"]
-    assert any(r.startswith("Bash(") and "pytest" in r for r in rules)
+    # the profile's test command word (``python -m pytest`` is ``python``; M10 dropped the
+    # redundant ``python -m pytest`` rule) and its lint command word
+    assert "Bash(python *)" in rules
+    from scio.toolchain import node_ts_toolchain
+
+    node_rules = allowed_tools_for(("edit_file", "run_tests"), node_ts_toolchain())
+    assert "Bash(node *)" in node_rules and not any("python" in r for r in node_rules)
     assert any(r.startswith("Bash(ruff") for r in rules)
 
 

@@ -195,10 +195,36 @@ def _lint(sandbox: Sandbox, path: str, tc: Toolchain) -> str | None:
     return tc.lint_findings(r.exit_code, r.stdout, r.stderr)
 
 
-def edit_file(sandbox: Sandbox, inp: EditFileInput, toolchain: Toolchain | None = None) -> str:
+def _syntax_check(sandbox: Sandbox, path: str, tc: Toolchain) -> str | None:
+    """The profile's out-of-process parse check (``node --check``), when it has one."""
+    argv = tc.syntax_check_argv(path)
+    if argv is None:
+        return None
+    r = sandbox.exec(argv, timeout_s=60)
+    if r.ok or r.exit_code == 127:
+        return None  # clean, or the runtime is absent: not the agent's problem
+    return r.output.strip() or f"syntax check failed (exit {r.exit_code})"
+
+
+def _toolchain_of(ctx: object | None, toolchain: Toolchain | None) -> Toolchain:
+    """The toolchain a tool runs with: an explicit one, else the toolbox context's (M10: the
+    context reaches ``edit_file`` and ``run_tests`` too), else the python profile."""
+    if toolchain is not None:
+        return toolchain
+    from_ctx = getattr(ctx, "toolchain", None)
+    return from_ctx if from_ctx is not None else python_toolchain()
+
+
+def edit_file(
+    sandbox: Sandbox,
+    inp: EditFileInput,
+    ctx: object | None = None,
+    toolchain: Toolchain | None = None,
+) -> str:
     """Replace ``old_text`` once (or create the file). Source files of the toolchain are
-    syntax-checked and lint-gated; a rejected edit is reverted (ADR 0009)."""
-    tc = toolchain or python_toolchain()
+    syntax-checked (in process, or with the profile's check command) and lint-gated; a
+    rejected edit is reverted (ADR 0009)."""
+    tc = _toolchain_of(ctx, toolchain)
     path = _abs(sandbox, inp.path)
     exists = sandbox.exists(path)
     if inp.old_text == "":
@@ -223,14 +249,18 @@ def edit_file(sandbox: Sandbox, inp: EditFileInput, toolchain: Toolchain | None 
             raise ToolError(f"edit rejected: {problem}")
     sandbox.write_text(path, after)
     if tc.is_source(path):
-        problems = _lint(sandbox, path, tc)
+        gate = "the syntax check"
+        problems = _syntax_check(sandbox, path, tc)
+        if not problems:
+            gate = "lint"
+            problems = _lint(sandbox, path, tc)
         if problems:
             if before is None:
                 sandbox.delete(path)  # a rejected new file leaves nothing behind (M9)
             else:
                 sandbox.write_text(path, before)
             shown = truncate(problems, max_chars=1500, hint="fix the first error")
-            raise ToolError(f"edit rejected by lint (reverted):\n{shown}")
+            raise ToolError(f"edit rejected by {gate} (reverted):\n{shown}")
     added = after.count("\n") - (before.count("\n") if before else 0)
     verb = "created" if before is None else "edited"
     return f"{verb} {path} ({added:+d} lines)"
@@ -257,14 +287,19 @@ def delete_file(sandbox: Sandbox, inp: DeleteFileInput) -> str:
 # ---------- run_tests ----------
 
 
-def run_tests(sandbox: Sandbox, inp: RunTestsInput, toolchain: Toolchain | None = None) -> str:
+def run_tests(
+    sandbox: Sandbox,
+    inp: RunTestsInput,
+    ctx: object | None = None,
+    toolchain: Toolchain | None = None,
+) -> str:
     """Run the toolchain's test command and return failures only (ADR 0009).
 
     The result strings are the contract verify relies on: ``all tests passed: ...``,
     ``no tests collected[ for filter ...]: ...``, failure text, or ``ToolError`` when the
     runner itself could not run.
     """
-    tc = toolchain or python_toolchain()
+    tc = _toolchain_of(ctx, toolchain)
     path = _abs(sandbox, inp.path) if inp.path else None
     argv = tc.test_argv(filter=inp.filter, path=path)
     timeout = inp.timeout_s or sandbox.limits.timeout_s

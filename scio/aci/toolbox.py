@@ -63,15 +63,18 @@ TOOLS: dict[str, ToolDef] = {
         "edit_file",
         "Replace one exact occurrence of old_text with new_text, or create a file when "
         "old_text is empty. "
-        "Python edits that fail to parse or lint are rejected and reverted.",
+        "Source edits that fail to parse or lint are rejected and reverted.",
         T.EditFileInput,
         _wrap(T.edit_file),  # type: ignore[arg-type]
+        needs_context=True,
     ),
     "run_tests": ToolDef(
         "run_tests",
-        "Run pytest and return failures only. Always pass filter= for the feature under work.",
+        "Run the test suite and return failures only. Always pass filter= for the feature "
+        "under work.",
         T.RunTestsInput,
         _wrap(T.run_tests),  # type: ignore[arg-type]
+        needs_context=True,
     ),
     "delete_file": ToolDef(
         "delete_file",
@@ -90,8 +93,8 @@ TOOLS: dict[str, ToolDef] = {
     ),
     "run_app": ToolDef(
         "run_app",
-        "Start the app with the toolchain's app command (python -m <module> args), wait for a "
-        "local health_url or for it to exit, return its output, and stop it.",
+        "Start the app with the toolchain's app command (a module or entry file plus args), "
+        "wait for a local health_url or for it to exit, return its output, and stop it.",
         R.RunAppInput,
         _wrap(R.run_app),  # type: ignore[arg-type]
         needs_context=True,

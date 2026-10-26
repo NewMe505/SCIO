@@ -314,8 +314,7 @@ def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> No
         assert s.issues == {"P1": 102, "P2": 103} or set(s.issues) == {"P1", "P2"}
         assert fake.milestones == {"M1: Milestone 1": min(fake.milestones.values())}
         assert [i["title"] for i in fake.issues.values()] == [
-            "P1: Walking skeleton: the package installs, the CLI answers --version, and one "
-            "smoke test passes",
+            "P1: Walking skeleton: the app starts, answers --version, and one smoke test passes",
             "P2: Add and list todos",
         ]
         assert not (repo / ".scio/product/issues").exists()  # GitHub holds the issues

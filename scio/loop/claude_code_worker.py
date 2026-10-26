@@ -77,9 +77,10 @@ def allowed_tools_for(tool_names: tuple[str, ...], toolchain: Toolchain) -> list
         rules += [f"Bash({' '.join(toolchain.runtime().app_argv)} *)"]
     # install_deps has no rule on purpose: the install phase runs outside the turn (M9)
     if "run_tests" in tool_names:
+        # The profile's test and lint commands (``python -m pytest`` is ``python`` already;
+        # ``node --test`` is ``node``), nothing stack-specific here (M10).
         test_bin = toolchain.test_argv(filter=None, path=None)[0]
-        rules += [f"Bash({test_bin} *)", f"Bash(python -m {toolchain.test_runner} *)"]
-        rules += [f"Bash({toolchain.lint_argv('.')[0]} *)"]
+        rules += [f"Bash({test_bin} *)", f"Bash({toolchain.lint_argv('.')[0]} *)"]
     return list(dict.fromkeys(rules))
 
 

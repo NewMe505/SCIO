@@ -34,6 +34,11 @@ lint:
   clean_exit_codes: [0, 127]   # 127: the linter is not installed; not the agent's problem
   findings_exit_codes: [1]
 script_argv: [python]
+# Exits 0 when {url} answers below 400; used to probe an app started inside a sandbox (M10).
+health_probe_argv:
+  - python
+  - -c
+  - "import sys, urllib.request\ntry:\n    sys.exit(0 if urllib.request.urlopen('{url}', timeout=1).status < 400 else 1)\nexcept Exception:\n    sys.exit(1)\n"
 # The product-ready quality bar (ADR 0007 decision 5), run by `integrate` after the suite and
 # lint (M9). A check whose tool is absent is reported as skipped, never counted as a pass; a
 # product's own CI installs the tools. Outputs go under .scio/sandbox/, which is git-ignored.

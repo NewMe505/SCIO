@@ -27,7 +27,7 @@ from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
 from scio.product.scaffold import progress_json, scaffold_for
-from scio.product.spec import normalise_spec, render_product_md
+from scio.product.spec import normalise_spec, render_product_md, stack_menu
 from scio.state.models import InterviewOutput, ProductSpecOutput, ProductState, Role
 
 Node = Callable[[ProductState], dict[str, Any]]
@@ -114,7 +114,7 @@ def specify(ctx: RunContext) -> Node:
             ]
         req = ctx.harness.build_request(
             "product_planner",
-            system=ctx.prompts.get("product_planner").render(),
+            system=ctx.prompts.get("product_planner").render(stacks=stack_menu()),
             messages=[Message.user("\n".join(parts))],
             tags={"thread": ctx.thread_id, "revision": str(len(state.revision_notes))},
         )
