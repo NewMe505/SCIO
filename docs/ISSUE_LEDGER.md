@@ -650,3 +650,11 @@ Template:
 - Fix: the probe prints the exception text and the test asserts `URLError` with `403` in it
 - Sweep: the unit test of the proxy (`test_egress_proxy.py`) reads the raw `HTTP/1.1 403` line, which is what the proxy sends and is unaffected. Lesson: a live test written without the live system is a hypothesis; the first CI run is its experiment (two of nine were wrong)
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-080 · Three new tests read `SCIO_PRODUCT_SANDBOX_BACKEND` from the environment and failed only on CI, where the same commit had just set it
+- Found: 2026-10-26 · M9 · CI run 40373061815 `checks`: `test_product_sandbox_backend.py` (two tests) got `local` where they assumed `auto`, and the Fake http build test found the ledger notice without "not enforced"; green on the dev machine, where the variable is unset
+- Symptom: the pattern of I-074 again (green here, red there), this time created in the same commit: `ci.yml` gained `SCIO_PRODUCT_SANDBOX_BACKEND: local` so the Fake CLI tests never probe the runner's daemon, and tests built with a bare `Settings()` inherited it
+- Root cause: `Settings()` is environment-backed (pydantic-settings); a test that means `auto` must say so. The explicit-local notice also omitted what it does not enforce, so the Fake test's assertion depended on how the backend was chosen
+- Fix: every `Settings` in the unit test names `product_sandbox_backend`; the explicit `local` notice says "the network and the registry allowlist are not enforced" like the fallbacks do
+- Sweep: `grep -rn "Settings()" tests/unit tests/graph` lists tests of fields that no CI variable sets (`provider_override` is set to `fake` there and every such test sets it explicitly already). Rule for `CONTRIBUTING`: a test of a `Settings` field constructs `Settings(field=...)`; never rely on the default when CI exports a value for it
+- Resolved: 2026-10-26 · Status: resolved

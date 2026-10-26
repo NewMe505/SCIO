@@ -38,7 +38,10 @@ def product_sandbox_backend(settings: Settings) -> tuple[str, str]:
     """
     choice = settings.product_sandbox_backend
     if choice == "local":
-        return "local", "sandbox: local (SCIO_PRODUCT_SANDBOX_BACKEND=local)"
+        return "local", (
+            "sandbox: local (SCIO_PRODUCT_SANDBOX_BACKEND=local); the network and the registry "
+            "allowlist are not enforced"
+        )
     if choice == "docker":
         return "docker", "sandbox: docker (SCIO_PRODUCT_SANDBOX_BACKEND=docker)"
     if settings.worker_backend == "claude_code":
