@@ -33,7 +33,7 @@ from scio.graph.effects import run_effect
 from scio.graph.nodes.common import decision, git_out
 from scio.graph.nodes.common import fact as ledger_fact
 from scio.graph.run import resume_graph, run_graph, thread_started
-from scio.graph.run_context import T0_TOOL_CAP, RunContext
+from scio.graph.run_context import T0_TOOL_CAP, RunContext, product_sandbox_backend
 from scio.harness.budget import BudgetGuard, BudgetLimits, BudgetsConfig
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
@@ -382,6 +382,9 @@ def load(ctx: RunContext) -> Node:
                 f"{len(progress.milestones)} milestone(s) done"
             )
         )
+        # Which sandbox this build runs in and why (M9): Docker by default when it is there;
+        # a local fallback says what it does not enforce.
+        entries.append(fact(product_sandbox_backend(ctx.settings)[1]))
         # The install phase (M9): the product environment with the approved dependencies,
         # network open for this step only; every later command runs inside it, offline.
         try:

@@ -72,7 +72,10 @@ class ToolContext:
 
 def venv_python(sandbox: Sandbox, toolchain: Toolchain, venv_dir: str = VENV_DIR) -> str:
     rt = toolchain.runtime()
-    rel = rt.venv_python_windows if sys.platform == "win32" else rt.venv_python_posix
+    # The layout follows the sandbox's root, not the host: a Docker root (``/work``) holds a
+    # posix venv even when SCIO runs on Windows (same rule as ``resolve_under``).
+    windows_root = len(sandbox.root) > 1 and sandbox.root[1] == ":"
+    rel = rt.venv_python_windows if windows_root else rt.venv_python_posix
     return f"{sandbox.root}/{venv_dir}/{rel}"
 
 

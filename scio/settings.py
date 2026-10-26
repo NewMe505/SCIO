@@ -55,7 +55,12 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["local", "docker", "e2b"] = "local"
     """``local`` is for tests and dev only: it cannot disable the network. Read by
     ``RunContext.create`` (I-054)."""
+    product_sandbox_backend: Literal["auto", "local", "docker"] = "auto"
+    """The backend ``scio build`` uses (M9): ``auto`` is Docker when a daemon answers and the
+    worker backend is ``aci``, else ``local`` with the reason in the ledger; ``local`` and
+    ``docker`` force one. Task mode and ``scio new`` keep ``sandbox_backend``."""
     sandbox_docker_image: str = "python:3.12-slim"
+    """Needs ``git`` for product builds: ``docker/sandbox.Dockerfile`` adds it to this image."""
     sandbox_e2b_template: str | None = None
     sandbox_timeout_s: int = 120
     sandbox_memory_mb: int = 2048

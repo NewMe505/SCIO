@@ -621,6 +621,9 @@ def test_http_product_with_a_dependency_builds_and_passes_black_box_acceptance(
         assert any(
             "product environment created" in e.text and DEPENDENCY in e.text for e in s.ledger
         )
+        # the ledger says which sandbox the build ran in and what a local one does not enforce
+        notices = [e.text for e in s.ledger if e.text.startswith("sandbox: local")]
+        assert notices and "not enforced" in notices[0]
         assert s.integration and "[acceptance] passed (http http://127.0.0.1:" in s.integration
         assert "[tests] passed" in s.integration and "[lint] clean" in s.integration
         out = resume_build(ctx, "merge and stop")

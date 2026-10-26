@@ -36,6 +36,10 @@ from scio.harness.types import (
 )
 
 PROVIDER_NAME = "claude_code"
+STRUCTURED_MAX_TURNS = 3
+"""Turns for a ``--json-schema`` call: the answer is a ``StructuredOutput`` tool call that
+Claude Code bounces with a schema error when it misses, and the retry is another turn
+(I-077). A plain completion keeps one turn."""
 STRIPPED_ENV = ("CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 RETRYABLE_ERRORS = ("rate_limit", "overloaded", "server_error", "api_retry", "timed out")
 TRANSIENT_SUBTYPES = ("error_during_execution",)
@@ -208,7 +212,9 @@ class ClaudeCodeProvider:
                 "--tools",
                 "",
                 "--max-turns",
-                "1",
+                # A schema answer is a StructuredOutput tool call that Claude Code may bounce
+                # with a schema error; the model needs a further turn to retry (I-077).
+                str(STRUCTURED_MAX_TURNS if schema is not None else 1),
                 "--no-session-persistence",
                 "--model",
                 request.model,

@@ -134,6 +134,7 @@ Template:
 - Root cause: environment
 - Fix: `tests/live/test_docker_live.py` runs the real `DockerSandbox` (exec, files through the mount, network off, timeout kill, non-zero exit) wherever a Docker daemon is reachable and skips elsewhere. GitHub's ubuntu runners have Docker, so the project's own CI exercises it on every PR from this change on. The E2B half is split out as I-029
 - Sweep: the Docker live test also checks that a timed-out container is actually gone (`docker ps` empty), which the unit test could only assert by command construction
+- Update 2026-10-26 (M9, ADR 0013 decision 10): the live file now covers the persistent container, the internal network, the egress proxy's allowlist, the product environment and an http app inside the container, and git on the mount, in CI's own `docker-live` job; the dev machine still has no daemon, so every Docker change is first run by CI
 - Resolved: 2026-10-10 (Docker) · Status: resolved
 
 ### I-030 · `import scio.prompt` alone was a circular import since M1
@@ -615,5 +616,21 @@ Template:
 - Symptom: the CI-equivalent command in CLAUDE.md cannot run as written; any session that follows it stops at pytest
 - Root cause: the two are uv's 46 KB unsigned trampoline launchers (`.venv/Scripts/*.exe`) with per-file hashes; the machine's Application Control (Smart App Control) policy decides per hash and blocks those two. Environment, not code
 - Fix: run the module forms, `uv run python -m pytest` and `uv run python -m scio`; `scio/__main__.py` added so the second exists. CLAUDE.md's CI-equivalent line and the live-run command notes use the module forms. CI (`ubuntu-latest`) is unaffected and keeps `uv run pytest`
-- Sweep: `grep -rn "uv run pytest\|uv run scio" CLAUDE.md CONTRIBUTING.md README.md docs scripts` lists README examples (left for users on ordinary machines) and the workflow (Linux, left). Guard: `tests/unit/test_cli.py` imports `scio.__main__`
+- Sweep: `grep -rn "uv run pytest\|uv run scio" CLAUDE.md CONTRIBUTING.md README.md docs scripts` lists README examples (left for users on ordinary machines) and the workflow (Linux, left). Guard: `test_python_m_scio_is_the_console_entry_point` in `tests/unit/test_cli_and_nodes.py`
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-076 · `scio new --thread X --decision ...` without `--dir` bootstrapped the product under `.scio/products/<thread>`, not where the thread started
+- Found: 2026-10-26 · M9 live http milestone · `scio new --prompt ... --dir <P>` paused for the interview; the two resume calls passed only `--thread` and `--decision`; the approval payload still showed `target_dir: <P>`, but the bootstrap committed into `SCIO/.scio/products/new-http1` and `<P>` stayed empty
+- Symptom: a "done" bootstrap with a commit hash and an empty target directory; `scio build --product <P>` says "run scio new first"
+- Root cause: `_new` computed `target = args.dir or .scio/products/<thread>` on every call and passed it as the sandbox root, so on resume the CLI's default replaced the directory the thread was started in; the state's `target_dir` was only informational. The Fake CLI test passed `--dir` on every call, so the path was never exercised
+- Fix: on resume the CLI reads `target_dir` from the thread's checkpoint (`product_target_dir`) and uses it; a different `--dir` is reported and ignored; a thread with no checkpoint is a usage error (exit 2). The live product was moved by hand to `<P>` (a fresh repository, nothing else referenced the path)
+- Sweep: `scio build --product DIR` and `scio status --product DIR` take the directory explicitly on every call and `scio report --thread` reads state only; no other command derives a path on resume (`grep -n "products\|args.dir" scio/cli.py`). Guard: `test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt` resumes once without `--dir` and once with a different one
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-077 · The Claude Code worker's typed summary died `error_max_turns` when the model's first structured answer missed the schema
+- Found: 2026-10-26 · M9 live http milestone (`build-bookmarks_api-m1`, feature P1) · the explorer's `localize` turn ended normally; the `--resume ... --tools "" --max-turns 1 --json-schema` summary call returned `Reached maximum number of turns (1) (subtype=error_max_turns)` and `parse_result` raised `FatalError`; the build crashed before any code was written ($0.34 estimated so far)
+- Symptom: a fatal crash in a step that has no tools and one question to answer; the previous live milestone (44 runs) never hit it
+- Root cause: Claude Code delivers `--json-schema` output through a `StructuredOutput` tool call. The session transcript (`~/.claude/projects/<product>/2ded7e72....jsonl`) shows the model's payload omitted the required `question` key, Claude Code answered the tool call with `Output does not match required schema: root: must have required property 'question'`, and the retry would have been a second turn, which `--max-turns 1` forbade. SCIO's own re-ask loop never ran because the failure arrived as a run error, not an invalid payload
+- Fix: `SUMMARY_MAX_TURNS = 3` for the worker's summary and `STRUCTURED_MAX_TURNS = 3` for the provider's schema calls (a plain completion keeps one turn); a summary attempt that still ends `error_max_turns` is re-asked once with the schema's required keys named, and only then fatal
+- Sweep: `grep -rn '"--max-turns"' scio` lists the worker's first turn (the loop's cap, unchanged), the worker's summary and the provider's `_invoke`: both schema paths fixed. Guard: `test_worker_summary_capped_by_claude_codes_schema_check_is_re_asked`; the provider argv test asserts three turns for a schema call
 - Resolved: 2026-10-26 · Status: resolved

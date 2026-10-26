@@ -26,6 +26,9 @@ class Limits:
     memory_mb: int = 2048
     cpus: float = 1.0
     network: bool = False
+    network_allowlist: tuple[str, ...] = ()
+    """Hosts a network-open call (the install phase) may reach; enforced by backends that
+    can (Docker through its egress proxy, M9). Empty means unrestricted when open."""
 
 
 @dataclass(frozen=True)

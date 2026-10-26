@@ -198,13 +198,18 @@ def test_cli_new_starts_with_a_chosen_thread_and_resumes_without_a_prompt(
     assert main(["new", "--prompt", PROMPT, "--dir", target, "--thread", "new-cli"]) == 0
     out = capsys.readouterr().out
     assert "PAUSED for a human" in out and "questions" in out
-    assert main(["new", "--thread", "new-cli", "--dir", target, "--decision", "answers"]) == 0
+    # I-076: a resume without --dir (or with another one) continues in the recorded directory
+    assert main(["new", "--thread", "new-cli", "--decision", "answers"]) == 0
     assert "product_md" in capsys.readouterr().out
-    assert main(["new", "--thread", "new-cli", "--dir", target, "--decision", "approve"]) == 0
+    other = str(tmp_path / "elsewhere")
+    assert main(["new", "--thread", "new-cli", "--dir", other, "--decision", "approve"]) == 0
     out = capsys.readouterr().out
-    assert "phase=done" in out and "bootstrap commit" in out
+    assert "phase=done" in out and "bootstrap commit" in out and "ignored" in out
     assert (tmp_path / "product" / ".git").is_dir()
+    assert not (tmp_path / "elsewhere").exists()
+    assert not (tmp_path / ".scio" / "products").exists()
     assert main(["new", "--dir", target]) == 2  # neither a prompt nor a thread
+    assert main(["new", "--thread", "never-started", "--decision", "x"]) == 2  # no checkpoint
 
 
 def test_the_draft_shown_is_the_draft_approved_and_no_model_call_repeats(tmp_path: Path) -> None:

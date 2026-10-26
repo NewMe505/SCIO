@@ -63,8 +63,8 @@ Creating a GitHub repository publishes it, so a human always confirms that step.
    Each feature run's context projection reads a compact summary of these files. This gives the `compactor` role its first consumer. A ranked repo map replaces the 120-file tree cap.
 3. **Product orchestrator** (`scio/product/`). It is a LangGraph graph that calls the task graph as a subgraph. Each feature gets its own checkpoint thread, and the product state is checkpointed too, so a build can resume across sessions. CLI: `scio new --prompt "<idea>" --dir <path> [--gh owner/name]`, `scio build --product <dir>`, `scio status`.
 4. **Sandbox and runtime.**
-   - `SCIO_SANDBOX_BACKEND` is wired up, and Docker is the default for product builds.
-   - Installation runs in two phases. During **install**, the network is limited to the profile's registry allowlist, a lockfile is written, and only dependencies on the approved list are allowed. During **test**, the network is off.
+   - `SCIO_SANDBOX_BACKEND` is wired up, and Docker is the default for product builds (M9, ADR 0013 decision 10: `SCIO_PRODUCT_SANDBOX_BACKEND=auto` picks it when a daemon and the `docker/sandbox.Dockerfile` image are there; the Claude Code worker backend stays local because the binary runs on the host).
+   - Installation runs in two phases. During **install**, the network is limited to the profile's registry allowlist (enforced on Docker by an egress proxy that admits `CONNECT` to those hosts only) and only dependencies on the approved list are allowed. During **test**, the network is off (an internal Docker network has no route out). A lockfile for the install phase is still to come.
    - New tools: `delete_file`, `install_deps` (anything not on the approved list escalates), and `run_app` (manages the app's lifecycle and health probe).
    - There is still no free-form shell. Every command comes from the profile.
 5. **Product-ready quality bar.** The milestone and release gates check all of these:

@@ -28,6 +28,37 @@ from scio.toolchain import Toolchain, get_toolchain
 T0_TOOL_CAP = 10
 
 
+def product_sandbox_backend(settings: Settings) -> tuple[str, str]:
+    """The sandbox backend a product build runs with and a one-line reason for the ledger.
+
+    ``product_sandbox_backend=auto`` (the default) picks Docker when a daemon answers and the
+    worker backend is SCIO's own loop; it falls back to ``local`` otherwise, saying why, so a
+    build never fails for want of Docker but never claims isolation it does not have (M9,
+    ADR 0013 decision 10). An explicit ``local`` or ``docker`` is taken as given.
+    """
+    choice = settings.product_sandbox_backend
+    if choice == "local":
+        return "local", "sandbox: local (SCIO_PRODUCT_SANDBOX_BACKEND=local)"
+    if choice == "docker":
+        return "docker", "sandbox: docker (SCIO_PRODUCT_SANDBOX_BACKEND=docker)"
+    if settings.worker_backend == "claude_code":
+        return "local", (
+            "sandbox: local; the claude_code worker backend runs the binary on the host, so "
+            "the network and the registry allowlist are not enforced during features"
+        )
+    from scio.aci.sandbox.docker import docker_product_ready
+
+    why_not = docker_product_ready(settings.sandbox_docker_image)
+    if why_not is None:
+        return "docker", (
+            f"sandbox: docker ({settings.sandbox_docker_image}; internal network, egress "
+            "proxy for the install phase)"
+        )
+    return "local", (
+        f"sandbox: local; {why_not}, so the network and the registry allowlist are not enforced"
+    )
+
+
 def make_sandbox(settings: Settings, sandbox_root: Path | str, limits: Limits) -> Sandbox:
     """The sandbox backend named by ``settings.sandbox_backend`` (I-054)."""
     if settings.sandbox_backend == "docker":
@@ -106,6 +137,7 @@ class RunContext:
                 timeout_s=settings.sandbox_timeout_s,
                 memory_mb=settings.sandbox_memory_mb,
                 cpus=settings.sandbox_cpus,
+                network_allowlist=tuple(toolchain.runtime().index_allowlist),
             ),
         )
         if github is None and settings.gh_repo:
