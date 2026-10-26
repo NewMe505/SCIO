@@ -17,5 +17,5 @@ Through 0.4.0 the task graph assumed Python everywhere: `run_tests` built a `pyt
 ## Consequences
 - The sandbox keeps two Python-interpreter facts that are about SCIO's own runtime, not the target stack: `LocalSandbox` rewrites argv `python` to `sys.executable`, and sets `PYTHONUTF8=1` and `PIP_NO_INDEX=1` offline. They stay where they are; a product build on another stack still runs SCIO's helper scripts with Python.
 - `evals/solvers.CACHE_PATTERNS` and `scio/loop/impact.DEPENDENCY_FILES` remain as names (tests import them) but are now read from the profile.
-- Detection of a repository's stack is M10's job; until then `SCIO_TOOLCHAIN=python` is the only value `get_toolchain` accepts.
+- Detection of a repository's stack was M10's job and is done (ADR 0014): `SCIO_TOOLCHAIN` accepts `auto` (the default, detection from marker files), `python` and `node-ts`.
 - Supersedes assumption F-8 ("target repositories are Python"): targets are whatever a profile exists for. PROMPT.md's non-goal "No UI" is narrowed to SCIO itself (ADR 0007).

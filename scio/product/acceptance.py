@@ -18,18 +18,17 @@ from __future__ import annotations
 
 import socket
 import subprocess
-import sys
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from scio.aci.runtime import healthy
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.sandbox.local import LocalSandbox
+from scio.aci.sandbox.local import INTERPRETER_WORD, LocalSandbox, resolve_command
 from scio.graph.run_context import RunContext
 from scio.state.models import ProductSpec
+from scio.toolchain import Toolchain, python_toolchain
 
-ACCEPTANCE_DIR = "tests/acceptance"
 HEALTH_TIMEOUT_S = 30
 APP_LOG = ".scio/sandbox/app.log"
 APP_PID = ".scio/sandbox/app.pid"
@@ -47,20 +46,14 @@ class RunningApp:
 
     argv: list[str]
     url: str
+    _toolchain: Toolchain = field(default_factory=python_toolchain)
     _proc: subprocess.Popen[str] | None = None
     _sandbox: Sandbox | None = None
 
     def is_healthy(self, path: str) -> bool:
         if self._sandbox is not None:
-            probe = (
-                "import sys, urllib.request\n"
-                "try:\n"
-                f"    status = urllib.request.urlopen({self.url + path!r}, timeout=1).status\n"
-                "    sys.exit(0 if status < 400 else 1)\n"
-                "except Exception:\n"
-                "    sys.exit(1)\n"
-            )
-            return self._sandbox.exec(["python", "-c", probe], timeout_s=10).ok
+            probe = self._toolchain.health_probe_argv(self.url + path)
+            return self._sandbox.exec(probe, timeout_s=10).ok
         return healthy(self.url + path)
 
     def exited(self) -> bool:
@@ -91,13 +84,16 @@ class RunningApp:
         return out
 
 
-def start_app(sb: Sandbox, argv: Sequence[str], url: str) -> RunningApp:
-    """Start ``argv`` (``python`` rewritten to the product environment) where the sandbox
-    runs: a host subprocess on a local sandbox, a detached process inside any other."""
+def start_app(
+    sb: Sandbox, argv: Sequence[str], url: str, toolchain: Toolchain | None = None
+) -> RunningApp:
+    """Start ``argv`` (the interpreter word rewritten to the product environment) where the
+    sandbox runs: a host subprocess on a local sandbox, a detached process inside any other,
+    probed with the profile's health command."""
     argv = list(argv)
+    tc = toolchain or python_toolchain()
     if isinstance(sb, LocalSandbox):
-        if argv[0] == "python":
-            argv[0] = sb.python or sys.executable
+        argv = resolve_command(argv, sb.python)
         proc = subprocess.Popen(
             argv,
             cwd=sb.root,
@@ -107,8 +103,8 @@ def start_app(sb: Sandbox, argv: Sequence[str], url: str) -> RunningApp:
             encoding="utf-8",
             errors="replace",
         )
-        return RunningApp(argv, url, _proc=proc)
-    if argv[0] == "python" and sb.python:
+        return RunningApp(argv, url, tc, _proc=proc)
+    if argv[0] == INTERPRETER_WORD and sb.python:
         argv[0] = sb.python
     quoted = " ".join(_sh_quote(a) for a in argv)
     sb.write_text(f"{sb.root}/{APP_LOG}", "")
@@ -117,7 +113,7 @@ def start_app(sb: Sandbox, argv: Sequence[str], url: str) -> RunningApp:
     )
     if not r.ok:
         raise RuntimeError(f"could not start the app in the sandbox: {r.output[-500:]}")
-    return RunningApp(argv, url, _sandbox=sb)
+    return RunningApp(argv, url, tc, _sandbox=sb)
 
 
 def _sh_quote(s: str) -> str:
@@ -135,9 +131,9 @@ def wait_healthy(app: RunningApp, health_path: str, timeout_s: int = HEALTH_TIME
 
 def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
     sb, tc = ctx.sandbox, ctx.toolchain
-    acc_dir = f"{sb.root}/{ACCEPTANCE_DIR}"
+    acc_dir = f"{sb.root}/{tc.acceptance_dir}"
     if not sb.exists(acc_dir):
-        return f"[acceptance] skipped: no {ACCEPTANCE_DIR}", True
+        return f"[acceptance] skipped: no {tc.acceptance_dir}", True
     env: dict[str, str] = {}
     app: RunningApp | None = None
     label = "cli"
@@ -146,10 +142,10 @@ def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
         url = f"http://127.0.0.1:{port}"
         argv = [
             *tc.runtime().app_argv,
-            spec.app.module or spec.name,
+            tc.app_target(spec.name, spec.app.module),
             *[a.replace("{port}", str(port)) for a in spec.app.args],
         ]
-        app = start_app(sb, argv, url)
+        app = start_app(sb, argv, url, tc)
         if not wait_healthy(app, spec.app.health_path):
             output = app.stop()
             return (

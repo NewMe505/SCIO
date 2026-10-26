@@ -472,3 +472,36 @@ Lessons:
 
 ### Still open after M9
 - `run_app` inside a container; a lockfile for the install phase; the Docker default has run only in CI.
+
+## M10: Second stack (2026-10-26, issue #51, ADR 0014, PR #52)
+
+### Lessons applied
+- Inventory first (M6, pre-flight 12): a read-only sweep before any code listed every Python assumption M7 to M9 had re-introduced outside the profile (the scaffold, the normaliser's `python -m` literals, the venv runtime, the acceptance runner's directory and health probe, `run_tests` and `edit_file` never receiving the context's toolchain, the Claude Code allow-rules, the planner prompt, every Fake script); each became an edit in slices 3 to 5 and the list is the issue body.
+- The graph names what, a profile says how (ADR 0009): every new need became a protocol member (`acceptance_dir`, `skeleton_command`, `command_words`, `app_target`, `syntax_check_argv`, `health_probe_argv`, `detect`) and the yaml says how; no `if stack ==` was written.
+- Tests never depend on what the machine has (I-074, I-080): `tests/node_support.py` skips the Node tests where Node 22 is absent; CI's `checks` job installs it, so the tests count there.
+- Measure before designing (pre-flight 8): the TAP shape, "no test files" being exit 0 with `# tests 0`, the name filter, absolute globs, `node --check` on `.ts`, `npm` being a `.cmd` shim and `process.features.typescript == "strip"` were each probed on this machine before the yaml was written.
+- One live trial after the Fake (M5): the live `node-ts` milestone runs on the Claude Code backend after the Fake both-stacks build passed.
+
+### What succeeded
+- The python profile moved onto the generic loader with its tests unchanged (`test_toolchain.py` still compares the old literals), which is the definition of "no behaviour change" for the refactor.
+- The TypeScript walking skeleton runs, tests, lints (eslint absent is "not the agent's problem"), serves its health path and passes black-box acceptance with no download, on the first run of the scaffold test.
+- `test_same_spec_builds_in_both_stacks`: the `todo_api` spec bootstraps and builds M1 in Python and in TypeScript through the unchanged milestone loop: install phase, two features through the task graph, the started server, the black-box run, the quality bar (`[typecheck] skipped: tool absent`), merge, a clean tree, the product's own CI commands green.
+
+### What failed
+- `run_tests` grew a context parameter in the position where verify passed the toolchain, and the python default answered for the TypeScript product: pytest found no tests in a repository with none (I-082). The unit tests were green because the python build was unaffected; the both-stacks Fake build found it in one run. A default that hides a wrong call is the hazard pre-flight 12 names.
+- `node --check` accepted a TypeScript parameter property that the strip-only loader refused, so the edit gate let a file through that broke every import (I-083); the gate now uses the loader's own parser (`module.stripTypeScriptTypes`).
+- `subprocess.run(["npm", ...])` cannot spawn npm's `.cmd` shim on Windows (I-081); the local sandbox resolves bare commands through `shutil.which` there.
+- The first CI run of the branch failed the three Node tests with "Cannot allocate Wasm memory": the local sandbox's POSIX `RLIMIT_AS` (2 GB of *virtual* address space) killed V8's type stripper, a limit the Windows dev machine never applied (I-084). Third "green here, red there" of the day after I-074 and I-080; the dev machine and the runner differ in packages, environment variables and now resource limits, and CI is the only place all three are the runner's.
+
+### The live node-ts milestone (2026-10-26, Claude Code backend, nothing billed)
+`scio new` with a TypeScript brief: the planner (prompt v2, the stack menu rendered from the registry) chose `node-ts`, `src/main.ts` as the entry, `zod` as the one approved dependency, six features with black-box criteria; the bootstrap landed in the directory passed on the first call (the I-076 fix holding live) with the scaffold's lint and `node --test` green. `scio build` ran M1 "Walking skeleton with note create and list": P1 and P2 at T1, P3 at T0, every feature passed its own verify, one advisor escalation (P1 changed `package.json`). The install phase ran `npm install` through the local sandbox on Windows (the `.cmd` resolution of I-081) and, because the scaffold declares the quality tools as devDependencies, installed eslint, typescript and the type definitions too, so the quality bar ran for real: `[lint] clean`, 13 tests passed (1 skipped: the acceptance test awaiting `APP_URL`), `[typecheck] passed`, `[build] passed`, `[audit] passed: found 0 vulnerabilities`, `[acceptance] passed (http ...)`. The gate passed and `merge and stop` merged `milestone/1`. Cost: $4.61 estimated over 36 Claude Code runs, $0.00 billed. The M10 done criterion holds on the Fake and live.
+- Found: the install phase leaves `package.json` modified (`npm install --save` rewrites the dependency range) and `package-lock.json` untracked in the product tree after the merge (I-085, open): the lockfile PRODUCT_MODE component 4 asks for exists now but nothing commits it, and the next feature's `git add -A` would.
+
+### Still open after M10
+- I-085: commit the install phase's manifest and lockfile changes as their own `[scio:install]` commit on the milestone branch (or install without `--save`).
+- Docker for Node products (the sandbox image is Python); `run_app` inside a container; the `test_` prefix in `escalation.py`'s drift rule.
+
+### Actions
+- `scio/toolchain/profile.py` (`ProfileToolchain`, `StackParsers`, `load_profile`), `node_ts.py`, `configs/profiles/node-ts.yaml`, the registry with `available_toolchains` and `detect_toolchain`; `Runtime` generalised; `resolve_command`; `ensure_product_env` on `env_marker`; the stack-neutral normaliser, acceptance runner, `run_app`, tool descriptions, allow-rules, planner prompt v2; `node_ts_scaffold` and the `scaffold_for` registry; `resolve_toolchain`, `adopt_toolchain` and the four call sites; `evals/product_scripts_node.py` and `ScriptedResponder(stack=)`; `LocalSandbox` without `RLIMIT_AS` (I-084); `check_readme_status` (the landing page current at every push).
+- Tests: `test_toolchain_node_ts.py`, `test_scaffold_node_ts.py`, the node cases in `test_runtime.py` and `test_sandbox.py`, the normaliser test in both stacks, `test_same_spec_builds_in_both_stacks`, `tests/node_support.py`; CI `setup-node`.
+- ADR 0014; PRODUCT_MODE status; README status, table and roadmap; CHANGELOG; ledger I-081 to I-085.

@@ -39,3 +39,6 @@ Thumbs.db
 docs/api/
 evals/results/
 uv.lock.bak
+
+# Personal Claude Code settings (permission rules), never committed
+.claude/settings.local.json

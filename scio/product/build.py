@@ -65,6 +65,7 @@ from scio.state.models import (
     SCIOState,
     TaskSpec,
 )
+from scio.toolchain import get_toolchain
 
 Node = Callable[[ProductBuildState], dict[str, Any]]
 MILESTONE_GATE_HEADER = "# Milestone gate"
@@ -364,6 +365,11 @@ def load(ctx: RunContext) -> Node:
             spec = parse_product_md(sb.read_text(f"{root}/{PRODUCT_MD}"))
         except ValueError as exc:
             return _halt(ctx, "load_failed", f"PRODUCT.md unreadable: {exc}")
+        # The product's declared stack is the profile every command comes from (M10).
+        try:
+            ctx.adopt_toolchain(get_toolchain(spec.stack))
+        except KeyError as exc:
+            return _halt(ctx, "load_failed", f"PRODUCT.md names an unknown stack: {exc}")
         progress = _read_progress(ctx)
         notes = progress.sync_features(spec)
         entries = [fact(n) for n in notes]

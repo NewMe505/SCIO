@@ -11,7 +11,18 @@ from __future__ import annotations
 import re
 
 from scio.state.models import AppSpec, ProductFeature, ProductSpec, ProductSpecOutput
-from scio.toolchain import get_toolchain
+from scio.toolchain import Toolchain, available_toolchains, get_toolchain
+
+
+def stack_menu() -> str:
+    """The stacks the product planner may choose, one line each with the skeleton command
+    (rendered into the planner prompt; constant for a SCIO version)."""
+    lines = []
+    for name in available_toolchains():
+        tc = get_toolchain(name)
+        lines.append(f"`{name}` (walking skeleton: `{tc.skeleton_command('<package>')}`)")
+    return "; ".join(lines)
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 SKELETON_WORDS = ("skeleton", "health", "--version", "smoke", "starts")
@@ -34,10 +45,12 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
         notes.append(f"product_name {out.product_name!r} normalised to {name!r}")
     stack = out.stack.strip().lower() or "python"
     try:
-        get_toolchain(stack)
+        tc = get_toolchain(stack)
     except KeyError:
-        notes.append(f"stack {out.stack!r} has no toolchain profile; using python")
+        known = ", ".join(available_toolchains())
+        notes.append(f"stack {out.stack!r} has no toolchain profile (known: {known}); using python")
         stack = "python"
+        tc = get_toolchain(stack)
     features: list[ProductFeature] = []
     for i, f in enumerate(out.features, 1):
         fid = f"P{i}"
@@ -56,18 +69,18 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
     ):
         skeleton = ProductFeature(
             id="P1",
-            description="Walking skeleton: the package installs, the CLI answers --version, "
+            description="Walking skeleton: the app starts, answers --version, "
             "and one smoke test passes",
             acceptance=[
-                f"`python -m {name} --version` prints the version and exits 0",
-                "tests/test_smoke.py passes under the profile's test command",
+                f"`{tc.skeleton_command(name)}` prints the version and exits 0",
+                "the smoke test passes under the profile's test command",
             ],
         )
         features = [skeleton] + [
             f.model_copy(update={"id": f"P{i}"}) for i, f in enumerate(features, 2)
         ]
         notes.append("walking skeleton inserted as P1; later features renumbered")
-    features[0], skeleton_notes = _module_only_skeleton(features[0], name)
+    features[0], skeleton_notes = _module_only_skeleton(features[0], name, tc)
     notes.extend(skeleton_notes)
     app = out.app or AppSpec()
     if app.module is not None and app.module.strip() in ("", name):
@@ -92,21 +105,27 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
     return spec, notes
 
 
-_INSTALL_RE = re.compile(r"console[ -]script|entry[ -]point|pip install|installed", re.IGNORECASE)
+_INSTALL_RE = re.compile(
+    r"console[ -]script|entry[ -]point|pip install|npm install -g|npm link|installed",
+    re.IGNORECASE,
+)
 _COMMAND_RE = re.compile(r"`\s*(?P<word>[A-Za-z][\w.-]*)")
 
 
-def _module_only_skeleton(first: ProductFeature, name: str) -> tuple[ProductFeature, list[str]]:
+def _module_only_skeleton(
+    first: ProductFeature, name: str, tc: Toolchain
+) -> tuple[ProductFeature, list[str]]:
     """The walking skeleton must be provable without installing the package (M9): a criterion
     that needs a console script, an entry point or an install, or whose backticked command
-    is not ``python ...``, becomes the ``python -m <package>`` form. Two live planners wrote
-    a console-script P1 that no sandbox could satisfy (M8 retrospective)."""
+    is not one of the profile's command words (``python``, ``node``), becomes the profile's
+    skeleton command (``python -m <package> --version``, ``node src/main.ts --version``).
+    Two live planners wrote a console-script P1 that no sandbox could satisfy (M8)."""
     kept: list[str] = []
     rewritten: list[str] = []
     for criterion in first.acceptance:
         first_word = _COMMAND_RE.search(criterion)
         needs_install = bool(_INSTALL_RE.search(criterion)) or (
-            first_word is not None and first_word.group("word") not in ("python", "pytest")
+            first_word is not None and first_word.group("word") not in tc.command_words
         )
         if needs_install:
             rewritten.append(criterion)
@@ -114,7 +133,7 @@ def _module_only_skeleton(first: ProductFeature, name: str) -> tuple[ProductFeat
             kept.append(criterion)
     if not rewritten:
         return first, []
-    module_form = f"`python -m {name} --version` prints the version and exits 0"
+    module_form = f"`{tc.skeleton_command(name)}` prints the version and exits 0"
     if module_form not in kept:
         kept.insert(0, module_form)
     note = (

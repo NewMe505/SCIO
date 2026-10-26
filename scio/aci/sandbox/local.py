@@ -1,6 +1,7 @@
 """Local subprocess sandbox: tests and development only.
 
-It enforces the wall-clock limit and, on POSIX, address-space and CPU limits. It
+It enforces the wall-clock limit and, on POSIX, a CPU-time limit (not an address-space
+limit: that breaks V8, I-084; ``Limits.memory_mb`` is enforced by Docker). It
 **cannot** turn the network off; ``Limits.network=False`` is recorded but not enforced,
 and a warning is logged once. Use ``docker`` or ``e2b`` for anything untrusted.
 """
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,11 +23,35 @@ from scio.aci.sandbox.base import ExecResult, Limits, resolve_under
 
 log = logging.getLogger(__name__)
 
+INTERPRETER_WORD = "python"
+"""The profile word the sandbox rewrites to the product environment's interpreter."""
+
 
 def _text(data: str | bytes | None) -> str:
     if data is None:
         return ""
     return data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+
+
+def resolve_command(argv: Sequence[str], interpreter: str | None) -> list[str]:
+    """What the host actually spawns for a profile command.
+
+    ``python`` becomes the product environment's interpreter once it exists, else the one
+    running SCIO, never whatever is on PATH. On Windows a bare command word (``npm``,
+    ``npx``) is resolved through PATH first, because ``CreateProcess`` does not try the
+    ``.cmd`` shims npm ships and Python would report "command not found" (I-081).
+    """
+    argv = list(argv)
+    if not argv:
+        return argv
+    head = argv[0]
+    if head == INTERPRETER_WORD:
+        argv[0] = interpreter or sys.executable
+    elif sys.platform == "win32" and Path(head).name == head and not head.lower().endswith(".exe"):
+        found = shutil.which(head)
+        if found:
+            argv[0] = found
+    return argv
 
 
 class LocalSandbox:
@@ -47,9 +73,11 @@ class LocalSandbox:
         return resolve_under(self.root, path)
 
     def _preexec(self) -> None:  # POSIX only; the module does not exist on Windows
+        # CPU time only. RLIMIT_AS capped *virtual* address space, which V8 reserves by the
+        # tens of gigabytes (Node's TypeScript stripper died with "Cannot allocate Wasm
+        # memory" under 2 GB on CI, I-084) while limiting no real memory; the memory cap is
+        # enforced where it means something, by the Docker backend.
         resource: Any = importlib.import_module("resource")
-        mem = self.limits.memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
         cpu = max(1, int(self.limits.timeout_s * max(self.limits.cpus, 0.1)))
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
 
@@ -63,11 +91,7 @@ class LocalSandbox:
         network: bool | None = None,
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
-        argv = list(argv)
-        if argv and argv[0] == "python":
-            # The product environment once it exists, else the interpreter running SCIO,
-            # never whatever is on PATH.
-            argv[0] = self.python or sys.executable
+        argv = resolve_command(argv, self.python)
         run_env = {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})}
         allow_network = self.limits.network if network is None else network
         if not allow_network:

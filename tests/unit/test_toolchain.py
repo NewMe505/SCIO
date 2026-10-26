@@ -87,7 +87,7 @@ def test_file_rules_match_the_pre_m6_behaviour() -> None:
 # --- the boundary: no stack-specific command argv outside scio/toolchain/ ---
 
 _ARGV_TOKEN = re.compile(
-    r"""["'](?:pytest|ruff|mypy|pip|uv|npm|pnpm|npx|vitest|eslint|tsc)["']\s*,"""
+    r"""["'](?:pytest|ruff|mypy|pip|uv|node|npm|pnpm|npx|vitest|eslint|tsc)["']\s*,"""
 )
 _LITERALS = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "E9,F63")
 

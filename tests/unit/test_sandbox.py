@@ -233,3 +233,26 @@ def test_e2b_adapter_with_fake_client() -> None:
     with pytest.raises(PathEscapeError):
         sb.read_text("/etc/passwd")
     sb.close()
+
+
+def test_resolve_command_rewrites_the_interpreter_and_finds_cmd_shims_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-081: ``npm`` and ``npx`` are ``.cmd`` shims on Windows; ``CreateProcess`` does not
+    try PATHEXT, so a bare name must go through ``shutil.which`` first."""
+    import shutil
+    import sys
+
+    from scio.aci.sandbox.local import resolve_command
+
+    assert resolve_command(["python", "-V"], "/env/bin/python") == ["/env/bin/python", "-V"]
+    assert resolve_command(["python"], None) == [sys.executable]
+    assert resolve_command([], None) == []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda name: {"npm": "C:/n/npm.CMD"}.get(name))
+    assert resolve_command(["npm", "install"], None) == ["C:/n/npm.CMD", "install"]
+    assert resolve_command(["node", "x.ts"], None) == ["node", "x.ts"]  # not found: unchanged
+    assert resolve_command(["C:/n/node.exe", "x"], None) == ["C:/n/node.exe", "x"]  # a path
+    assert resolve_command(["tool.exe"], None) == ["tool.exe"]
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert resolve_command(["npm", "install"], None) == ["npm", "install"]

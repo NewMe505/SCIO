@@ -270,3 +270,54 @@ def test_the_draft_shown_is_the_draft_approved_and_no_model_call_repeats(tmp_pat
     finally:
         ctx.close()
     assert (tmp_path / "product" / "PRODUCT.md").read_text(encoding="utf-8") == shown
+
+
+def test_normaliser_speaks_the_stacks_skeleton_language() -> None:
+    """M10: the inserted skeleton and the console-script rewrite follow the profile. A node-ts
+    product gets `node src/main.ts --version`; a backticked `node` command is not rewritten; a
+    global npm install is."""
+    base = dict(title="Shop", vision="v", users=["u"], quality_bar=["tests"])
+    out = ProductSpecOutput(
+        product_name="shop",
+        features=[ProductFeature(id="P1", description="List items", acceptance=["prints items"])],
+        stack="node-ts",
+        **base,
+    )
+    spec, notes = normalise_spec(out)
+    assert spec.stack == "node-ts"
+    assert (
+        spec.features[0].acceptance[0]
+        == "`node src/main.ts --version` prints the version and exits 0"
+    )
+    assert "python" not in " ".join(spec.features[0].acceptance)
+    out = ProductSpecOutput(
+        product_name="shop",
+        features=[
+            ProductFeature(
+                id="P1",
+                description="Walking skeleton",
+                acceptance=[
+                    "`shop --version` prints shop 0.1.0 after `npm install -g`",
+                    "`node src/main.ts --version` prints 0.1.0",
+                    "GET /health answers 200",
+                ],
+            )
+        ],
+        stack="node-ts",
+        **base,
+    )
+    spec, notes = normalise_spec(out)
+    acc = spec.features[0].acceptance
+    # the module form leads, the criterion with the stack's own command word is kept
+    assert acc == [
+        "`node src/main.ts --version` prints the version and exits 0",
+        "`node src/main.ts --version` prints 0.1.0",
+        "GET /health answers 200",
+    ]
+    assert any("installed entry point" in n and "1 rewritten" in n for n in notes)
+    # the python profile still rewrites a `node` command (not one of its words)
+    out_py = out.model_copy(update={"stack": "python"})
+    spec_py, _ = normalise_spec(out_py)
+    assert spec_py.features[0].acceptance[0] == (
+        "`python -m shop --version` prints the version and exits 0"
+    )

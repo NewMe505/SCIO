@@ -212,7 +212,7 @@ class GraphSolver:
         dest = f"{ctx.sandbox.root}/tests/{src.name}"
         ctx.sandbox.write_text(dest, src.read_text(encoding="utf-8"))
         try:
-            out = run_tests(ctx.sandbox, RunTestsInput(path=dest))
+            out = run_tests(ctx.sandbox, RunTestsInput(path=dest), toolchain=ctx.toolchain)
         except ToolError as exc:
             return False, str(exc)[:200]
         return out.startswith("all tests passed"), out.splitlines()[0][:200]

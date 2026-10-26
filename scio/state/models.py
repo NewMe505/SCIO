@@ -146,7 +146,7 @@ class FeatureItem(BaseModel):
     """``F1``, ``F2``, ..."""
     description: str
     test_filter: str | None = None
-    """``pytest -k`` expression or path passed to ``run_tests``."""
+    """Filter expression or path passed to ``run_tests`` (the profile's filter flag)."""
     status: FeatureStatus = FeatureStatus.FAILING
     commit_sha: str | None = None
     evidence: ArtifactRef | None = None
@@ -314,9 +314,9 @@ class WorkerOutput(BaseModel):
     tests_added: list[str] = Field(
         default_factory=list,
         description=(
-            "The tests that prove the features worked on, existing or newly written: pytest "
-            "node ids (tests/test_x.py::test_name) or -k keywords. Never empty when a feature "
-            "is claimed done."
+            "The tests that prove the features worked on, existing or newly written, named "
+            "the way the task's test runner selects them (a test path, a node id or a name "
+            "filter). Never empty when a feature is claimed done."
         ),
     )
     sweep: SweepRecord | None = None
@@ -377,8 +377,8 @@ class AppSpec(BaseModel):
     kind: Literal["cli", "http"] = "cli"
     """``cli``: a command that exits; ``http``: a server that answers ``health_path``."""
     module: str | None = Field(default=None, max_length=80)
-    """Module for the toolchain's app command (``python -m <module>``); the package itself
-    when None."""
+    """What the toolchain's app command starts (a module for ``python -m``, an entry file for
+    ``node``); the profile's default for the package when None."""
     args: list[str] = Field(default_factory=list, max_length=12)
     """Arguments that start the server; ``{port}`` is replaced by a free port."""
     health_path: str = Field(default="/health", max_length=200)

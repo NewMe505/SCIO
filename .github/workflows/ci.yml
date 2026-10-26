@@ -25,6 +25,12 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      # The node-ts profile's tests run the TypeScript walking skeleton on Node 22's type
+      # stripping (M10); without Node they skip, so this step is what makes them count.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install
         run: uv sync --all-extras --group dev
 

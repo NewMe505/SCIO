@@ -34,6 +34,11 @@ lint:
   clean_exit_codes: [0, 127]   # 127: the linter is not installed; not the agent's problem
   findings_exit_codes: [1]
 script_argv: [python]
+# Exits 0 when {url} answers below 400; used to probe an app started inside a sandbox (M10).
+health_probe_argv:
+  - python
+  - -c
+  - "import sys, urllib.request\ntry:\n    sys.exit(0 if urllib.request.urlopen('{url}', timeout=1).status < 400 else 1)\nexcept Exception:\n    sys.exit(1)\n"
 # The product-ready quality bar (ADR 0007 decision 5), run by `integrate` after the suite and
 # lint (M9). A check whose tool is absent is reported as skipped, never counted as a pass; a
 # product's own CI installs the tools. Outputs go under .scio/sandbox/, which is git-ignored.
@@ -62,9 +67,15 @@ checks:
 # base interpreter's packages differ per machine, I-074); on a local sandbox a .pth file makes
 # SCIO's own environment visible so `test_tools` need no download, elsewhere they are installed.
 runtime:
-  venv_argv: [python, -m, venv]
-  venv_python: { posix: bin/python, windows: Scripts/python.exe }
+  env_create_argv: [python, -m, venv]
+  env_dir: .scio/sandbox/venv
+  env_interpreter: { posix: bin/python, windows: Scripts/python.exe }   # the marker too
   install_argv: [python, -m, pip, install, --disable-pip-version-check, --no-input, --quiet]
   index_allowlist: [pypi.org, files.pythonhosted.org]
   app_argv: [python, -m]
   test_tools: ["pytest>=8.3", "pytest-cov>=6.0"]
+# Product skeleton and detection (M10, ADR 0014).
+acceptance_dir: tests/acceptance
+skeleton_command: "python -m {name} --version"
+command_words: [python, pytest]
+detect: { markers: [pyproject.toml, setup.py, setup.cfg, requirements.txt], all_of: false }

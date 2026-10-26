@@ -658,3 +658,43 @@ Template:
 - Fix: every `Settings` in the unit test names `product_sandbox_backend`; the explicit `local` notice says "the network and the registry allowlist are not enforced" like the fallbacks do
 - Sweep: `grep -rn "Settings()" tests/unit tests/graph` lists tests of fields that no CI variable sets (`provider_override` is set to `fake` there and every such test sets it explicitly already). Rule for `CONTRIBUTING`: a test of a `Settings` field constructs `Settings(field=...)`; never rely on the default when CI exports a value for it
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-081 · `subprocess.run(["npm", ...])` fails with `FileNotFoundError` on Windows: npm and npx are `.cmd` shims
+- Found: 2026-10-26 · M10 inventory · `node --version` runs from Python, `npm --version` raises `FileNotFoundError` although `shutil.which("npm")` finds `npm.CMD`; through `LocalSandbox.exec` that is exit 127 "command not found"
+- Symptom: every npm step of the node-ts profile (install phase, `npm audit`) would fail on the dev machine and pass on Linux
+- Root cause: `CreateProcess` resolves a bare name against `PATH` but not against `PATHEXT`, so a `.cmd` shim is only found when the extension is spelled out; Python's `subprocess` inherits that
+- Fix: `scio/aci/sandbox/local.py::resolve_command` resolves a bare command word through `shutil.which` on win32 (after the `python` rewrite); `LocalSandbox.exec`, `run_app` and `start_app` all go through it
+- Sweep: `grep -rn "subprocess\.\(run\|Popen\)" scio` lists the sandbox (fixed), `docker.py` (`docker` is an `.exe`), `host_git_identity` (`git` is an `.exe`), `run_app`/`start_app` (fixed). Guard: `test_resolve_command_rewrites_the_interpreter_and_finds_cmd_shims_on_windows`
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-082 · `run_tests` grew a context parameter where verify passed the toolchain, and the python default silently answered for a TypeScript product
+- Found: 2026-10-26 · M10 slice 7 · `test_same_spec_builds_in_both_stacks[node-ts]` stalled P1 at verify: the kept artifact read `no tests collected for filter 'health': no tests ran in 0.00s` (pytest's words) in a repository with no Python test
+- Symptom: a Node product that passes `node --test` by hand fails verify on every iteration; the Fake python build was unaffected, so the unit tests stayed green
+- Root cause: slice 4 made `run_tests(sandbox, inp, ctx=None, toolchain=None)` context-aware; `verify.py` called `run_tests(sb, inp, ctx.toolchain)` positionally, so the toolchain landed in `ctx`, `getattr(ctx, "toolchain")` was None, and `python_toolchain()` filled in. A default that hides a wrong call is the hazard (pre-flight 12)
+- Fix: the two verify calls and the eval solver pass `toolchain=` by keyword; `_toolchain_of` also accepts a `Toolchain` in the context position
+- Sweep: `grep -rn "run_tests(\|edit_file(" scio evals` found exactly the three direct callers (verify twice, `evals/solvers.py`), all fixed. Guard: `test_tools_take_the_toolchain_from_the_context_or_the_direct_argument` runs the node profile through all three call shapes; the both-stacks Fake build is the end-to-end check
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-083 · `node --check` accepted a TypeScript parameter property that Node then refused to load, so the edit gate let a broken file through
+- Found: 2026-10-26 · M10 slice 7 · the scripted P2 `src/store.ts` used `constructor(private readonly path: string)`; `edit_file`'s syntax gate (`node --check`) passed it, and every test import died with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in strip-only mode`, stalling the feature
+- Symptom: a file the gate accepted broke the whole suite at import time (the TAP shows every test file failing, not the edited one)
+- Root cause: `node --check` validates JavaScript syntax after a lenient pass; the strip-only loader rejects non-erasable TypeScript (parameter properties, enums, namespaces) that `--check` does not model. The gate must use the same parser the loader uses
+- Fix: the profile's `syntax_check_argv` runs `module.stripTypeScriptTypes(source, {mode: "strip"})` on the file (parses exactly as the loader will, executes nothing; a syntax error and a non-erasable construct both exit 1). The scripted store uses an explicit field; the scaffold's `tsconfig.json` already sets `erasableSyntaxOnly` so `tsc` agrees once installed
+- Sweep: `grep -rn "constructor(" evals/product_scripts_node.py scio/product/scaffold.py` finds no other parameter property; the planner prompt v2 and ADR 0014 say "erasable syntax only". Guard: `test_cli_skeleton_runs_tests_and_lints_offline` feeds the gate a parameter property and expects a refusal
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-084 · The local sandbox's `RLIMIT_AS` killed Node's TypeScript stripper on Linux: "Cannot allocate Wasm memory for new instance"
+- Found: 2026-10-26 · M10 · PR #52's first CI run: the three Node tests (`test_scaffold_node_ts.py` twice, `test_same_spec_builds_in_both_stacks[node-ts]`) failed on `ubuntu-latest` with `RangeError: WebAssembly.Instance(): Out of memory` from `node:internal/deps/amaro` while every `.ts` file loaded; green on the Windows dev machine
+- Symptom: the pattern of I-074 and I-080 once more (green here, red there), this time from a limit that exists only on POSIX
+- Root cause: `LocalSandbox._preexec` set `RLIMIT_AS` to `Limits.memory_mb` (2 GB). That caps *virtual* address space; V8 reserves tens of gigabytes of it (pointer compression cage, Wasm memory) while using little real memory, so the stripper's Wasm instance could not be created. Windows has no `resource` module, so the dev machine never applied the limit
+- Fix: the local sandbox keeps the CPU-time and wall-clock limits and drops `RLIMIT_AS`; `Limits.memory_mb` is enforced by the Docker backend (`--memory`), where it measures resident memory
+- Sweep: `grep -rn "RLIMIT" scio` finds only `_preexec`; `docker.py` passes `--memory` (unchanged). Guard: the Node tests run in CI's `checks` job on Linux (`setup-node` 22), which is where the limit applied
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-085 · The node-ts install phase leaves `package.json` modified and `package-lock.json` untracked in the product tree
+- Found: 2026-10-26 · M10 live milestone (`notes_service`) · after `merge and stop`, `git status` in the product showed ` M package.json` and `?? package-lock.json`
+- Symptom: a merged milestone with a dirty tree; the next feature's `git add -A` would commit the lockfile and the rewritten dependency range as part of an unrelated feature
+- Root cause: `npm install --save <spec>` rewrites the dependency's range in `package.json` and writes the lockfile; the install phase runs as an orchestrator step outside any feature commit, and the Python profile never showed this because `pip` writes nothing into the tree. PRODUCT_MODE component 4 asks for a lockfile; nothing owns committing it
+- Fix: open. Candidates: the install phase commits its manifest and lockfile changes as `chore: install approved dependencies [scio:install]` on the milestone branch (a `run_effect` with the lockfile's hash as the probe), or `install_argv` drops `--save` and the scaffold's `package.json` is the single source of ranges
+- Sweep: the Fake `todo_api` node build has no dependency, so `test_same_spec_builds_in_both_stacks` passes its clean-tree assertion; a Fake case with one dependency would need the registry, so the guard belongs with the fix
+- Status: open

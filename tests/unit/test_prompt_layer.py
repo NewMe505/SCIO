@@ -27,10 +27,13 @@ EXPECTED_ROLES = {
 def test_registry_has_every_role_at_v1() -> None:
     reg = PromptRegistry()
     assert set(reg.roles()) == EXPECTED_ROLES
+    # Templates are static (cacheable). The one placeholder is the product planner's stack
+    # menu, rendered from the toolchain registry: constant for a SCIO version (M10).
+    static_values = {"product_planner": ["stacks"]}
     for role in EXPECTED_ROLES:
         t = reg.get(role)
         assert t.version >= 1 and t.text.strip()
-        assert t.placeholders() == []  # v1 templates are fully static (cacheable)
+        assert t.placeholders() == static_values.get(role, [])
 
 
 def test_registry_versions_and_render(tmp_path) -> None:  # type: ignore[no-untyped-def]
