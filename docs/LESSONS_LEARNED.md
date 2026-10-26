@@ -472,3 +472,27 @@ Lessons:
 
 ### Still open after M9
 - `run_app` inside a container; a lockfile for the install phase; the Docker default has run only in CI.
+
+## M10: Second stack (2026-10-26, issue #51, ADR 0014)
+
+### Lessons applied
+- Inventory first (M6, pre-flight 12): a read-only sweep before any code listed every Python assumption M7 to M9 had re-introduced outside the profile (the scaffold, the normaliser's `python -m` literals, the venv runtime, the acceptance runner's directory and health probe, `run_tests` and `edit_file` never receiving the context's toolchain, the Claude Code allow-rules, the planner prompt, every Fake script); each became an edit in slices 3 to 5 and the list is the issue body.
+- The graph names what, a profile says how (ADR 0009): every new need became a protocol member (`acceptance_dir`, `skeleton_command`, `command_words`, `app_target`, `syntax_check_argv`, `health_probe_argv`, `detect`) and the yaml says how; no `if stack ==` was written.
+- Tests never depend on what the machine has (I-074, I-080): `tests/node_support.py` skips the Node tests where Node 22 is absent; CI's `checks` job installs it, so the tests count there.
+- Measure before designing (pre-flight 8): the TAP shape, "no test files" being exit 0 with `# tests 0`, the name filter, absolute globs, `node --check` on `.ts`, `npm` being a `.cmd` shim and `process.features.typescript == "strip"` were each probed on this machine before the yaml was written.
+- One live trial after the Fake (M5): the live `node-ts` milestone runs on the Claude Code backend after the Fake both-stacks build passed.
+
+### What succeeded
+- The python profile moved onto the generic loader with its tests unchanged (`test_toolchain.py` still compares the old literals), which is the definition of "no behaviour change" for the refactor.
+- The TypeScript walking skeleton runs, tests, lints (eslint absent is "not the agent's problem"), serves its health path and passes black-box acceptance with no download, on the first run of the scaffold test.
+- `test_same_spec_builds_in_both_stacks`: the `todo_api` spec bootstraps and builds M1 in Python and in TypeScript through the unchanged milestone loop: install phase, two features through the task graph, the started server, the black-box run, the quality bar (`[typecheck] skipped: tool absent`), merge, a clean tree, the product's own CI commands green.
+
+### What failed
+- `run_tests` grew a context parameter in the position where verify passed the toolchain, and the python default answered for the TypeScript product: pytest found no tests in a repository with none (I-082). The unit tests were green because the python build was unaffected; the both-stacks Fake build found it in one run. A default that hides a wrong call is the hazard pre-flight 12 names.
+- `node --check` accepted a TypeScript parameter property that the strip-only loader refused, so the edit gate let a file through that broke every import (I-083); the gate now uses the loader's own parser (`module.stripTypeScriptTypes`).
+- `subprocess.run(["npm", ...])` cannot spawn npm's `.cmd` shim on Windows (I-081); the local sandbox resolves bare commands through `shutil.which` there.
+
+### Actions
+- `scio/toolchain/profile.py` (`ProfileToolchain`, `StackParsers`, `load_profile`), `node_ts.py`, `configs/profiles/node-ts.yaml`, the registry with `available_toolchains` and `detect_toolchain`; `Runtime` generalised; `resolve_command`; `ensure_product_env` on `env_marker`; the stack-neutral normaliser, acceptance runner, `run_app`, tool descriptions, allow-rules, planner prompt v2; `node_ts_scaffold` and the `scaffold_for` registry; `resolve_toolchain`, `adopt_toolchain` and the four call sites; `evals/product_scripts_node.py` and `ScriptedResponder(stack=)`.
+- Tests: `test_toolchain_node_ts.py`, `test_scaffold_node_ts.py`, the node cases in `test_runtime.py` and `test_sandbox.py`, the normaliser test in both stacks, `test_same_spec_builds_in_both_stacks`, `tests/node_support.py`; CI `setup-node`.
+- ADR 0014; PRODUCT_MODE status; CHANGELOG; ledger I-081 to I-083.
