@@ -1,7 +1,7 @@
 # Product Mode: from "add a test" to "build with it"
 
-- **Status:** in progress. M6 Foundations done (PR #41, [ADR 0009](adr/0009-toolchain-profiles.md)); M7 Greenfield bootstrap done ([ADR 0010](adr/0010-product-graph-and-bootstrap.md), `scio new`); M8 Decompose + milestone loop done ([ADR 0011](adr/0011-milestone-loop.md), `scio build`, `scio status`); M9 next. Decision record: [ADR 0007](adr/0007-product-mode.md). Tracking: [milestones](https://github.com/NewMe505/SCIO/milestones), [project board](https://github.com/users/NewMe505/projects/1).
-- **Date:** 2026-10-11 (plan), 2026-10-12 (M6, M7, M8)
+- **Status:** in progress. M6 Foundations done (PR #41, [ADR 0009](adr/0009-toolchain-profiles.md)); M7 Greenfield bootstrap done ([ADR 0010](adr/0010-product-graph-and-bootstrap.md), `scio new`); M8 Decompose + milestone loop done ([ADR 0011](adr/0011-milestone-loop.md), `scio build`, `scio status`); M9 Dependencies + runtime done ([ADR 0013](adr/0013-product-runtime.md): product environment, install phase, quality bar, acceptance against the started app, Docker default); M10 next. Decision record: [ADR 0007](adr/0007-product-mode.md). Tracking: [milestones](https://github.com/NewMe505/SCIO/milestones), [project board](https://github.com/users/NewMe505/projects/1).
+- **Date:** 2026-10-11 (plan), 2026-10-12 (M6, M7, M8), 2026-10-26 (M9)
 
 ## Why
 Today (M0–M5, v0.2.0) SCIO reliably takes **one task on one existing Python repository to one pull request**. Evidence: t001 passes 5 of 5 live trials at $0.13, and the nightly regression suite has pass^3 = 1.00 (see [EVAL_HISTORY.md](EVAL_HISTORY.md)). Product Mode extends this so a **prompt becomes product-ready software, in any stack**. A human approves each product milestone, and there is no dollar ceiling for the product as a whole.
@@ -87,7 +87,7 @@ Each milestone has its own issue, branch and draft PR. Read [LESSONS_LEARNED.md]
 | M6 Foundations | Fix I-053 and I-054 (with sweep and guard tests). Extract the `python` profile with no behaviour change. ADR 0009 (toolchain profiles). Update the PROMPT.md non-goals and F-8. | Regression pass^5 = 1.00 offline; live t001 still passes; no Python-specific command outside the `python` profile |
 | M7 Greenfield bootstrap | `scio new`: interview → normalised PRODUCT.md → stack and profile → scaffold → git init → CI → walking skeleton. | On both Fake and one live run, an empty directory becomes a repository with green local CI and a passing smoke test |
 | M8 Decompose + milestone loop (done, ADR 0011) | Progress file, GitHub milestones and issues, features run in sequence on the milestone branch, integration verify, milestone PR, merge_wait, resume. | A two-milestone Fake product survives a crash and resume with no duplicated issues or commits; one live milestone |
-| M9 Dependencies + runtime | Docker default, two-phase network, `install_deps` / `run_app` / `delete_file`, e2e acceptance runner. | A product that needs a third-party dependency and an HTTP server passes black-box e2e tests |
+| M9 Dependencies + runtime (done, ADR 0013) | Docker default, two-phase network, `install_deps` / `run_app` / `delete_file`, e2e acceptance runner. | A product that needs a third-party dependency and an HTTP server passes black-box e2e tests: the Fake `todo_api` offline and the live `bookmarks_api` (http.server plus pyyaml) on the Claude Code backend, M1 merged |
 | M10 Second stack | `node-ts` profile, profile detection, black-box acceptance grading that works for any stack. | The same product spec builds in Python and in TypeScript |
 | M11 Product-ready + evals | Quality-bar checks, release gate, tag and artifact. Product eval suite: p001 CLI app, p002 REST API, p003 web app with UI, all graded by hidden black-box tests. | p001–p003 pass live; rows in EVAL_HISTORY; retrospective written |
 
@@ -97,7 +97,7 @@ Each milestone has its own issue, branch and draft PR. Read [LESSONS_LEARNED.md]
 - **The passing path needs a cap too** (I-046). Milestone loops have iteration and stall exits.
 - **The Fake provider only reproduces the response shapes you thought of** (I-031 to I-035). Each milestone ends with one live trial (`keep_dirs`, cost by role) before anything is scaled.
 - **Cost grows with the transcript** (I-038, I-040). Feature contexts stay small and cached, and product memory reaches them only as a summary.
-- **Docker is not installed on the dev machine** (I-016). M9 needs it locally, or must run its live checks in CI.
+- **Docker is not installed on the dev machine** (I-016). M9's Docker code runs for real only in CI's `docker-live` job; a product build on the dev machine falls back to the local sandbox and says so in its ledger.
 
 ## Verification
 - **Every milestone:** the full local CI command from `CLAUDE.md` passes, the regression suite still has pass^5 = 1.00 on the Fake provider, and the milestone's new Fake end-to-end test passes.

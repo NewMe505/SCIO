@@ -438,7 +438,7 @@ Lessons:
 - Cost shape on this backend: the T1 feature (P2) cost four times the T0 ones, dominated by nine coder runs; each `claude -p` process re-sends Claude Code's prompt, so iterations are the lever, as on the API, but with a higher constant. A milestone of this size is about $4 of estimate, or roughly a tenth of a Max 5x usage window by the same yardstick.
 - The documenter is the most expensive role per feature after the coder (two rounds, each a session plus a summary); M9 should give it one round with the docs check folded into the turn.
 
-## M9: Dependencies + runtime (in progress, 2026-10-13, issue #49, ADR 0013)
+## M9: Dependencies + runtime (2026-10-13 to 2026-10-26, issue #49, ADR 0013)
 
 ### Lessons applied
 - The read-only inventory before any code (as in M6 to M8) listed every seam M9 touches, with lines, and became the issue body; the slices followed it in order: sandbox `delete` and the Claude Code local-only guard, the profile's quality bar, the product environment and install phase, `install_deps` and `run_app`, the `## Runtime` section and the acceptance runner, then the http Fake product.
@@ -465,5 +465,10 @@ Lessons:
 - Docker default (ADR 0013 decision 10): `DockerSandbox` rewritten around one persistent container on an internal network with the egress-proxy sidecar (`scio/aci/sandbox/egress_proxy.py`), `docker_product_ready`, `product_sandbox_backend` and `Settings.product_sandbox_backend`, the ledger notice in `load`, the in-sandbox branch of `run_acceptance`, `docker/sandbox.Dockerfile`, the `docker-live` CI job; tests `test_sandbox.py` (command shapes), `test_egress_proxy.py`, `test_product_sandbox_backend.py`, `tests/live/test_docker_live.py`. Written blind on a machine without Docker (I-016): the first `docker-live` run passed 7 of 9 (a host-side symlink check, I-078, and a wrong expectation about a refused CONNECT, I-079), the second passed 9 of 9 in 19 seconds. The container, the internal network, the proxy's allowlist, the in-container product environment and the in-container http app all worked on the first real run.
 - The first live http milestone found two bugs before any code was written: a resume of `scio new` without `--dir` bootstrapped in a default directory (I-076), and the Claude Code worker's typed summary had one turn where Claude Code's own schema bounce needs two (I-077). Both are fixed with tests; the same build resumed from its checkpoint.
 
-### Still open in M9
-- The live http milestone on the Claude Code backend: resumed after I-077; the result goes here when it lands.
+### The live http milestone (2026-10-26, Claude Code backend, nothing billed)
+`scio new` interviewed and planned `bookmarks_api` (an http.server service persisting to YAML through `pyyaml`, `## Runtime` with `serve --port {port}` and `/health`, 7 features, $0.12 estimated). `scio build` ran M1 "Walking skeleton with bookmark create and list": P1 to P3 at T1, P4 at T0, every feature passed its own verify, one advisor escalation (P1 changed `pyproject.toml`, verdict continue), 63 tool calls and 23 minutes for P1, about 8 minutes for each of the others. Integration on the merged branch: lint clean, 28 tests passed, coverage passed, build and audit skipped (tools absent), `[acceptance] passed (http http://127.0.0.1:63721): 2 passed`, that is the black-box tests ran against the server SCIO started from the product environment. The gate passed, `merge and stop` merged `milestone/1` into `main` and recorded M1 in `progress.json`. Cost: $5.38 estimated over 41 Claude Code runs, $0.00 billed (Max subscription). The M9 done criterion holds on the Fake and live.
+- What it found before any code was written: I-076 (resume without `--dir`) and I-077 (one turn for a schema answer). Both fixed in the same session; the build resumed from its checkpoint without a duplicated commit.
+- Honest limit: `pyyaml` was "already satisfied" through the `.pth` link to SCIO's environment, so the live run did not download anything; the Docker CI test (`test_product_environment_lives_inside_the_container`) is where a real install through the allowlist proxy is exercised.
+
+### Still open after M9
+- `run_app` inside a container; a lockfile for the install phase; the Docker default has run only in CI.
