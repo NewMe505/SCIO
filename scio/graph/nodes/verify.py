@@ -53,7 +53,7 @@ def split_selectors(test_filter: str) -> list[str]:
 
 def _run(ctx: RunContext, flt: str | None) -> tuple[str, bool]:
     try:
-        out = run_tests(ctx.sandbox, RunTestsInput(filter=flt), ctx.toolchain)
+        out = run_tests(ctx.sandbox, RunTestsInput(filter=flt), toolchain=ctx.toolchain)
     except ToolError as exc:
         return str(exc), False
     return out, out.startswith("all tests passed")
@@ -66,7 +66,7 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
     for sel in split_selectors(test_filter):
         inp = selector_input(ctx.sandbox.root, sel, ctx.toolchain)
         try:
-            out = run_tests(ctx.sandbox, inp, ctx.toolchain)
+            out = run_tests(ctx.sandbox, inp, toolchain=ctx.toolchain)
             ok = out.startswith("all tests passed")
         except ToolError as exc:
             out, ok = str(exc), False

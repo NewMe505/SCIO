@@ -208,9 +208,13 @@ def _syntax_check(sandbox: Sandbox, path: str, tc: Toolchain) -> str | None:
 
 def _toolchain_of(ctx: object | None, toolchain: Toolchain | None) -> Toolchain:
     """The toolchain a tool runs with: an explicit one, else the toolbox context's (M10: the
-    context reaches ``edit_file`` and ``run_tests`` too), else the python profile."""
+    context reaches ``edit_file`` and ``run_tests`` too), else the python profile. A
+    toolchain passed in the context's position (verify's direct calls) is taken as one
+    (I-082: the python default silently answered for a node-ts product)."""
     if toolchain is not None:
         return toolchain
+    if isinstance(ctx, Toolchain):
+        return ctx
     from_ctx = getattr(ctx, "toolchain", None)
     return from_ctx if from_ctx is not None else python_toolchain()
 

@@ -35,7 +35,13 @@ lint:
   clean_exit_codes: [0, 127]
   findings_exit_codes: [1]
   absent_patterns: ["Cannot find module"]   # eslint not installed; not the agent's problem
-syntax_check_argv: [node, --check]          # parses one file, TypeScript included
+# Parses one file the way Node will load it: the strip-mode parser rejects syntax errors and
+# non-erasable TypeScript (parameter properties, enums) alike, and executes nothing. Plain
+# `node --check` accepts non-erasable syntax that then fails at import time (I-083).
+syntax_check_argv:
+  - node
+  - -e
+  - 'const m = require("node:module"), fs = require("node:fs"); m.stripTypeScriptTypes(fs.readFileSync(process.argv[1], "utf8"), { mode: "strip" });'
 script_argv: [node]
 # Exits 0 when {url} answers below 400; used to probe an app started inside a sandbox (M10).
 health_probe_argv:

@@ -100,6 +100,12 @@ def test_cli_skeleton_runs_tests_and_lints_offline(tmp_path: Path) -> None:
     assert sb.exec(tc.syntax_check_argv("src/cli.ts") or []).ok
     (tmp_path / "src" / "bad.ts").write_text("const x: number = ;\n", encoding="utf-8")
     assert not sb.exec(tc.syntax_check_argv("src/bad.ts") or []).ok
+    # non-erasable TypeScript loads nowhere under type stripping; the gate must refuse it too
+    (tmp_path / "src" / "pp.ts").write_text(
+        "export class S {\n  constructor(private readonly p: string) {}\n}\n", encoding="utf-8"
+    )
+    r = sb.exec(tc.syntax_check_argv("src/pp.ts") or [])
+    assert not r.ok and "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" in r.output
 
 
 @requires_node

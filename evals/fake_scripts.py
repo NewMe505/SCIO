@@ -577,12 +577,15 @@ SCRIPTS: list[TaskScript] = [
 ]
 
 
-def script_for(title: str) -> TaskScript:
+def script_for(title: str, stack: str = "python") -> TaskScript:
     from evals.product_scripts import PRODUCT_SCRIPTS  # product features first: "json" collides
     from evals.product_scripts_http import HTTP_PRODUCT_SCRIPTS
+    from evals.product_scripts_node import NODE_PRODUCT_SCRIPTS
 
     low = title.lower()
-    for s in [*PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS, *SCRIPTS]:
+    # The same feature titles exist in two stacks (M10): the task's stack picks the script.
+    product_scripts = NODE_PRODUCT_SCRIPTS if stack == "node-ts" else []
+    for s in [*product_scripts, *PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS, *SCRIPTS]:
         if s.key in low:
             return s
     raise KeyError(f"no fake script for task title {title!r}")
@@ -654,10 +657,14 @@ class ScriptedResponder:
         milestone_gate_verdict: str = "pass",
         milestone_size: int = 2,
         product: str = "todo_cli",
+        stack: str = "python",
     ) -> None:
         self.product = product
         """Which scripted product the planner drafts: ``todo_cli`` (a CLI, standard library
         only) or ``todo_api`` (an http server with an approved dependency, M9)."""
+        self.stack = stack
+        """The stack the scripted planner names and the scripted features are written in
+        (``python`` or ``node-ts``, M10): the same ``todo_api`` spec builds in both."""
         self.gate_verdict = gate_verdict
         self.gate_verdicts = list(gate_verdicts or [])
         """Per-call gate verdicts in order; ``gate_verdict`` applies once they run out."""
@@ -690,7 +697,7 @@ class ScriptedResponder:
         if t and (self.script is None or self.script.key not in t.group("title").lower()):
             # A product build runs several tasks through one responder (ADR 0011): a new
             # task title switches the script and restarts the per-task counters.
-            self.script = script_for(t.group("title"))
+            self.script = script_for(t.group("title"), stack=self.stack)
             self.counts = {}
         if req.output_schema is not None:
             return self._structured(role, _schema_kind(req.output_schema), text)
@@ -733,11 +740,13 @@ class ScriptedResponder:
                         },
                     ],
                     "quality_bar": ["tests pass", "lint clean"],
-                    "stack": "python",
-                    "dependencies": [DEPENDENCY],
+                    "stack": self.stack,
+                    # the Python product borrows pyyaml from SCIO's environment; the Node one
+                    # has no host environment to borrow from and stores JSON with node:fs
+                    "dependencies": [DEPENDENCY] if self.stack == "python" else [],
                     "app": {
                         "kind": "http",
-                        "module": "todo_api",
+                        "module": "todo_api" if self.stack == "python" else None,
                         "args": ["serve", "--port", "{port}"],
                         "health_path": "/health",
                     },

@@ -46,7 +46,8 @@ from scio.state.models import (
     SCIOState,
     Tier,
 )
-from scio.toolchain import python_toolchain
+from scio.toolchain import Toolchain, get_toolchain, python_toolchain
+from tests.node_support import requires_node
 from tests.unit.test_github_client import FakeGh
 
 PROMPT = "A CLI todo app with tags and JSON export"
@@ -132,14 +133,16 @@ def _feature_state(ctx: RunContext, thread: str) -> SCIOState:
     return SCIOState.model_validate(values)
 
 
-def _ci_green(repo: Path) -> None:
-    tc = python_toolchain()
+def _ci_green(repo: Path, toolchain: Toolchain | None = None) -> None:
+    """The product's own CI commands pass on ``main`` (the profile's lint and test commands;
+    a linter the product's devDependencies would install may be absent)."""
+    tc = toolchain or python_toolchain()
     lint = subprocess.run(tc.lint_argv("."), cwd=repo, capture_output=True, text=True)
-    assert lint.returncode in (0, 127), lint.stdout
+    assert tc.lint_findings(lint.returncode, lint.stdout, lint.stderr) is None, lint.stdout
     tests = subprocess.run(
         tc.test_argv(filter=None, path=None), cwd=repo, capture_output=True, text=True
     )
-    assert tests.returncode == 0, tests.stdout + tests.stderr
+    assert tc.test_outcome(tests.returncode, tests.stdout) == "passed", tests.stdout + tests.stderr
 
 
 # ---------- the loop ----------
@@ -633,3 +636,47 @@ def test_http_product_with_a_dependency_builds_and_passes_black_box_acceptance(
     assert (repo / ".scio" / "sandbox" / "venv").is_dir()
     assert _git(repo, "status", "--porcelain") == ""  # the black-box run left no junk behind
     _ci_green(repo)
+
+
+@pytest.mark.parametrize(
+    "stack",
+    ["python", pytest.param("node-ts", marks=requires_node)],
+)
+def test_same_spec_builds_in_both_stacks(tmp_path: Path, stack: str) -> None:
+    """M10 done criterion on the Fake: the ``todo_api`` spec (health endpoint, create and list
+    todos over HTTP) bootstraps and builds its first milestone in Python and in TypeScript.
+    Every command comes from the profile: scaffold, install phase, lint, tests, the started
+    server, the black-box acceptance run, the quality bar."""
+    tc = get_toolchain(stack)
+    responder = ScriptedResponder(product="todo_api", milestone_size=2, stack=stack)
+    harness = _bootstrap(tmp_path, responder)
+    repo = tmp_path / "product"
+    md = (repo / "PRODUCT.md").read_text(encoding="utf-8")
+    assert "- kind: http" in md and f"Stack: `{stack}`" in md
+    assert (repo / tc.acceptance_dir).is_dir()
+    assert not any(p.suffix == (".py" if stack == "node-ts" else ".ts") for p in repo.rglob("*"))
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-4:]
+        assert ctx.toolchain.name == stack  # load adopted the spec's stack
+        s = out.state
+        assert [(r.feature_id, r.status) for r in s.feature_runs] == [
+            ("P1", "passed"),
+            ("P2", "passed"),
+        ]
+        assert s.integration and "[acceptance] passed (http http://127.0.0.1:" in s.integration
+        assert "[tests] passed" in s.integration and "[lint] clean" in s.integration
+        if stack == "node-ts":
+            assert "[typecheck] skipped: tool absent" in s.integration
+            assert any("product environment not needed yet" in e.text for e in s.ledger)
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    store = "src/store.ts" if stack == "node-ts" else "todo_api/store.py"
+    assert (repo / store).is_file()
+    assert _git(repo, "status", "--porcelain") == ""  # the black-box run left no junk behind
+    tracked = _git(repo, "ls-files").splitlines()
+    assert not any(t.startswith("node_modules/") or ".scio/sandbox" in t for t in tracked)
+    _ci_green(repo, tc)

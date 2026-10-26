@@ -113,7 +113,9 @@ def test_node_ts_commands() -> None:
         "unix",
         "src",
     ]
-    assert tc.syntax_check_argv("src/a.ts") == ["node", "--check", "src/a.ts"]
+    check = tc.syntax_check_argv("src/a.ts")
+    assert check is not None and check[:2] == ["node", "-e"] and check[-1] == "src/a.ts"
+    assert "stripTypeScriptTypes" in check[2]  # not `node --check`: I-083
     assert tc.syntax_error("const x: number = ;", "a.ts") is None  # no in-process parser
     assert tc.script_argv("scripts/x.js") == ["node", "scripts/x.js"]
     assert tc.skeleton_command("shop") == "node src/main.ts --version"
@@ -244,3 +246,43 @@ def test_run_context_detects_the_stack_unless_one_is_forced(tmp_path: Path) -> N
         assert ctx.adopt_toolchain(python_toolchain()) is False  # already there
     finally:
         ctx.close()
+
+
+def test_tools_take_the_toolchain_from_the_context_or_the_direct_argument(tmp_path: Path) -> None:
+    """I-082: ``run_tests`` and ``edit_file`` grew a context parameter in the position where
+    verify had passed the toolchain, and the python default answered for a node-ts product
+    (the Fake build stalled: pytest found no tests in a TypeScript repository). Both forms
+    must resolve to the profile that was passed."""
+    from collections.abc import Mapping, Sequence
+
+    from scio.aci.runtime import ToolContext
+    from scio.aci.sandbox.base import ExecResult
+    from scio.aci.sandbox.local import LocalSandbox
+    from scio.aci.tools import RunTestsInput, run_tests
+
+    class Recording(LocalSandbox):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.argvs: list[list[str]] = []
+
+        def exec(
+            self,
+            argv: Sequence[str],
+            *,
+            cwd: str | None = None,
+            timeout_s: int | None = None,
+            env: Mapping[str, str] | None = None,
+            network: bool | None = None,
+        ) -> ExecResult:
+            self.argvs.append(list(argv))
+            return ExecResult(0, "# tests 1\n# pass 1\n", "")
+
+    sb = Recording(tmp_path)
+    tc = node_ts_toolchain()
+    run_tests(sb, RunTestsInput(filter="health"), tc)  # the toolchain where a context goes
+    run_tests(sb, RunTestsInput(filter="health"), toolchain=tc)
+    run_tests(sb, RunTestsInput(filter="health"), ToolContext(toolchain=tc))
+    assert [a[0] for a in sb.argvs] == ["node", "node", "node"]
+    assert all("--test-name-pattern" in a for a in sb.argvs)
+    run_tests(sb, RunTestsInput(filter="health"))  # nothing passed: the python default
+    assert sb.argvs[-1][0] == "python"
