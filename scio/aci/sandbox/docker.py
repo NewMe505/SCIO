@@ -286,7 +286,10 @@ class DockerSandbox:
         p.write_text(content, encoding="utf-8", newline="\n")
 
     def exists(self, path: str) -> bool:
-        return self._host_path(path).exists()
+        # A symlink made inside the container may point at a path that exists only there
+        # (a venv's bin/python -> /usr/local/bin/python); it still exists (I-078).
+        p = self._host_path(path)
+        return p.exists() or p.is_symlink()
 
     def delete(self, path: str) -> None:
         p = self._host_path(path)

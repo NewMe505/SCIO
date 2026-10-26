@@ -634,3 +634,19 @@ Template:
 - Fix: `SUMMARY_MAX_TURNS = 3` for the worker's summary and `STRUCTURED_MAX_TURNS = 3` for the provider's schema calls (a plain completion keeps one turn); a summary attempt that still ends `error_max_turns` is re-asked once with the schema's required keys named, and only then fatal
 - Sweep: `grep -rn '"--max-turns"' scio` lists the worker's first turn (the loop's cap, unchanged), the worker's summary and the provider's `_invoke`: both schema paths fixed. Guard: `test_worker_summary_capped_by_claude_codes_schema_check_is_re_asked`; the provider argv test asserts three turns for a schema call
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-078 · `DockerSandbox.exists` said the product environment was missing after it was created, so every call re-created and re-installed it
+- Found: 2026-10-26 · M9 · first `docker-live` CI run (40372435283): `test_product_environment_lives_inside_the_container` got "created" from the second `ensure_product_env` instead of "reused"
+- Symptom: a Docker product build would run `python -m venv` and the pip install before every feature and before `integrate` (slow, and a network-open call each time), while the venv itself worked
+- Root cause: a venv's `bin/python` is a symlink to the interpreter inside the container (`/usr/local/bin/python`); on the host side of the mount `Path.exists()` follows it to a path that does not exist and answers False. The local sandbox never sees this (its symlink targets are host paths), and the unit tests drove Docker through an injected runner that creates no files
+- Fix: `DockerSandbox.exists` is true for a symlink whose target is absent (`exists() or is_symlink()`)
+- Sweep: `grep -n "\.exists()" scio/aci/sandbox/*.py`: `LocalSandbox.exists` (host targets, fine), `E2BSandbox.exists` (asks the sandbox, fine). Guard: the Docker unit test creates a dangling symlink and asserts `exists`; the live test asserts "reused"
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-079 · The live Docker test expected the egress proxy's refusal as an HTTP 403 response; urllib reports a refused CONNECT as `URLError`
+- Found: 2026-10-26 · M9 · same CI run: `test_install_phase_reaches_the_registry_only_through_the_proxy` got `FAIL URLError` for `https://example.com/` while `https://pypi.org/simple/` answered OK
+- Symptom: a red test for behaviour that was correct: the proxy refused the host (the allowlisted host went through)
+- Root cause: for an https URL the client sends `CONNECT`; a non-2xx reply to the tunnel request is `URLError("Tunnel connection failed: 403 Forbidden")` in urllib, never an `HTTPError`. The test was written on a machine with no Docker, from the proxy's point of view rather than the client's
+- Fix: the probe prints the exception text and the test asserts `URLError` with `403` in it
+- Sweep: the unit test of the proxy (`test_egress_proxy.py`) reads the raw `HTTP/1.1 403` line, which is what the proxy sends and is unaffected. Lesson: a live test written without the live system is a hypothesis; the first CI run is its experiment (two of nine were wrong)
+- Resolved: 2026-10-26 · Status: resolved

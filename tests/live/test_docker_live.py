@@ -95,16 +95,17 @@ def test_install_phase_reaches_the_registry_only_through_the_proxy(sandbox: Dock
         "try:\n"
         "    with urllib.request.urlopen(url, timeout=20) as r:\n"
         "        print('OK', r.status)\n"
-        "except urllib.error.HTTPError as e:\n"
-        "    print('HTTP', e.code)\n"
         "except Exception as e:\n"
-        "    print('FAIL', type(e).__name__)\n"
+        "    print('FAIL', type(e).__name__, e)\n"
     )
     sandbox.write_text("/work/probe.py", probe)
     allowed = sandbox.exec(["python", "/work/probe.py", "https://pypi.org/simple/"], network=True)
     assert allowed.ok and allowed.stdout.startswith("OK"), allowed.output
     denied = sandbox.exec(["python", "/work/probe.py", "https://example.com/"], network=True)
-    assert denied.ok and denied.stdout.startswith("HTTP 403"), denied.output
+    # a refused CONNECT reaches urllib as URLError("Tunnel connection failed: 403 Forbidden")
+    assert denied.ok and denied.stdout.startswith("FAIL URLError") and "403" in denied.stdout, (
+        denied.output
+    )
     # the proxy is gone again once the call ends: the next command is offline
     after = sandbox.exec(["python", "/work/probe.py", "https://pypi.org/simple/"])
     assert after.ok and after.stdout.startswith("FAIL"), after.output

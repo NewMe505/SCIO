@@ -89,6 +89,13 @@ def test_docker_argv_and_exec_via_runner(tmp_path: Path) -> None:
     assert len(calls) == 4 and calls[3][-3:] == ["/work/.scio/sandbox/venv/bin/python", "-c", "1"]
     sb.write_text("/work/d/f.txt", "z")
     assert (tmp_path / "d" / "f.txt").read_text() == "z" and sb.read_text("/work/d/f.txt") == "z"
+    # a symlink whose target exists only inside the container still exists (I-078)
+    try:
+        (tmp_path / "d" / "python").symlink_to("/usr/local/bin/python-only-in-the-container")
+    except OSError:
+        pass  # no symlink privilege on this host; the live test covers it
+    else:
+        assert not (tmp_path / "d" / "python").exists() and sb.exists("/work/d/python")
     sb.close()
     assert calls[-2] == ["docker", "rm", "-f", "scio-test"]
     assert calls[-1] == ["docker", "network", "rm", "scio-test-net"]
