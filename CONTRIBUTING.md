@@ -26,6 +26,9 @@ CI checks docs: links, runnable examples, architecture diagram vs. the compiled 
 - docs checks
 - regression eval suite
 
+## The landing page
+- `README.md` says where the project stands at every push: its `> Status:` line names the latest released version and the milestone in progress, the milestone table marks what is done, and the ADR list names the newest ADR. `scripts/check_docs.py::check_readme_status` fails the pre-push chain and CI when it is stale (owner's rule, 2026-10-26).
+
 ## Tests and the environment
 - `Settings` is environment-backed. A test of a `Settings` field constructs `Settings(field=...)` explicitly and never relies on the default: CI exports values (`SCIO_PROVIDER_OVERRIDE=fake`, `SCIO_PRODUCT_SANDBOX_BACKEND=local`) that a bare `Settings()` inherits (I-080).
 - A test that depends on a tool being importable asserts where it comes from (`__file__` under the expected environment), not only that it imports; the dev machine's global packages are not the runner's (I-074).

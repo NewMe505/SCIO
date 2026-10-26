@@ -2,18 +2,18 @@
 
 A model-agnostic, multi-agent framework built on LangGraph that turns a prompt into product-ready software. Today it takes one software task, from a spec or a GitHub Issue, to a merged, tested and documented pull request, reliably and live. Product Mode (M6 to M11) is extending that into building whole products from a prompt, in any stack, one approved milestone at a time.
 
-> Status: **v0.4.0 released; Product Mode M6 (Foundations) in progress.** Task mode is proven live: ten regression tasks at pass^5 = 1.00 offline, nightly live suites green, first live debugger and advisor runs recorded. Roadmap: [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md); decision records: [docs/adr/](docs/adr/); board: [SCIO Product Mode](https://github.com/users/NewMe505/projects/1); milestones: [M6 to M11](https://github.com/NewMe505/SCIO/milestones).
+> Status: **v0.5.0 released; Product Mode M6 to M9 done, M10 (second stack) in progress.** `scio new` and `scio build` have bootstrapped and built live products on the Claude Code backend: `todo_tags` (M8), `bookmarks_api` (M9: an HTTP service with a third-party dependency, black-box acceptance against the started server, $5.38 estimated, nothing billed), and the TypeScript `notes_service` is building now (M10). Task mode is proven live: ten regression tasks at pass^5 = 1.00 offline, nightly live suites green. Roadmap: [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md); decision records: [docs/adr/](docs/adr/); board: [SCIO Product Mode](https://github.com/users/NewMe505/projects/1); milestones: [M6 to M11](https://github.com/NewMe505/SCIO/milestones).
 
 ## Product Mode in one paragraph
 A product orchestrator sits above the proven task graph. It interviews you (two to four Opus questions), writes a normalised `PRODUCT.md`, picks a toolchain profile, and bootstraps a repository with CI and a walking skeleton. Then, milestone by milestone, it decomposes work into GitHub issues, runs each feature through the task graph with the tier pinned, verifies the integrated result against a fixed quality bar (tests with a coverage floor, lint, types, build, smoke and e2e against the running app, dependency audit, secret scan, working README instructions), and opens one milestone PR for a human to merge. Any failing check overrides any model verdict. There is one writer, so a product builds serially; there is no product-level dollar cap by default, but per-feature tier caps, stall caps and iteration caps remain as runaway guards, and cost is reported at every approval stop.
 
 | Milestone | Deliverable | Done when |
 |---|---|---|
-| [M6 Foundations](https://github.com/NewMe505/SCIO/milestone/1) | Toolchain profiles behind one protocol (ADR 0009); `--tier` pins the route; declared settings read | regression pass^5 = 1.00, live t001 unchanged, no Python command outside the profile |
-| [M7 Greenfield bootstrap](https://github.com/NewMe505/SCIO/milestone/2) | `scio new`: interview, `PRODUCT.md`, scaffold, git init, CI, walking skeleton | an empty directory becomes a repo with green CI and a smoke test, Fake and live |
-| [M8 Decompose + milestone loop](https://github.com/NewMe505/SCIO/milestone/3) | progress file, GitHub milestones and issues, features in sequence, integration verify, milestone PR, resume | a two-milestone Fake product survives crash and resume; one live milestone |
-| [M9 Dependencies + runtime](https://github.com/NewMe505/SCIO/milestone/4) | Docker default, two-phase network, `install_deps` / `run_app` / `delete_file`, e2e runner | a product with a third-party dependency and an HTTP server passes black-box e2e |
-| [M10 Second stack](https://github.com/NewMe505/SCIO/milestone/5) | `node-ts` profile, stack detection, stack-agnostic acceptance grading | the same spec builds in Python and TypeScript |
+| [M6 Foundations](https://github.com/NewMe505/SCIO/milestone/1) (done, [ADR 0009](docs/adr/0009-toolchain-profiles.md)) | Toolchain profiles behind one protocol; `--tier` pins the route; declared settings read | regression pass^5 = 1.00, live t001 unchanged, no Python command outside the profile |
+| [M7 Greenfield bootstrap](https://github.com/NewMe505/SCIO/milestone/2) (done, [ADR 0010](docs/adr/0010-product-graph-and-bootstrap.md)) | `scio new`: interview, `PRODUCT.md`, scaffold, git init, CI, walking skeleton | an empty directory becomes a repo with green CI and a smoke test, Fake and live |
+| [M8 Decompose + milestone loop](https://github.com/NewMe505/SCIO/milestone/3) (done, [ADR 0011](docs/adr/0011-milestone-loop.md)) | progress file, GitHub milestones and issues, features in sequence, integration verify, milestone PR, resume | a two-milestone Fake product survives crash and resume; one live milestone (`todo_tags`) |
+| [M9 Dependencies + runtime](https://github.com/NewMe505/SCIO/milestone/4) (done, [ADR 0013](docs/adr/0013-product-runtime.md)) | product environment and install phase, `install_deps` / `run_app` / `delete_file`, quality bar, acceptance against the started app, Docker default with an egress-proxy allowlist | a product with a third-party dependency and an HTTP server passes black-box e2e: Fake `todo_api` and live `bookmarks_api` |
+| [M10 Second stack](https://github.com/NewMe505/SCIO/milestone/5) (in progress, [ADR 0014](docs/adr/0014-second-stack-node-ts.md)) | `node-ts` profile, stack detection, stack-neutral acceptance | the same spec builds in Python and TypeScript (done on the Fake; live `notes_service` running) |
 | [M11 Product-ready + evals](https://github.com/NewMe505/SCIO/milestone/6) | quality bar, release gate, tag and artifact; p001 CLI, p002 REST API, p003 web app | p001 to p003 pass live; rows in EVAL_HISTORY |
 
 ## Task mode in one paragraph
@@ -184,9 +184,9 @@ Task mode (complete, released as 0.1.0 to 0.4.0):
 - post-0.1.0 (done): live validation, realistic and path-specific eval tasks t006 to t010, advisor review of passing high-impact diffs (ADR 0008)
 
 Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on the [project board](https://github.com/users/NewMe505/projects/1)):
-- M6 (in progress): toolchain profiles (ADR 0009), `--tier` pins the route, every declared setting read
-- M7: `scio new`, greenfield bootstrap from a prompt to a repository with green CI
-- M8: progress file, GitHub milestones and issues, the milestone loop with crash-safe resume
-- M9: Docker by default, two-phase network, dependency installation, running the app for e2e
-- M10: `node-ts` profile and stack detection
+- M6 (done, 0.4.0): toolchain profiles (ADR 0009), `--tier` pins the route, every declared setting read
+- M7 (done, 0.5.0): `scio new`, greenfield bootstrap from a prompt to a repository with green CI (ADR 0010)
+- M8 (done): progress file, GitHub milestones and issues, the milestone loop with crash-safe resume (ADR 0011); the Claude Code backend runs SCIO on a subscription (ADR 0012)
+- M9 (done): product environment and install phase, `install_deps` / `run_app` / `delete_file`, quality bar, acceptance against the started app, Docker by default with an egress-proxy allowlist (ADR 0013)
+- M10 (in progress): `node-ts` profile, stack detection, a stack-neutral product path (ADR 0014)
 - M11: product-ready quality bar, release gate, product eval suite p001 to p003
