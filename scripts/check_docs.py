@@ -94,6 +94,38 @@ def check_changelog() -> list[str]:
     return [] if "## [Unreleased]" in text else ["CHANGELOG.md: missing '## [Unreleased]' section"]
 
 
+def check_readme_status() -> list[str]:
+    """The README is the repository's landing page and must say where the project stands at
+    every push (owner's rule, 2026-10-26). Its ``> Status:`` line names the latest released
+    version from CHANGELOG.md and every milestone docs/PRODUCT_MODE.md calls ``in progress``;
+    its ADR list names the newest ADR."""
+    errors: list[str] = []
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    status = next((ln for ln in readme.splitlines() if ln.startswith("> Status:")), "")
+    if not status:
+        return ["README.md: no '> Status:' line (the landing page must say where we are)"]
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    released = re.search(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE)
+    if released and f"v{released.group(1)} released" not in status:
+        errors.append(
+            f"README.md status line does not say 'v{released.group(1)} released' "
+            "(CHANGELOG.md's latest release)"
+        )
+    pm = (ROOT / "docs" / "PRODUCT_MODE.md").read_text(encoding="utf-8")
+    pm_status = next((ln for ln in pm.splitlines() if ln.startswith("- **Status:**")), "")
+    for milestone in re.findall(r"(M\d+) [A-Za-z +\-]+? in progress", pm_status):
+        if not re.search(rf"\b{milestone}\b.{{0,40}}in progress", status):
+            errors.append(
+                f"README.md status line does not say {milestone} is in progress, as "
+                "docs/PRODUCT_MODE.md does"
+            )
+    adrs = sorted(p.name[:4] for p in (ROOT / "docs" / "adr").glob("[0-9][0-9][0-9][0-9]-*.md"))
+    adr_line = next((ln for ln in readme.splitlines() if "docs/adr/" in ln and "0001" in ln), "")
+    if adrs and adrs[-1] not in adr_line:
+        errors.append(f"README.md ADR list does not name the newest ADR {adrs[-1]}")
+    return errors
+
+
 def check_ignored_sources() -> list[str]:
     """No source file under the code directories may be git-ignored (ledger I-017)."""
     import subprocess
@@ -128,6 +160,7 @@ def main() -> int:
         check_links()
         + check_model_ids()
         + check_changelog()
+        + check_readme_status()
         + check_ignored_sources()
         + check_graph_sections()
     )
