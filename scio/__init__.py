@@ -4,4 +4,4 @@ Layers (one package each): ``prompt``, ``context``, ``harness``, ``loop``, ``gra
 Milestone 1 ships ``harness`` and ``prompt``.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
