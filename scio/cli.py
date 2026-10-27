@@ -187,6 +187,21 @@ def _is_build_thread(ctx: RunContext) -> bool:
     return "feature_runs" in values
 
 
+def _upgrade(args: argparse.Namespace) -> int:
+    """``scio upgrade``: additive, one marker commit (issue #58)."""
+    from scio.aci.sandbox.local import LocalSandbox
+    from scio.product.upgrade import UpgradeRefused, upgrade_product
+
+    try:
+        report = upgrade_product(LocalSandbox(args.product))
+    except UpgradeRefused as exc:
+        print(f"scio upgrade: {exc}", file=sys.stderr)
+        return 2
+    for line in report.lines():
+        print(line)
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     from scio.product.build import progress_summary
     from scio.product.progress import PROGRESS_PATH
@@ -298,6 +313,10 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--decision", default=None, help="answer to the pending question")
     status = sub.add_parser("status", help="product mode: progress of a product")
     status.add_argument("--product", type=Path, required=True)
+    upgrade = sub.add_parser(
+        "upgrade", help="product mode: bring an older product up to the current product bar"
+    )
+    upgrade.add_argument("--product", type=Path, required=True)
     args = ap.parse_args(argv)
     if args.cmd == "new":
         return _new(args)
@@ -305,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         return _build(args)
     if args.cmd == "status":
         return _status(args)
+    if args.cmd == "upgrade":
+        return _upgrade(args)
 
     settings = get_settings()
     harness = _scripted_harness(settings)

@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `scio upgrade --product DIR` (issue #58): brings a product bootstrapped by an older SCIO up to the current product bar, additively and from the current scaffold for its own `PRODUCT.md`: a missing Dockerfile and `.dockerignore`, the README's marked run block (under its `## Run` heading), `[tool.coverage.run]` for a python product, and the CI's README run step where the CI is still the old scaffold's; anything the product made its own is kept and reported. One marker commit; a clean tree is required; a second run does nothing.
 ### Changed
 - CI runs the test suite in parallel (pytest-xdist, twice the runner's cores); `pytest-xdist` joins the dev group (issue #58).
 - With `--gh` a product's release goes through a release PR, as SCIO's own do: `release` cuts the changelog on `release/v<version>` (with the last progress record), pushes it and opens the PR; `release_merge_wait` stops until GitHub shows it merged; `release_publish` tags the merge commit, so the tag is on `main`'s history, and publishes the GitHub Release. Offline the release is unchanged (I-103). New state fields `ReleaseRecord.pr_number` and `pr_url`.
