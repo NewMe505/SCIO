@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-10-27
 ### Added
 - `scio upgrade --product DIR` (issue #58): brings a product bootstrapped by an older SCIO up to the current product bar, additively and from the current scaffold for its own `PRODUCT.md`: a missing Dockerfile and `.dockerignore`, the README's marked run block (under its `## Run` heading), `[tool.coverage.run]` for a python product, and the CI's README run step where the CI is still the old scaffold's; anything the product made its own is kept and reported. One marker commit; a clean tree is required; a second run does nothing.
 ### Changed
