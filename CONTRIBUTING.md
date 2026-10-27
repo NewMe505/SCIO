@@ -34,6 +34,9 @@ CI checks docs: links, runnable examples, architecture diagram vs. the compiled 
 - `Settings` is environment-backed. A test of a `Settings` field constructs `Settings(field=...)` explicitly and never relies on the default: CI exports values (`SCIO_PROVIDER_OVERRIDE=fake`, `SCIO_PRODUCT_SANDBOX_BACKEND=local`) that a bare `Settings()` inherits (I-080).
 - A test that depends on a tool being importable asserts where it comes from (`__file__` under the expected environment), not only that it imports; the dev machine's global packages are not the runner's (I-074).
 - Run the suite with `uv run python -m pytest`: some machines' application-control policies block the venv's `pytest.exe` launcher (I-075).
+- Git in tests sees what a CI runner sees: `tests/conftest.py` empties the global config and forbids a guessed identity, so a commit that names no identity fails locally as on CI. SCIO's own commits pass `SCIO_GIT_IDENTITY`; a test helper that commits passes `-c user.name=... -c user.email=...` (I-104).
+- Before pushing the next commit to a branch, confirm the previous push's CI finished green (`gh run list --branch <branch> --limit 3 --json headSha,conclusion`); a watcher on the newest run alone misses an older red one (I-104).
+- Both CI jobs have a Docker daemon, so the docker-live tests also run in `checks` on the plain Python image; a test that needs the built sandbox image skips there only when `SCIO_SANDBOX_DOCKER_IMAGE` is unset (I-105).
 
 ## Continuous improvement protocols
 These three protocols are mandatory for humans and agents. `CLAUDE.md` restates them for AI sessions.
