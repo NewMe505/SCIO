@@ -37,6 +37,11 @@ jobs:
       - name: Install
         run: uv sync --all-extras --group dev
 
+      # p003's hidden tests drive the web product in a real browser (M11); without Chromium
+      # they skip, so this step is what makes them count.
+      - name: Browser for the product evals
+        run: uv run python -m playwright install --with-deps chromium
+
       - name: Lint
         run: |
           uv run ruff check .

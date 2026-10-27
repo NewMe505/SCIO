@@ -21,6 +21,7 @@ MODEL_ID_RE = re.compile(r"\b(claude-[a-z]+-\d(?:-\d)?|gpt-\d[\w.-]*)\b")
 CODE_DIRS = ("scio", "evals", "tests", "scripts")
 SKIP_DIRS = {
     ".git",
+    ".scio",  # runtime state: checkpoints, kept trials, the live-run worktree
     ".venv",
     "node_modules",
     "__pycache__",

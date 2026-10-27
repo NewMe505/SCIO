@@ -16,6 +16,7 @@ import importlib
 import sys
 import time
 import traceback
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -161,7 +162,9 @@ def run_suite(
     config: Path | None = None,
     parallel: int = 1,
     max_usd: float | None = None,
+    only: Sequence[str] | None = None,
 ) -> SuiteReport:
+    """``only``: run just these task ids of the suite (M11: one product eval at a time)."""
     kwargs: dict[str, Any] = {}
     if provider:
         kwargs["provider_override"] = provider
@@ -170,6 +173,11 @@ def run_suite(
     settings = Settings(**kwargs)
     started = datetime.now(UTC)
     tasks = load_tasks(tasks_dir, suite)
+    if only:
+        unknown = set(only) - {t.id for t in tasks}
+        if unknown:
+            raise ValueError(f"no task {sorted(unknown)} in suite {suite!r}")
+        tasks = [t for t in tasks if t.id in only]
     results: list[TrialResult] = []
     metrics = []
     k = trials or (max(t.trials for t in tasks) if tasks else 0)
@@ -228,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--max-usd", type=float, default=None, help="stop starting tasks once spend reaches this"
     )
+    ap.add_argument(
+        "--task", action="append", default=None, help="run only this task id (repeatable)"
+    )
     args = ap.parse_args(argv)
 
     report = run_suite(
@@ -238,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         config=args.config,
         parallel=max(1, args.parallel),
         max_usd=args.max_usd,
+        only=args.task,
     )
     json_path, md_path = report.write(args.out)
     sys.stdout.write(report.to_markdown())

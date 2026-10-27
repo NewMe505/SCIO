@@ -124,12 +124,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        # read the body first: a reply that leaves request bytes unread aborts the
+        # connection on Windows (WinError 10053) instead of delivering the status (I-096)
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
         if self.path != TODOS_PATH:
             self.send_response(404)
             self.end_headers()
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length) or b"{{}}")
+        payload = json.loads(body or b"{{}}")
         title = str(payload.get("title", "")).strip()
         if not title:
             self._send_json(400, {{"error": "title must not be empty"}})

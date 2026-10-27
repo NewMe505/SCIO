@@ -778,3 +778,11 @@ Template:
 - Fix: `TrialOutcome.usd_elsewhere` and `tokens_elsewhere`, which `run_trial` adds to the snapshot; the product solver reports the sum of its `FeatureRun.usd` and `tokens`
 - Sweep: `grep -rn "budget.snapshot()" evals scio` finds the runner (fixed), `RunContext.budget_update` and `Harness.report` (per harness, by design) and the Claude Code worker's remaining-budget check (per turn, by design); the task-mode `GraphSolver` runs on one harness. Guard: `test_the_product_suite_builds_releases_and_passes_its_hidden_tests` asserts p001's trial spend is above what the orchestrator alone costs on the Fake
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-096 · A scripted HTTP server answered 404 to a POST without reading its body, and Windows aborted the connection instead of delivering the status
+- Found: 2026-10-27 · M11 slice 7 · the first Fake run of p003: both features passed their own verify and `integrate`, then `release_check` on `main` failed: `test_add_with_an_empty_title_shows_an_error_and_adds_nothing` raised `ConnectionAbortedError: [WinError 10053]` on `POST /elsewhere`, while the coverage run of the same suite a second later passed it
+- Symptom: a flaky test in the scripted product, caught only because the release gate runs the whole bar once more on `main`
+- Root cause: `do_POST` returned 404 before reading `Content-Length` bytes; a server that closes a connection with request bytes unread makes the Windows TCP stack abort it, so the client sees a reset instead of the response, depending on timing
+- Fix: every scripted `do_POST` reads the body before any early reply (`evals/product_scripts_web.py`, `evals/product_scripts_http.py`); p003 then passed twice in a row on the Fake, 4 browser tests each
+- Sweep: `grep -rn "def do_POST\|method === \"POST\"" evals scio` finds the two Python handlers (fixed) and the node `todo_api` handler, which reads the body only for `POST /todos` but answers other paths through Node's server, which drains an unread body itself. The scaffolds have no POST handler (`BaseHTTPRequestHandler` answers 501). Guard: `test_add_with_an_empty_title_shows_an_error_and_adds_nothing` posts to an unknown path on every p003 build, and the release gate re-runs the bar on `main`
+- Resolved: 2026-10-27 · Status: resolved

@@ -12,18 +12,29 @@ from evals.runner import TASKS_DIR, load_tasks, run_suite, to_task_like
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.core import Harness
 from scio.settings import Settings
+from tests.browser_support import requires_browser
 
 
 def test_the_product_suite_builds_releases_and_passes_its_hidden_tests() -> None:
-    report = run_suite("product", provider="fake", trials=1)
+    cli_and_api = ["p001_cli_todo", "p002_rest_todo"]  # p003 needs a browser: its own test
+    report = run_suite("product", provider="fake", trials=1, only=cli_and_api)
     by_task = {r.task_id: r for r in report.results}
-    assert set(by_task) == {"p001_cli_todo", "p002_rest_todo"}
+    assert set(by_task) == set(cli_and_api)
     for result in by_task.values():
         assert result.passed and result.error is None, result.notes
         assert "release=v0.1.0" in result.notes and "interventions=0" in result.notes
         assert "hidden=5 passed" in result.notes
     # I-095: the feature runs' spend is in the trial's numbers, not only the orchestrator's
     assert by_task["p001_cli_todo"].usd > 0.03 and by_task["p001_cli_todo"].tokens > 10_000
+
+
+@requires_browser
+def test_the_web_product_is_graded_in_a_real_browser() -> None:
+    """p003 (the owner's choice, 2026-10-26): the hidden tests drive the page in Chromium."""
+    report = run_suite("product", provider="fake", trials=1, only=["p003_web_todo"])
+    (result,) = report.results
+    assert result.passed and result.error is None, result.notes
+    assert "release=v0.1.0" in result.notes and "hidden=4 passed" in result.notes
 
 
 def test_a_product_that_breaks_the_contract_fails_its_hidden_tests(tmp_path: Path) -> None:

@@ -30,6 +30,9 @@ dev = [
     "mypy>=1.14",
     "types-PyYAML>=6.0",
     "pdoc>=15",
+    # p003's hidden tests drive the web product in a real browser (M11, owner's choice);
+    # the browser itself comes from `python -m playwright install chromium`
+    "playwright>=1.48",
 ]
 
 [project.scripts]

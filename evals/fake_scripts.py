@@ -581,11 +581,13 @@ def script_for(title: str, stack: str = "python") -> TaskScript:
     from evals.product_scripts import PRODUCT_SCRIPTS  # product features first: "json" collides
     from evals.product_scripts_http import HTTP_PRODUCT_SCRIPTS
     from evals.product_scripts_node import NODE_PRODUCT_SCRIPTS
+    from evals.product_scripts_web import WEB_PRODUCT_SCRIPTS
 
     low = title.lower()
     # The same feature titles exist in two stacks (M10): the task's stack picks the script.
     product_scripts = NODE_PRODUCT_SCRIPTS if stack == "node-ts" else []
-    for s in [*product_scripts, *PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS, *SCRIPTS]:
+    scripts = [*product_scripts, *WEB_PRODUCT_SCRIPTS, *PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS]
+    for s in [*scripts, *SCRIPTS]:
         if s.key in low:
             return s
     raise KeyError(f"no fake script for task title {title!r}")
