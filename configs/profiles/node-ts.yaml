@@ -63,6 +63,13 @@ skeleton_command: "node src/main.ts --version"
 # What a sandbox image must be able to do for this stack (issue #58, I-101): Node with
 # TypeScript type stripping (22.18+), the same check tests/node_support.py makes.
 sandbox_probe: [node, -e, "process.exit(['strip', 'transform'].includes(process.features.typescript) ? 0 : 1)"]
+# What this profile settles (I-107): see configs/profiles/python.yaml.
+fixed_facts: "tests run with node --test on TypeScript through type stripping (no build step), lint with eslint, type checks with tsc, Node 22.18 or newer"
+quality_bar_conflicts:
+  - pattern: '(?i)\b(?:jest|mocha|vitest|jasmine|ava|karma)\b'
+    use: "Tests run with node --test, the node-ts profile's test runner"
+  - pattern: '(?i)\bnode(?:\.js)?\s*(?:1[0-9]|2[01])\b'
+    use: "Targets Node 22.18 or newer, the node-ts profile's minimum"
 command_words: [node, npm, npx]
 # Coverage is built into Node 22 (M11): below the floor it exits 1 with "line coverage does
 # not meet threshold"; tests are excluded so the floor measures the product's own code.

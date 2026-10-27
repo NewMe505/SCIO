@@ -350,7 +350,18 @@ def main(argv: list[str] | None = None) -> int:
         from scio.harness.accounting import CostLedger
 
         entries = CostLedger.load_entries(Path(".scio") / "ledger" / f"{thread}.jsonl")
-        if _is_build_thread(ctx):
+        from scio.product.graph import load_product_state
+
+        bootstrap = load_product_state(settings.checkpoint_dsn, thread)
+        if bootstrap is not None:
+            # A `scio new` thread (ADR 0010): the interview, the drafts, the bootstrap; the
+            # task model cannot read it (I-108).
+            from scio.product.report import build_bootstrap_report, write_product_report
+
+            boot = build_bootstrap_report(bootstrap, entries)
+            json_path, md_path = write_product_report(boot, args.out)
+            print(boot.to_markdown())
+        elif _is_build_thread(ctx):
             # A product build thread (ADR 0011): milestones and feature runs, not one task.
             # Decided by the checkpoint's shape, not the name: a feature run inside a build
             # is a task thread named build-<product>-m<n>-<pk>-a<k> (I-066).

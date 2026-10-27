@@ -5,9 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Added
+- `scio report --thread new-...` reports a `scio new` thread (phase, product, revision rounds, bootstrap commit, cost by role, timeline) instead of crashing (I-108).
 - Always/Never guardrails with enforced guards (issue #61): `## Guardrails (Always / Never)` at the top of `docs/LESSONS_LEARNED.md`, each rule citing its ledger id and naming its guard; `check_guardrails` in `scripts/check_docs.py` fails when a resolved ledger entry from I-104 on is cited by no rule or a named guard (symbol, test, check, hook) does not exist.
 - A push-gate Claude Code hook (`scripts/hooks/push_gate.py`, wired in `.claude/settings.json`): a `git push` waits while the branch's latest CI run is red or still running (`SCIO_ACK_CI=<run id>` pushes a fix on purpose), and a bare `git stash` is refused (issue #61, I-104); a `git commit` waits until the changed Python files pass `ruff check` and `ruff format --check` (I-106).
 - CLAUDE.md and CONTRIBUTING protocols 4 and 5: Always/Never rules each backed by a guard, and a bottleneck audit after every pass (issue #61).
+
+### Fixed
+- A hand edit of `PRODUCT.md` is no longer lost: the milestone's sync commit records it, a fresh feature attempt commits one made while the build waited, SCIO's own checkouts and resets carry it, and the next milestone of the same thread re-reads it (I-109).
+- A quality bar can no longer promise tools the stack's profile does not use: each profile names its fixed tools, the interviewer and the planner see them, and the normaliser replaces a contradicting line with the profile's fact, quoting the original (I-107).
+- A thread's recorded spend spans every CLI invocation: a resume carries the checkpoint's spend into the new process, so `scio new` and resumed `scio build` threads no longer report only their latest step (I-110).
 
 ## [0.8.0] - 2026-10-27
 ### Added

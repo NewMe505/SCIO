@@ -7,7 +7,7 @@ profile reproduces the pre-M6 behaviour exactly; M10 adds ``node-ts``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -139,6 +139,17 @@ class Toolchain(Protocol):
     def sandbox_probe_argv(self) -> tuple[str, ...]:
         """A command that exits 0 inside a sandbox image able to build this stack (issue
         #58, I-101): run before a product build picks Docker; empty means no requirement."""
+        ...
+
+    @property
+    def fixed_facts(self) -> str:
+        """What this profile settles and a product cannot choose otherwise (I-107): its test
+        runner, linters and language version, in one line for the interviewer and planner."""
+        ...
+
+    def resolve_quality_bar(self, lines: Sequence[str]) -> tuple[list[str], list[str]]:
+        """``lines`` with each line that contradicts the profile's fixed tools replaced by the
+        profile's fact (quoting the original), and a note per replacement (I-107)."""
         ...
 
     @property

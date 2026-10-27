@@ -59,7 +59,7 @@ def interview(ctx: RunContext) -> Node:
     def node(state: ProductState) -> dict[str, Any]:
         req = ctx.harness.build_request(
             "interviewer",
-            system=ctx.prompts.get("interviewer").render(),
+            system=ctx.prompts.get("interviewer").render(stacks=stack_menu()),
             messages=[Message.user(f"# Product prompt\n{state.prompt.strip()}")],
             tags={"thread": ctx.thread_id},
         )
@@ -488,10 +488,24 @@ def product_target_dir(checkpoint_dsn: str, thread_id: str) -> str | None:
     return str(target) if target else None
 
 
+def load_product_state(checkpoint_dsn: str, thread_id: str) -> ProductState | None:
+    """The latest state of a ``scio new`` thread, or None when ``thread_id`` is not one (its
+    checkpoint has no ``target_dir``): ``scio report`` reads it with this model, not the task
+    graph's (I-108)."""
+    config = {"configurable": {"thread_id": thread_id}}
+    with open_checkpointer(checkpoint_dsn) as saver:
+        graph: Any = build_product_graph(None).compile(checkpointer=saver)
+        values = graph.get_state(config).values
+    if not values or not values.get("target_dir"):
+        return None
+    return ProductState.model_validate(values)
+
+
 def resume_product(ctx: RunContext, decision: str | None) -> ProductOutcome:
     config = {"configurable": {"thread_id": ctx.thread_id}}
     with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
         graph: Any = build_product_graph(ctx).compile(checkpointer=saver)
+        ctx.carry_spend(graph.get_state(config).values)  # this thread's spend so far (I-110)
         inp: Any = Command(resume=decision) if decision is not None else None
         raw = graph.invoke(inp, config=config, durability=DURABILITY)
     return _outcome(raw)

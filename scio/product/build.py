@@ -143,6 +143,27 @@ def _write_progress(ctx: RunContext, progress: ProgressFile) -> None:
     ctx.sandbox.write_text(f"{ctx.sandbox.root}/{PROGRESS_PATH}", progress.to_json())
 
 
+def reread_product_md(
+    ctx: RunContext, spec: ProductSpec, progress: ProgressFile
+) -> tuple[ProductSpec, list[str]]:
+    """``PRODUCT.md`` as it is now, so a hand edit made at a stop of this build thread (a merge
+    stop, a halted feature) shapes the next milestone rather than only the next run (I-109).
+    New features get records in ``progress``, which is written back. A changed stack keeps
+    the loaded spec: the profile is chosen once, in ``load``."""
+    try:
+        now = parse_product_md(ctx.sandbox.read_text(f"{ctx.sandbox.root}/{PRODUCT_MD}"))
+    except ValueError as exc:
+        return spec, [f"PRODUCT.md unreadable now, the loaded spec stays: {exc}"]
+    if now == spec:
+        return spec, []
+    if now.stack != spec.stack:
+        return spec, [f"PRODUCT.md now names stack {now.stack}; it applies at the next scio build"]
+    notes = progress.sync_features(now)
+    if notes:
+        _write_progress(ctx, progress)
+    return now, ["PRODUCT.md changed since this build loaded it; re-read", *notes]
+
+
 def _open_features(spec: ProductSpec, progress: ProgressFile) -> list[ProductFeature]:
     open_ids = set(progress.open_feature_ids())
     return [f for f in spec.features if f.id in open_ids]
@@ -226,11 +247,44 @@ def commit_install(ctx: RunContext, plan: MilestonePlan, node: str) -> str | Non
 
 def commit_progress_sync(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
     """Commit ``load``'s sync of ``progress.json`` with ``PRODUCT.md`` (features added or
-    removed since the last run). Uncommitted, the first feature's reset reverted it and
-    ``update_progress`` wrote the stale records back (the I-085 sweep)."""
+    removed since the last run), and a hand edit of ``PRODUCT.md`` itself. Uncommitted, the
+    first feature's reset reverted the sync and ``update_progress`` wrote the stale records
+    back (the I-085 sweep); it wiped the edit, so a feature added by hand was dropped at the
+    next build (I-109)."""
     return _commit_changed(
-        ctx, plan, node, "sync", "sync progress.json with PRODUCT.md", lambda p: p == PROGRESS_PATH
+        ctx,
+        plan,
+        node,
+        "sync",
+        "record PRODUCT.md and its progress.json sync",
+        lambda p: p in (PROGRESS_PATH, PRODUCT_MD),
     )
+
+
+def commit_product_md_edit(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
+    """Commit a hand edit of ``PRODUCT.md`` on the milestone branch (I-109), once per node."""
+    return _commit_changed(
+        ctx, plan, node, "sync", "record a hand edit of PRODUCT.md", lambda p: p == PRODUCT_MD
+    )
+
+
+def carrying_product_md[T](ctx: RunContext, fn: Callable[[], T]) -> T:
+    """Run one of SCIO's own checkouts or resets (``fn``) without losing a hand edit of
+    ``PRODUCT.md``, the one file a human may edit while a build waits (I-109): the edit is
+    set aside, the tree is reset, and the edit is written back; the next milestone reads it
+    and its sync commit records it. A checkout to a branch whose ``PRODUCT.md`` differs would
+    otherwise refuse to run over the edit."""
+    sb = ctx.sandbox
+    path = f"{sb.root}/{PRODUCT_MD}"
+    edited = bool(git_out(sb, "status", "--porcelain", "--", PRODUCT_MD))
+    text = sb.read_text(path) if edited else None
+    if edited:
+        _git(ctx, "checkout", "-q", "--", PRODUCT_MD)
+    try:
+        return fn()
+    finally:
+        if text is not None:
+            sb.write_text(path, text)
 
 
 def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
@@ -448,6 +502,13 @@ def load(ctx: RunContext) -> Node:
         entries = [fact(n) for n in notes]
         if notes:
             _write_progress(ctx, progress)
+        # A product bootstrapped before I-107 may still promise tools its profile does not
+        # use; the build runs the profile's, so it says so instead of diverging silently.
+        _, bar_notes = ctx.toolchain.resolve_quality_bar(spec.quality_bar)
+        entries += [
+            fact(f"{n}; this build runs the profile's tools, so edit PRODUCT.md to match")
+            for n in bar_notes
+        ]
         if progress.bootstrap_commit:
             r = sb.exec(["git", "cat-file", "-e", progress.bootstrap_commit], timeout_s=30)
             if not r.ok:
@@ -481,15 +542,19 @@ def after_load(state: ProductBuildState) -> Literal["plan", "halt"]:
 
 def plan_milestone(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
-        spec = state.spec
-        assert spec is not None
+        assert state.spec is not None
         progress = _read_progress(ctx)
+        spec, reread = reread_product_md(ctx, state.spec, progress)
         open_features = _open_features(spec, progress)
         if not open_features:
             return {
+                "spec": spec,
                 "phase": "done",
                 "milestone": None,
-                **_fact("every feature in PRODUCT.md is done; nothing to plan"),
+                "ledger": [
+                    *(fact(n) for n in reread),
+                    fact("every feature in PRODUCT.md is done; nothing to plan"),
+                ],
             }
         number = progress.next_milestone_number()
         done_lines = [
@@ -527,7 +592,7 @@ def plan_milestone(ctx: RunContext) -> Node:
         except BudgetExceeded as exc:
             return _halt(ctx, "budget", f"budget exhausted at milestone planning: {exc}")
         plan, notes = normalise_milestone(out, open_features, number)
-        entries = [
+        entries = [fact(n) for n in reread] + [
             fact(
                 f"{plan.id} {plan.title}: "
                 + ", ".join(f"{f.id}@{f.tier.value}" for f in plan.features),
@@ -570,6 +635,7 @@ def plan_milestone(ctx: RunContext) -> Node:
         if synced:
             entries.append(fact(f"progress.json sync with PRODUCT.md committed at {synced[:12]}"))
         return {
+            "spec": spec,
             "milestone": plan,
             "issues": {},
             "integration": None,
@@ -718,12 +784,22 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
                 outcome = resume_graph(fctx, None, saver=saver)
             else:
                 entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
+
                 # A fresh attempt starts from the milestone branch with a clean tree: a
                 # previous attempt that never passed verify leaves its edits uncommitted,
                 # and git carries them across a checkout into the next feature's run (I-067).
-                _git(ctx, "checkout", "-q", plan.branch)
-                _git(ctx, "reset", "-q", "--hard")
-                _git(ctx, "clean", "-fdq")
+                # A hand edit of PRODUCT.md made while the build waited survives the reset
+                # and is committed on the milestone branch as bookkeeping, before the worker
+                # can sweep it into a feature commit (I-109).
+                def clean_tree() -> None:
+                    _git(ctx, "checkout", "-q", plan.branch)
+                    _git(ctx, "reset", "-q", "--hard")
+                    _git(ctx, "clean", "-fdq")
+
+                carrying_product_md(ctx, clean_tree)
+                edit = commit_product_md_edit(ctx, plan, f"feature-{feat.id}-a{attempt}")
+                if edit:
+                    entries.append(fact(f"hand edit of PRODUCT.md committed at {edit[:12]}"))
                 task = feature_task(
                     spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
                 )
@@ -736,13 +812,13 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             # A provider or harness failure inside one feature ends this attempt, recorded,
             # and the build gracefully; it never ends a product build as a traceback (I-100).
             # No interrupt here: a resumed node would re-run the failing call first (I-065).
-            snap = fctx.harness.budget.snapshot()
+            tokens, usd = fctx.spent()  # the attempt's thread, across processes (I-110)
             failed = run.model_copy(
                 update={
                     "status": "failed",
                     "exit_reason": "error",
-                    "usd": round(snap.usd_used, 4),
-                    "tokens": snap.tokens_used,
+                    "usd": round(usd, 4),
+                    "tokens": tokens,
                 }
             )
             entries.append(
@@ -1117,7 +1193,12 @@ def sync_main(ctx: RunContext) -> str:
     content local ``main`` already has: the previous milestone's progress commit rode in the
     merged branch. Then local ``main`` is reset to origin's, but only when every commit that
     exists only locally is SCIO bookkeeping and origin's ``progress.json`` still records the
-    milestones those commits recorded; anything else (a human's commit) halts the build."""
+    milestones those commits recorded; anything else (a human's commit) halts the build. A
+    hand edit of PRODUCT.md made at the merge stop is carried across (I-109)."""
+    return carrying_product_md(ctx, lambda: _sync_main(ctx))
+
+
+def _sync_main(ctx: RunContext) -> str:
     sb = ctx.sandbox
     _git(ctx, "checkout", "-q", "main")
     _git(ctx, "fetch", "-q", "origin", "main")
@@ -1226,7 +1307,7 @@ def merge_wait(ctx: RunContext) -> Node:
                 thread_id=ctx.thread_id,
                 node="merge_wait",
                 intent=f"merge:{plan.id}",
-                apply=merge,
+                apply=lambda: carrying_product_md(ctx, merge),  # an edit at the stop (I-109)
                 probe=lambda: find_commit(sb, marker),
             )
         return {
@@ -1806,6 +1887,7 @@ def resume_build(ctx: RunContext, decision: str | None) -> BuildOutcome:
     config = {"configurable": {"thread_id": ctx.thread_id}}
     with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
         graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
+        ctx.carry_spend(graph.get_state(config).values)  # this thread's spend so far (I-110)
         inp: Any = Command(resume=decision) if decision is not None else None
         raw = graph.invoke(inp, config=config, durability=DURABILITY)
     return _outcome(raw)

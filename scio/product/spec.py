@@ -15,12 +15,15 @@ from scio.toolchain import Toolchain, available_toolchains, get_toolchain
 
 
 def stack_menu() -> str:
-    """The stacks the product planner may choose, one line each with the skeleton command
-    (rendered into the planner prompt; constant for a SCIO version)."""
+    """The stacks the product planner may choose, one line each with the skeleton command and
+    what the profile fixes (rendered into the interviewer and planner prompts; constant for a
+    SCIO version). The interviewer offered a test-framework choice the profile could not
+    honour (I-107)."""
     lines = []
     for name in available_toolchains():
         tc = get_toolchain(name)
-        lines.append(f"`{name}` (walking skeleton: `{tc.skeleton_command('<package>')}`)")
+        fixed = f"; fixed: {tc.fixed_facts}" if tc.fixed_facts else ""
+        lines.append(f"`{name}` (walking skeleton: `{tc.skeleton_command('<package>')}`{fixed})")
     return "; ".join(lines)
 
 
@@ -91,13 +94,19 @@ def normalise_spec(out: ProductSpecOutput) -> tuple[ProductSpec, list[str]]:
     if app.kind == "http" and not any("{port}" in a for a in app.args):
         notes.append("runtime args did not name {port}; '--port {port}' appended")
         app = app.model_copy(update={"args": [*app.args, "--port", "{port}"]})
+    # The skeleton, CI and project file come from the profile, so a quality bar may not promise
+    # other tools: a line that does is replaced by the profile's fact, quoting it (I-107).
+    quality_bar, bar_notes = tc.resolve_quality_bar(
+        [q.strip() for q in out.quality_bar if q.strip()] or ["tests pass"]
+    )
+    notes.extend(bar_notes)
     spec = ProductSpec(
         name=name,
         title=out.title.strip() or name,
         vision=out.vision.strip(),
         users=[u.strip() for u in out.users if u.strip()] or ["the author"],
         features=features,
-        quality_bar=[q.strip() for q in out.quality_bar if q.strip()] or ["tests pass"],
+        quality_bar=quality_bar,
         stack=stack,
         dependencies=sorted({d.strip() for d in out.dependencies if d.strip()}),
         app=app,

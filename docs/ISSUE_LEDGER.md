@@ -868,3 +868,84 @@ Template:
 - Fix: the line shortened. The push-gate hook (`scripts/hooks/push_gate.py`) gains a commit gate. In a repository whose `pyproject.toml` configures ruff, a `git commit` is denied until every changed Python file passes `ruff check` and `ruff format --check`, with ruff's output in the reason. "Changed" means staged, modified or untracked, because `git add ... && git commit` stages in the same line, after the hook has run. `--force-exclude` keeps ruff's own excludes.
 - Sweep: the rest of `5a51868`: `ruff check .` and `ruff format --check .` on the whole tree pass (250 files), so the line was the only instance. Guard: `test_the_commit_gate_lints_every_changed_python_file`, `test_the_commit_gate_only_runs_where_ruff_is_configured` and `test_evaluate_holds_a_commit_for_lint`, plus guardrail 11
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-107 · The bootstrap ignores the approved quality bar: a PRODUCT.md that says unittest and Python 3.11 gets a pytest skeleton for Python 3.12
+- Found: 2026-10-27 · the graphcalc live run (its RUN_LOG S1), pass 0, 22:43 UTC, by reading bootstrap commit `b7253fb` of NewMe505/graphcalc · approved quality bar: "Tests use only the stdlib unittest module (python -m unittest discover)" and "Targets Python 3.11 or higher" (the owner's interview answer 4); the skeleton ships `tests/test_smoke.py` importing pytest, `tests/conftest.py`, CI running `pip install ruff pytest` and `python -m pytest`, `requires-python = ">=3.12"`
+- Symptom: no error; the product contradicts the spec the owner approved, and nothing checks the skeleton against it
+- Root cause: each profile fixes its tools (python: pytest and pytest-cov, ruff, Python 3.12 or newer; the skeleton, CI and `pyproject.toml` follow it), but no step said so.
+  - The interviewer prompt had no stack information at all, so "pytest or only unittest?" looked like a fair question.
+  - The planner's stack menu named only each stack's skeleton command.
+  - The normaliser copied the quality bar through unchecked, so the owner approved a promise that the bootstrap then broke without a word.
+- Fix:
+  - Each profile names its `fixed_facts` and the `quality_bar_conflicts` (pattern, the profile's fact) that contradict them (`configs/profiles/*.yaml`, `ProfileToolchain`, `Toolchain.fixed_facts` and `resolve_quality_bar`).
+  - `stack_menu` carries the facts; interviewer v2 renders it and never offers a choice the facts settle; product_planner v3 keeps the quality bar to the stack's tools.
+  - `normalise_spec` replaces a conflicting line with the profile's fact and quotes the original (`... (replaces: Tests use only the stdlib unittest module ...)`), with a note, so the owner sees the change in the draft they approve.
+  - A product bootstrapped before this fix (graphcalc) still carries the old lines, so `load` writes a ledger line for every contradicting line, saying the build runs the profile's tools and PRODUCT.md should be edited to match. The I-109 fix makes that edit stick.
+  - For graphcalc, the owner chose to keep SCIO's stack (pytest, Python 3.12) and revise the product's quality bar, rather than add a unittest profile.
+- Sweep: every place that turns the owner's words into the build's tools: the interviewer (fixed), the planner (fixed), the normaliser (fixed), and the scaffold (it renders from the profile, correct once the bar agrees). node-ts gets the same data (jest, mocha, vitest and others; Node versions below 22). Guard: `test_a_quality_bar_never_promises_tools_the_profile_does_not_use` (graphcalc's own lines and a node-ts case), `test_the_interviewer_and_planner_see_what_each_stack_fixes`, the prompt placeholder test, plus guardrail 13
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-108 · `scio report --thread new-...` crashes with a pydantic ValidationError instead of reporting
+- Found: 2026-10-27 · the graphcalc live run (RUN_LOG S2), 22:48 UTC · `pydantic_core._pydantic_core.ValidationError: 2 validation errors for SCIOState` / `task Field required` / `github Field required`, raised in `scio/graph/report.py` `load_state`, called from `scio/cli.py`
+- Symptom: a traceback for a product-mode interview thread; the run took its figures from the stop lines instead
+- Root cause: `scio report` knew two kinds of thread: build threads, recognised by `feature_runs` in the checkpoint, and everything else, read as a task thread. A `scio new` thread is a third kind (`ProductState`, with `target_dir`), so it fell through to `SCIOState.model_validate`.
+- Fix:
+  - `load_product_state` (`scio/product/graph.py`) reads a thread through the product graph and returns None unless it has `target_dir`.
+  - The CLI asks it first and prints `BootstrapReport` (`scio/product/report.py`): phase, product and feature count, revision rounds, bootstrap commit, repository, cost and calls by role, and the timeline.
+  - The cost total comes from the persisted cost ledger, so threads recorded before I-110's fix report correctly.
+  - Live, on the graphcalc thread `new-0c103267`: 22 features, 2 revision rounds, bootstrap `b7253fb`, product_planner 4 calls at $0.88, interviewer 1 at $0.03.
+- Sweep: every reader of a checkpoint by thread id (`grep -rn "model_validate(values)\|get_state(config)" scio`): the task report (`load_state`), the build report (`load_build_state`, behind the `feature_runs` test), `product_target_dir` and now `load_product_state`. Only the report command chooses a model by thread kind, and it now covers all three. Guard: `test_cli_build_status_and_report` reports the `new-cli` thread (it crashed before), plus guardrail 14
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-109 · A hand edit to PRODUCT.md is never committed by `scio build`, and the first feature's `git reset --hard` wipes it (predicted from the source)
+- Found: 2026-10-27 · the graphcalc live run (RUN_LOG S3), 22:55 UTC, by reading the v0.8.0 source while planning a bug-fix feature; not yet observed · `load` parses `PRODUCT.md` into `state.spec`, but only `commit_install`, `commit_progress_sync` (`lambda p: p == PROGRESS_PATH`) and `update_progress` commit, and a fresh feature attempt runs `git reset -q --hard` and `git clean -fdq`
+- Symptom (expected): the edit applies to one build run only, never reaches `main`, and the next `scio build` drops a feature added by hand (`removed from PRODUCT.md`), even a done one; the run's bug-fix workflow (a PRODUCT.md feature per calculator bug) cannot work
+- Root cause, confirmed: there were three gaps, and nothing treated PRODUCT.md as the one file a human edits while a build waits.
+  1. `commit_progress_sync` committed only `progress.json` (`lambda p: p == PROGRESS_PATH`).
+  2. A fresh feature attempt's `reset --hard` and `clean -fdq` removed whatever was still uncommitted.
+  3. `load` was the only place PRODUCT.md was parsed. So an edit made at a merge stop was never read by the same thread's next milestone, and when the milestone branch's PRODUCT.md differed from `main`'s, the offline merge's `checkout main` refused to run over the edit.
+
+  The new regression test fails on `main` with the edit absent from `milestone/1:PRODUCT.md`, so the prediction holds.
+- Fix (`scio/product/build.py`):
+  1. `commit_progress_sync` records `PRODUCT.md` along with `progress.json` (`[scio:sync:<M>:plan_milestone]`).
+  2. `carrying_product_md` sets a hand edit aside around SCIO's own checkouts and resets and writes it back. It is used by the feature attempt's clean-tree step, `sync_main` (both callers) and the offline merge.
+  3. `commit_product_md_edit` commits an edit found at a fresh feature attempt as bookkeeping on the milestone branch, before the worker's `git add -A` can sweep it into a feature commit.
+  4. `reread_product_md` lets `plan_milestone` re-read PRODUCT.md and sync new features, so the next milestone of the same thread sees the edit. A changed stack waits for the next `scio build`.
+- Sweep: `grep -n '"reset"\|"clean"\|"checkout"' scio/product/*.py scio/graph/nodes/*.py`, 16 sites.
+  - Fixed: the feature reset (788 to 790), `sync_main` (1196, 1222) and the offline merge (1293).
+  - Safe as they are: the branch creation and checkouts in `plan_milestone`, `issues`, `feature` and `integrate` move between branches with the same PRODUCT.md; `update_progress` and the release checkouts run from `main`, which carries the edit; task-mode `prepare` runs on a fresh task repository.
+  - Every `git add` in `build.py` is targeted (`grep -n '_git(ctx, "add"'`), so nothing else sweeps PRODUCT.md into the wrong commit.
+- Guard: `test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main` (an edit before the build reaches `milestone/1` and `main`; a second edit at the merge stop survives the offline merge, is re-read for M2 and is committed on `milestone/2`), plus guardrail 12.
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-110 · A product thread records only its latest invocation's spend: the `scio new` report says $0.00 for a $0.91 interview
+- Found: 2026-10-27 · issue #64, checking the I-108 fix on the graphcalc run's real thread `new-0c103267` · the new bootstrap report printed `cost $0.0000`, while the thread's cost ledger (`.scio/ledger/new-0c103267.jsonl`) holds 5 calls, $0.9098 (product_planner 4 at $0.8771, interviewer 1 at $0.0327)
+- Symptom: every CLI invocation's `BudgetGuard` starts at zero, and `RunContext.budget_update` writes that process's snapshot over `state.budgets`, so a thread that spans several invocations (each `scio new --decision`, each `scio build --decision`) keeps only the last one's spend; the publish step spent nothing, so the interview thread ends at $0
+- Root cause: `budget_update` treated the process's guard as the thread's. The guard is per process by design: it is the runaway cap. But the state is the thread's record, and nothing carried a resumed checkpoint's spend into the new process. The same gap hit `scio build` threads resumed at each merge stop (`orchestrator_usd`, the stop lines' totals) and a feature attempt that failed after a crash-resume (its `usd` came from the feature harness's snapshot).
+- Fix (`scio/graph/run_context.py`):
+  - `RunContext.spent_before` holds what the thread recorded before this process; `carry_spend(values)` sets it from a resumed checkpoint, minus what this process has already spent, so two resumes in one process (a feature thread through its merge loop) do not count twice.
+  - `spent()` and `budget_update` report the thread's total.
+  - `resume_graph`, `resume_product` and `resume_build` call `carry_spend` before they invoke.
+  - The feature failure path records `fctx.spent()`.
+  - Enforcement is unchanged: each process's guard still caps that process.
+- Sweep:
+  - `grep -rn "budget.snapshot()" scio` finds the claude_code worker's remaining-budget check and `Harness.summary`, both per process on purpose, and the feature failure path (fixed).
+  - Every resume entry point carries the spend: the three above; `run_build` and `run_product` start new threads.
+- Guard: `test_a_thread_records_the_spend_of_every_invocation`, three steps of a `scio new` thread, each with a fresh harness as separate processes have. On `main` it fails with `assert 0.0 == 0.007468`. Plus guardrail 15.
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-111 · `check_guardrails` reports a generic function's guard as missing
+- Found: 2026-10-27 · issue #64, the docs check after adding guardrail 12 · `docs-check: docs/LESSONS_LEARNED.md: guardrail 12: symbol:carrying_product_md does not exist`, though `scio/product/build.py` defines `def carrying_product_md[T](ctx, fn)`
+- Symptom: a false failure of the guardrails check for a guard that exists
+- Root cause: `guard_exists` (issue #61) matched `def <name>(`; a PEP 695 generic puts its type parameters between the name and the parenthesis
+- Fix: the symbol and test patterns accept `def <name>[` as well as `def <name>(`
+- Sweep: every pattern in `scripts/check_docs.py` and `scripts/hooks/push_gate.py` that finds a definition by name (`grep -n 'def {name}' scripts`): the two in `guard_exists` (fixed). The codebase's other generics (`grep -rn "def [a-z_]*\[" scio`: `run_effect`, `effect`, `carrying_product_md`) are now matched. Guard: `test_guard_exists_looks_in_the_repository` asserts `symbol:run_effect` and `symbol:carrying_product_md`, plus guardrail 16
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-112 · A shell-embedded Python edit missed its anchor because the anchor held backslashes (I-071, I-072 again)
+- Found: 2026-10-27 · issue #64, extending the I-109 test · `AssertionError: anchor` from a `python - <<'PY'` script whose old text contained `"## Vision\n"` meant to match the test file's literal backslash-n; the same edit made with the Edit tool applied first time
+- Symptom: no damage; the script's own `assert t.count(old) == 1` stopped it before writing
+- Root cause: I broke the standing rule (CLAUDE.md, pre-flight item 6): text with a backslash goes through the file tools, never through a shell-embedded script; inside the heredoc the escape meant something else than in the file
+- Fix: the edit was made with the Edit tool
+- Sweep: the edits of this session made through `python - <<` scripts (CHANGELOG, README, PR bodies, tests): every one asserted its anchor count before writing, so a miss fails loudly; this was the only one whose anchor needed a backslash. Guard: guardrail 17, `manual` with its reason (a hook cannot tell a mangled backslash from an intended `\n` escape, which those scripts use correctly), and the anchor-count assert as the convention that turns a miss into a failure
+- Resolved: 2026-10-27 · Status: resolved

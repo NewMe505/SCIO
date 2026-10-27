@@ -35,7 +35,7 @@ from scio.product.build import (
     resume_build,
     run_build,
 )
-from scio.product.progress import PROGRESS_PATH, ProgressFile
+from scio.product.progress import PRODUCT_MD, PROGRESS_PATH, ProgressFile
 from scio.settings import Settings
 from scio.state.models import (
     FeatureRun,
@@ -734,6 +734,12 @@ def test_cli_build_status_and_report(
     # a feature thread inside the build is a task thread, whatever its name (I-066)
     assert main(["report", "--thread", f"{thread}-p2-a1", "--out", str(tmp_path / "reports")]) == 0
     assert f"# Run {thread}-p2-a1: P2: Add and list todos" in capsys.readouterr().out
+    # the `scio new` thread has its own view; the task model crashed on it (I-108)
+    assert main(["report", "--thread", "new-cli", "--out", str(tmp_path / "reports")]) == 0
+    boot = capsys.readouterr().out
+    assert "# Product bootstrap new-cli" in boot and f"product {PRODUCT}" in boot
+    data = json.loads((tmp_path / "reports" / "new-cli.json").read_text(encoding="utf-8"))
+    assert data["phase"] == "done" and data["bootstrap_commit"] and data["features"] >= 3
     # the next scio build starts a new thread for M2 (the m1 thread has ended)
     assert main(["build", "--product", target]) == 0
     out = capsys.readouterr().out
@@ -1007,3 +1013,48 @@ def test_progress_sync_with_product_md_survives_the_first_feature_reset(tmp_path
     assert _git(repo, "status", "--porcelain") == ""
     assert last in [f.id for f in _progress(repo).features]
     assert sum("[scio:sync:M1:plan_milestone]" in x for x in _subjects(repo, "main")) == 1
+
+
+def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_path: Path) -> None:
+    """I-109: PRODUCT.md is the file a human may edit by hand, but ``scio build`` never
+    committed it, and P1's pre-attempt reset wiped an edit made before the build. An edit
+    made at the merge stop broke the offline merge's checkout of ``main`` and was only read
+    by the next run. Now each edit is committed as bookkeeping on a milestone branch, carried
+    across SCIO's checkouts, and re-read by the next milestone of the same thread."""
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    md = repo / PRODUCT_MD
+    first, second = "Edited by hand before the build.", "Edited by hand at the M1 merge stop."
+    # a product bootstrapped before I-107 can still promise other tools: the build says so
+    bar = "## Quality bar (release gate)\n"
+    md.write_text(
+        md.read_text(encoding="utf-8")
+        .replace("## Vision\n", f"## Vision\n{first}\n", 1)
+        .replace(bar, f"{bar}- Tests use only the stdlib unittest module\n", 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        assert any(
+            "contradicts the python profile" in e.text and "edit PRODUCT.md" in e.text
+            for e in out.state.ledger
+        )
+        assert first in _git(repo, "show", f"milestone/1:{PRODUCT_MD}")  # survived P1's reset
+        # the human edits again while the PR waits; milestone/1's PRODUCT.md now differs
+        # from main's, so a plain checkout of main would refuse to run over the edit
+        md.write_text(
+            md.read_text(encoding="utf-8").replace(first, second), encoding="utf-8", newline="\n"
+        )
+        out = resume_build(ctx, "merge")
+        assert out.paused and out.state.milestone and out.state.milestone.id == "M2"
+        assert out.state.spec and second in out.state.spec.vision  # re-read for M2
+        assert any("re-read" in e.text for e in out.state.ledger)
+    finally:
+        ctx.close()
+    assert first in _git(repo, "show", f"main:{PRODUCT_MD}")  # M1's merge took the first edit
+    assert second in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
+    assert sum("[scio:sync:M2:plan_milestone]" in s for s in _subjects(repo, "milestone/2")) == 1
+    assert _git(repo, "status", "--porcelain", "--", PRODUCT_MD) == ""  # committed, not dangling

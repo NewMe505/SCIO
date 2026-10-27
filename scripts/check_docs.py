@@ -295,10 +295,10 @@ def guard_exists(kind: str, name: str) -> bool:
         settings = ROOT / ".claude" / "settings.json"
         return settings.exists() and name in settings.read_text(encoding="utf-8")
     if kind == "test":
-        pattern = re.compile(rf"^\s*def {name}\(", re.MULTILINE)
+        pattern = re.compile(rf"^\s*def {name}[\[(]", re.MULTILINE)  # [ : a generic (I-111)
         dirs: tuple[str, ...] = ("tests",)
     else:  # symbol
-        pattern = re.compile(rf"^\s*(?:def {name}\(|class {name}\b|{name}\s*[:=])", re.MULTILINE)
+        pattern = re.compile(rf"^\s*(?:def {name}[\[(]|class {name}\b|{name}\s*[:=])", re.MULTILINE)
         dirs = CODE_DIRS
     return any(
         pattern.search(p.read_text(encoding="utf-8"))

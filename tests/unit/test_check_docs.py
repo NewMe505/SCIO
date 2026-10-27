@@ -153,6 +153,8 @@ def test_guard_exists_looks_in_the_repository() -> None:
     cd = _load()
     assert cd.guard_exists("symbol", "SCIO_GIT_IDENTITY")  # a constant in scio/aci/tools.py
     assert cd.guard_exists("symbol", "_ci_git_identity")  # a fixture in tests/conftest.py
+    assert cd.guard_exists("symbol", "run_effect")  # a PEP 695 generic: def run_effect[T]( (I-111)
+    assert cd.guard_exists("symbol", "carrying_product_md")
     assert cd.guard_exists("test", "test_a_guard_that_does_not_exist_fails")
     assert cd.guard_exists("check", "check_guardrails")  # defined and run by main
     assert not cd.guard_exists("check", "guard_exists")  # defined, but main never runs it

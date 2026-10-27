@@ -7,8 +7,10 @@ sandbox, the effect log, the artifact store and the optional GitHub client.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from scio.aci.runtime import ToolContext
 from scio.aci.sandbox.base import Limits, Sandbox
@@ -118,6 +120,29 @@ class RunContext:
     """Product feature runs only (M11, I-091): the values for the profile's ``verify: true``
     quality checks (``coverage_floor``), which verify runs once the suite and lint pass. None
     in task mode, where a repository's own bar is not SCIO's to impose."""
+    spent_before: tuple[int, float] = (0, 0.0)
+    """(tokens, usd) the thread had recorded before this process spent anything: a resumed
+    checkpoint's spend, which this process's budget guard (it starts at zero) does not know.
+    The guard still caps each process; the state records the thread (I-110)."""
+
+    def carry_spend(self, values: Mapping[str, Any]) -> None:
+        """Count the spend a resumed checkpoint's ``values`` already record (I-110). What
+        this process has spent since is subtracted, so resuming twice in one process (a
+        feature thread through its merge stop) does not count it twice."""
+        recorded = values.get("budgets") if values else None
+        if recorded is None:
+            return
+        b = recorded if isinstance(recorded, Budget) else Budget.model_validate(recorded)
+        snap = self.harness.budget.snapshot()
+        self.spent_before = (
+            max(b.tokens_used - snap.tokens_used, 0),
+            max(b.usd_used - snap.usd_used, 0.0),
+        )
+
+    def spent(self) -> tuple[int, float]:
+        """(tokens, usd) of the whole thread: before this process, plus this process's."""
+        snap = self.harness.budget.snapshot()
+        return self.spent_before[0] + snap.tokens_used, self.spent_before[1] + snap.usd_used
 
     @classmethod
     def create(
@@ -236,10 +261,8 @@ class RunContext:
         self.effects.close()
 
     def budget_update(self) -> dict[str, object]:
-        """State patch reflecting the harness's spend so far."""
-        snap = self.harness.budget.snapshot()
-        b = self.budget.model_copy(
-            update={"tokens_used": snap.tokens_used, "usd_used": snap.usd_used}
-        )
+        """State patch reflecting the thread's spend so far, across processes (I-110)."""
+        tokens, usd = self.spent()
+        b = self.budget.model_copy(update={"tokens_used": tokens, "usd_used": usd})
         self.budget = b
         return {"budgets": b}
