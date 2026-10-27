@@ -31,6 +31,7 @@ from scio.product.acceptance import app_argv, free_port, start_app, wait_healthy
 from scio.product.build import build_thread_id, product_env, resume_build, run_build
 from scio.product.progress import parse_product_md
 from scio.state.models import ProductSpec
+from scio.toolchain import python_toolchain
 
 log = logging.getLogger(__name__)
 
@@ -169,4 +170,6 @@ def grade(ctx: RunContext, spec: ProductSpec, task: EvalTaskLike) -> tuple[bool,
             app.stop()
     lines = (r.stdout + r.stderr).strip().splitlines()
     summary = lines[-1][:200] if lines else f"exit {r.returncode}"
-    return r.returncode == 0, summary
+    # the hidden tests are Python in every stack; a run that only skipped proves nothing
+    ran = r.returncode == 0 and not python_toolchain().skipped_only(r.stdout)
+    return ran, summary

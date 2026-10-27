@@ -291,6 +291,9 @@ def delete_file(sandbox: Sandbox, inp: DeleteFileInput) -> str:
 # ---------- run_tests ----------
 
 
+SKIPPED_ONLY = "no tests ran: every selected test was skipped"
+
+
 def run_tests(
     sandbox: Sandbox,
     inp: RunTestsInput,
@@ -300,8 +303,9 @@ def run_tests(
     """Run the toolchain's test command and return failures only (ADR 0009).
 
     The result strings are the contract verify relies on: ``all tests passed: ...``,
-    ``no tests collected[ for filter ...]: ...``, failure text, or ``ToolError`` when the
-    runner itself could not run.
+    ``no tests collected[ for filter ...]: ...``, ``no tests ran: every selected test was
+    skipped: ...`` (I-097), failure text, or ``ToolError`` when the runner itself could not
+    run.
     """
     tc = _toolchain_of(ctx, toolchain)
     path = _abs(sandbox, inp.path) if inp.path else None
@@ -312,6 +316,9 @@ def run_tests(
         raise ToolError(f"tests timed out after {timeout}s; narrow with filter= or path=")
     last_line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.strip()), "")
     outcome = tc.test_outcome(r.exit_code, r.stdout)
+    if outcome == "passed" and tc.skipped_only(r.stdout):
+        # a pass in which nothing ran proves nothing (I-097): verify must not accept it
+        return f"{SKIPPED_ONLY}: {last_line}"
     if outcome == "passed":
         return f"all tests passed: {last_line}"
     if outcome == "no_tests":

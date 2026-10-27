@@ -27,6 +27,8 @@ test:
   argv: [python, -m, pytest, -q, --tb=short, -p, "no:cacheprovider", -rfE, --no-header]
   filter_flag: "-k"
   exit_codes: { passed: [0], no_tests: [5], broken: [2, 3, 4] }
+  # exit 0 with every selected test skipped proves nothing (I-097): "2 skipped in 0.01s"
+  skipped_only: { all: ['(?m)^\d+ skipped'], none: ['\d+ passed', '\d+ failed', '\d+ errors?'] }
   selector_help: "pytest node ids like tests/test_x.py::test_name, or -k keywords"
   filter_help: "pytest -k filter"
 lint:

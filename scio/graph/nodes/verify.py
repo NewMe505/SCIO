@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-from scio.aci.tools import RunTestsInput, ToolError, run_tests
+from scio.aci.tools import SKIPPED_ONLY, RunTestsInput, ToolError, run_tests
 from scio.graph.nodes.common import diff_stat, fact
 from scio.graph.run_context import RunContext
 from scio.loop.escalation import decide, exit_for, review_decision
@@ -75,12 +75,20 @@ def split_selectors(test_filter: str) -> list[str]:
     return [s for s in (x.strip() for x in test_filter.split(SELECTOR_SEP)) if s]
 
 
+SKIP_HINT = (
+    " (a skipped test proves nothing: black-box acceptance tests run only at integrate, "
+    "against the started app; prove the feature with tests that run here, in-process; "
+    "existing tests count)"
+)
+
+
 def _run(ctx: RunContext, flt: str | None) -> tuple[str, bool]:
+    """The whole suite (the regression check): nothing may fail; skips are not failures."""
     try:
         out = run_tests(ctx.sandbox, RunTestsInput(filter=flt), toolchain=ctx.toolchain)
     except ToolError as exc:
         return str(exc), False
-    return out, out.startswith("all tests passed")
+    return out, out.startswith(("all tests passed", SKIPPED_ONLY))
 
 
 def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
@@ -97,6 +105,9 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
         if out.startswith("no tests collected"):
             ok = False
             out += f" (selector matched nothing: use {ctx.toolchain.selector_help})"
+        if out.startswith(SKIPPED_ONLY):  # a feature's proof must run (I-097)
+            ok = False
+            out += SKIP_HINT
         label = f"path={inp.path!r}" if inp.path else f"filter={inp.filter!r}"
         chunks.append(f"[run_tests {label}]\n{out}")
         ok_all &= ok
@@ -139,7 +150,8 @@ def verify(ctx: RunContext) -> Node:
         per_filter_ok: dict[str | None, bool] = {}
         for flt in sorted({f.test_filter for f in in_scope if f.test_filter}):
             out, ok = _run_selectors(ctx, flt)
-            if not ok and fallback and fallback != flt and "matched nothing" in out:
+            unproven = "matched nothing" in out or SKIPPED_ONLY in out
+            if not ok and fallback and fallback != flt and unproven:
                 # The plan guessed test names before the tests existed (I-037). The tests the
                 # worker actually reports are the ground truth; adopt them if they pass.
                 out2, ok2 = _run_selectors(ctx, fallback)

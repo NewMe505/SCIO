@@ -165,7 +165,9 @@ def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
         r = sb.exec(tc.test_argv(filter=None, path=acc_dir), timeout_s=sb.limits.timeout_s, env=env)
     finally:
         app_output = app.stop() if app is not None else ""
-    outcome = tc.test_outcome(r.exit_code, r.stdout)
+    outcome: str = tc.test_outcome(r.exit_code, r.stdout)
+    if outcome == "passed" and tc.skipped_only(r.stdout):
+        outcome = "skipped only"  # every acceptance test skipped proves nothing (I-097)
     ok = outcome == "passed"
     tail = r.output.strip().splitlines()[-1][:200] if r.output.strip() else ""
     text = f"[acceptance] {outcome} ({label}): {tail}"
