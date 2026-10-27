@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from scio.aci.runtime import ensure_product_env, venv_python
+from scio.aci.runtime import RunAppInput, ToolContext, ensure_product_env, run_app, venv_python
 from scio.aci.sandbox.base import Limits
 from scio.aci.sandbox.docker import DockerSandbox, docker_ready
 from scio.product.acceptance import start_app, wait_healthy
@@ -154,6 +154,29 @@ def test_http_app_starts_probes_and_stops_inside_the_container(sandbox: DockerSa
     assert not wait_healthy(app, "/index.html", timeout_s=3)
 
 
+def test_run_app_starts_probes_and_stops_inside_the_container(sandbox: DockerSandbox) -> None:
+    """Issue #58: the worker's ``run_app`` tool on a Docker sandbox (it refused one before):
+    healthy from inside, stopped afterwards, and an app that exits reports its exit code."""
+    tc = python_toolchain()
+    ctx = ToolContext(toolchain=tc)
+    sandbox.write_text("/work/index.html", "hello")
+    url = "http://127.0.0.1:8766/index.html"
+    served = run_app(
+        sandbox,
+        RunAppInput(
+            module="http.server", args=["8766", "--bind", "127.0.0.1"], health_url=url, timeout_s=30
+        ),
+        ctx,
+    )
+    assert served.splitlines()[0] == f"run_app -m http.server 8766 --bind 127.0.0.1: healthy: {url}"
+    assert "GET /index.html" in served, served
+    assert not sandbox.exec(tc.health_probe_argv(url), timeout_s=10).ok  # stopped
+    exited = run_app(sandbox, RunAppInput(module="json.tool", args=["--help"], timeout_s=20), ctx)
+    assert exited.splitlines()[0] == "run_app -m json.tool --help: exited 0", exited
+    assert "usage" in exited.lower()
+    assert not sandbox.exists("/work/.scio/sandbox/app.pid")
+
+
 @pytest.mark.skipif(
     subprocess.run(["docker", "run", "--rm", "--network", "none", IMAGE, "git", "--version"],
                    capture_output=True).returncode != 0 if docker_ready() else True,
@@ -249,3 +272,53 @@ def test_the_scaffold_dockerfile_builds_and_runs(tmp_path: Path, stack: str, kin
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
     finally:
         subprocess.run(["docker", "image", "rm", "-f", tag], capture_output=True, timeout=120)
+
+
+def test_a_node_product_installs_and_tests_inside_the_container(tmp_path: Path, image: str) -> None:
+    """I-101 (issue #58): the sandbox image runs a node-ts product. A real ``npm install``
+    reaches the registry only through the allowlist proxy, then ``node --test`` runs a
+    TypeScript test (type stripping) that imports the installed package. Written without a
+    local daemon: the first docker-live run is the experiment."""
+    from scio.toolchain import node_ts_toolchain
+
+    tc = node_ts_toolchain()
+    sb = DockerSandbox(
+        tmp_path,
+        image=image,
+        limits=Limits(
+            timeout_s=300,
+            memory_mb=1024,
+            cpus=1.0,
+            network_allowlist=tc.runtime().index_allowlist,
+        ),
+        git_identity=("SCIO CI", "ci@scio.local"),
+    )
+    try:
+        if not sb.exec(list(tc.sandbox_probe_argv)).ok:
+            # the default python image has no Node; a named image (CI's docker-live job builds
+            # docker/sandbox.Dockerfile) must pass, so this never skips where it matters (I-105)
+            if "SCIO_SANDBOX_DOCKER_IMAGE" not in os.environ:
+                pytest.skip(f"{image} has no Node (build docker/sandbox.Dockerfile)")
+            raise AssertionError(f"{image} fails the node-ts probe")
+        sb.write_text(
+            "/work/package.json",
+            '{"name": "p", "version": "0.1.0", "private": true, "type": "module"}\n',
+        )
+        sb.write_text(
+            "/work/tests/num.test.ts",
+            'import { test } from "node:test";\n'
+            'import assert from "node:assert/strict";\n'
+            'import isNumber from "is-number";\n\n'
+            'test("the installed package loads", () => {\n'
+            "  const n: number = 3;\n"
+            "  assert.equal(isNumber(n), true);\n"
+            "});\n",
+        )
+        summary = ensure_product_env(sb, tc, ["is-number@7.0.0"])
+        assert "installed is-number@7.0.0" in summary, summary
+        assert sb.exists("/work/node_modules/is-number/package.json")
+        r = sb.exec(tc.test_argv(filter=None, path=None), timeout_s=120)
+        assert tc.test_outcome(r.exit_code, r.stdout) == "passed", r.output
+        assert "# pass 1" in r.stdout
+    finally:
+        sb.close()

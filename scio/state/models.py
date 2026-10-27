@@ -532,6 +532,9 @@ class ReleaseRecord(BaseModel):
     """Repository-relative paths under ``.scio/sandbox/release/`` (git-ignored)."""
     url: str | None = None
     """The GitHub Release, when the build runs with ``--gh``."""
+    pr_number: int | None = None
+    pr_url: str | None = None
+    """With ``--gh``, the release PR the human merges before the tag (I-103)."""
 
 
 ProductBuildPhase = Literal[
@@ -547,6 +550,8 @@ ProductBuildPhase = Literal[
     "release_check",
     "release_decision",
     "release",
+    "release_merge_wait",
+    "release_publish",
     "done",
     "halted",
 ]

@@ -50,8 +50,13 @@ jobs:
       - name: Type-check
         run: uv run mypy
 
+      # In parallel (issue #58): the product builds dominate and mostly wait on subprocesses
+      # (git, pytest, node), so twice the runner's cores; the serial run measured 792 s at
+      # v0.7.0. Locally 8 workers gave the serial counts exactly (341 passed, 16 skipped).
       - name: Tests (Fake provider, offline)
-        run: uv run pytest --cov=scio --cov=evals --cov-report=term-missing --durations=15
+        run: |
+          echo "runner cores: $(nproc)"
+          uv run pytest -n "$(( $(nproc) * 2 ))" --cov=scio --cov=evals --cov-report=term-missing --durations=15
 
       - name: Docs checks
         run: uv run python scripts/check_docs.py

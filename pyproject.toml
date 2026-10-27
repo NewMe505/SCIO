@@ -26,6 +26,8 @@ e2b = ["e2b>=2.0,<3"]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
+    # the suite runs in parallel in CI (issue #58): product builds dominate its time
+    "pytest-xdist>=3.6",
     "ruff>=0.9",
     "mypy>=1.14",
     "types-PyYAML>=6.0",

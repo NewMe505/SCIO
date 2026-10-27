@@ -558,3 +558,32 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - `Toolchain.skipped_only`, the `no tests ran` result, verify's refusal and hint, the acceptance and grader checks (I-097); `test_skipped_only.py`.
 - The PR-body and router budget guards and `tests/unit/test_budget_guards.py` (I-098); `Settings.claude_code_token_factor`, `token_factor()`, `BudgetsConfig.scaled(tokens=)` and the cap-ratio assertion (I-099).
 - ADR 0015; CONTRIBUTING steps 5 and 6; ledger I-085 to I-099; EVAL_HISTORY rows for the live product runs.
+
+## Post-M11 follow-ups (2026-10-27, issue #58, ADR 0016, PR #59)
+
+### Lessons applied
+- Inventory first (M6 to M11): a read-only sweep of the open items in ADRs 0013 to 0015 and the `--gh` path became the issue body and its six slices, and found I-102 and I-103 before any code.
+- The Fake only reproduces the shapes you thought of (I-031 to I-035): the GitHub-mode test had faked every merge as a fast-forward, so the I-102 test makes real squash merges on a bare origin (a new commit with the branch's tree) and failed against the old code before the fix.
+- A node that interrupts does nothing else (I-065): `release_merge_wait` is its own node between `release` and `release_publish`.
+- Green here, red there (I-074, I-080, I-084): the Docker and Node paths were written for CI's daemon and proven there, not on the dev machine.
+- Measure before designing (M11): the parallel test run was timed on CI's runner (4 cores) before choosing the worker count.
+
+### What succeeded
+- Parallel CI tests: 789 s serial to 314 s on GitHub's 4-core runners, identical counts; the `checks` job has room again inside its 25-minute budget.
+- The blind-written docker-live Node test (a real `npm install` through the allowlist proxy, `node --test` on TypeScript) passed on its first CI run, as did the image change behind it (I-101).
+- `scio upgrade` on a real M9 product: `bookmarks_api` gained its Dockerfile, `.dockerignore`, README run block, coverage source and CI step in one commit, and its next `scio build` built M2 live (P5 to P7 passed, every integration check and acceptance green, $4.56 estimated, nothing billed); the upgraded README run block and release files passed the bar they were added for.
+- `run_app` and the acceptance run now share one app-start module; the move also made a crashing app end the health wait early instead of waiting out the timeout.
+
+### What failed
+- Two `checks` runs failed (on `0554bf6` and `be9bb5a`) and I pushed two more slices before noticing: my CI watcher waited on the newest run only, and I did not look at the older ones (I-104). The cause was green-here-red-there once more: the dev machine's global git identity hid two commits that named none (`scio upgrade`'s and a test helper's), and the same gap existed in `scio build` on a product clone.
+- I assumed the docker-live tests ran only in the `docker-live` job; both jobs have a Docker daemon, so the new Node test failed in `checks` on the plain Python image (I-105).
+
+### Actions
+- `sync_main`, `SyncRefused`, `BOOKKEEPING_MARKERS` and the two squash-merge tests (I-102); the `release` / `release_merge_wait` / `release_publish` split, `ReleaseRecord.pr_number` and `pr_url` (I-103).
+- `scio/product/upgrade.py` and `scio upgrade`; `tests/unit/test_upgrade.py`.
+- Node 22 in `docker/sandbox.Dockerfile`, `sandbox_probe` in both profiles, `Toolchain.sandbox_probe_argv`, the stack-aware `product_sandbox_backend`, `tests/unit/test_product_sandbox_backend.py` and the docker-live Node test (I-101).
+- `scio/aci/apps.py`; `run_app` on any sandbox; `test_run_app_on_a_non_local_sandbox_*` and the docker-live `run_app` test.
+- `SCIO_GIT_IDENTITY` on every commit, merge and tag SCIO makes; the autouse `_ci_git_identity` fixture in `tests/conftest.py`, shown to fail the old `upgrade.py` locally (I-104).
+- The env-conditional skip of the Node docker-live test (I-105).
+- CONTRIBUTING, "Tests and the environment": the CI-like git rule, check the previous push's CI before the next push, and the Docker-in-both-jobs rule (I-104, I-105).
+- pytest-xdist in the dev group and `pytest -n` in CI (I-094 follow-up); ADR 0016; ledger I-101 to I-105.

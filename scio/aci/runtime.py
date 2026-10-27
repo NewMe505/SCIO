@@ -14,24 +14,23 @@ creates and no interpreter of its own.
 ``install_deps`` is a worker tool gated by the approved list: a package that is not on it is
 refused with a message that tells the worker to ask for a design decision, which is the
 escalation path a human already owns (ADR 0007). ``run_app`` starts the product, waits for a
-health URL or a few seconds of output, and stops it; local sandbox only, because the process
-runs on the host.
+health URL or a few seconds of output, and stops it, where the sandbox runs: a host process
+on a local sandbox, a detached process probed from inside on any other (issue #58; the same
+``scio.aci.apps`` path the acceptance run uses).
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
 import sysconfig
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
+from scio.aci.apps import healthy, start_app
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.sandbox.local import LocalSandbox, resolve_command
+from scio.aci.sandbox.local import LocalSandbox
 from scio.aci.tools import ToolError
 from scio.toolchain import Toolchain, python_toolchain
 
@@ -218,31 +217,24 @@ class RunAppInput(BaseModel):
 
 
 def run_app(sandbox: Sandbox, inp: RunAppInput, ctx: ToolContext) -> str:
-    """Start the app, wait for its health URL (or for it to exit), report, stop it."""
-    if not isinstance(sandbox, LocalSandbox):
-        raise ToolError("run_app needs the local sandbox in M9 (the app runs on the host)")
-    rt = ctx.toolchain.runtime()
-    argv = resolve_command([*rt.app_argv, inp.module, *inp.args], sandbox.python)
+    """Start the app where the sandbox runs (``scio.aci.apps``), wait for its health URL (or
+    for it to exit), report, stop it."""
     if inp.health_url and not inp.health_url.startswith(("http://127.0.0.1", "http://localhost")):
         raise ToolError("health_url must be a local http://127.0.0.1 or http://localhost URL")
-    proc = subprocess.Popen(
-        argv,
-        cwd=sandbox.root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    rt = ctx.toolchain.runtime()
+    base, path = _split_url(inp.health_url) if inp.health_url else ("", "")
+    try:
+        app = start_app(sandbox, [*rt.app_argv, inp.module, *inp.args], base, ctx.toolchain)
+    except RuntimeError as e:
+        raise ToolError(str(e)) from e
     deadline = time.monotonic() + inp.timeout_s
     status = "timed out"
     try:
         while time.monotonic() < deadline:
-            code = proc.poll()
-            if code is not None:
-                status = f"exited {code}"
+            if app.exited():
+                status = f"exited {app.exit_code()}"
                 break
-            if inp.health_url and healthy(inp.health_url):
+            if inp.health_url and app.is_healthy(path):
                 status = f"healthy: {inp.health_url}"
                 break
             time.sleep(0.2)
@@ -250,26 +242,17 @@ def run_app(sandbox: Sandbox, inp: RunAppInput, ctx: ToolContext) -> str:
             if inp.health_url is None:
                 status = f"still running after {inp.timeout_s}s"
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-    output = (proc.stdout.read() if proc.stdout else "")[-2000:]
+        output = app.stop()[-2000:]
     shown = [*rt.app_argv[1:], inp.module, *inp.args]
     line = f"run_app {' '.join(shown)}: {status}"
     return f"{line}\n{output}".strip()
 
 
-def healthy(url: str) -> bool:
-    """True when a local HTTP URL answers 2xx or 3xx within a second."""
-    try:
-        with urllib.request.urlopen(url, timeout=1) as resp:
-            return bool(200 <= int(resp.status) < 400)
-    except (urllib.error.URLError, OSError, ValueError):
-        return False
+def _split_url(url: str) -> tuple[str, str]:
+    """``http://127.0.0.1:8000/health`` -> (``http://127.0.0.1:8000``, ``/health``)."""
+    scheme, _, rest = url.partition("://")
+    host, slash, path = rest.partition("/")
+    return f"{scheme}://{host}", slash + path
 
 
 __all__ = [

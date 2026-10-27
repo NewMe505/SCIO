@@ -91,6 +91,7 @@ class ProfileToolchain:
     command_words: tuple[str, ...] = ()
     detect: Detect | None = None
     release_image: str = ""
+    sandbox_probe_argv: tuple[str, ...] = ()
 
     def quality_checks(self) -> tuple[QualityCheck, ...]:
         return self.checks
@@ -256,6 +257,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         if detect
         else None,
         release_image=str(data.get("release_image", "")),
+        sandbox_probe_argv=tuple(str(a) for a in data.get("sandbox_probe", [])),
     )
 
 

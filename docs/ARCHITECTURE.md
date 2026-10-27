@@ -956,6 +956,8 @@ graph TD;
 	release_check(release_check)
 	release_decision(release_decision)
 	release(release)
+	release_merge_wait(release_merge_wait)
+	release_publish(release_publish)
 	done(done)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load;
@@ -977,11 +979,15 @@ graph TD;
 	plan_milestone -. &nbsp;halt&nbsp; .-> done;
 	plan_milestone -.-> issues;
 	plan_milestone -. &nbsp;release&nbsp; .-> release_check;
-	release --> done;
+	release -. &nbsp;merge_wait&nbsp; .-> release_merge_wait;
+	release -. &nbsp;publish&nbsp; .-> release_publish;
 	release_check -.-> done;
 	release_check -. &nbsp;decide&nbsp; .-> release_decision;
 	release_decision -.-> done;
 	release_decision -.-> release;
+	release_merge_wait -.-> done;
+	release_merge_wait -. &nbsp;publish&nbsp; .-> release_publish;
+	release_publish --> done;
 	update_progress -.-> done;
 	update_progress -. &nbsp;plan&nbsp; .-> plan_milestone;
 	update_progress -. &nbsp;release&nbsp; .-> release_check;
@@ -989,6 +995,7 @@ graph TD;
 	feature -.-> feature;
 	merge_wait -.-> merge_wait;
 	release_decision -.-> release_decision;
+	release_merge_wait -.-> release_merge_wait;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

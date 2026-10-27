@@ -333,6 +333,10 @@ def run_tests(
 
 # ---------- git_checkpoint ----------
 
+# SCIO's own commits, merges and tags carry its identity on the command line, so they never
+# depend on the machine's git config: a CI runner or a fresh container has none (I-104).
+SCIO_GIT_IDENTITY = ("-c", "user.name=scio", "-c", "user.email=scio@users.noreply.github.com")
+
 
 def _git(sandbox: Sandbox, *args: str, timeout_s: int = 60) -> str:
     r = sandbox.exec(["git", *args], timeout_s=timeout_s)
@@ -363,17 +367,7 @@ def git_checkpoint(sandbox: Sandbox, inp: GitCheckpointInput) -> str:
     status = _git(sandbox, "status", "--porcelain")
     if not status:
         return f"nothing to commit; HEAD is {head_sha(sandbox)}"
-    _git(
-        sandbox,
-        "-c",
-        "user.name=scio",
-        "-c",
-        "user.email=scio@users.noreply.github.com",
-        "commit",
-        "-q",
-        "-m",
-        inp.message,
-    )
+    _git(sandbox, *SCIO_GIT_IDENTITY, "commit", "-q", "-m", inp.message)
     return f"committed {head_sha(sandbox)}"
 
 

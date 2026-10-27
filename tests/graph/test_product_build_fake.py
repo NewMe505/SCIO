@@ -314,6 +314,89 @@ def test_crash_between_features_resumes_without_duplicates(tmp_path: Path) -> No
         ctx.close()
 
 
+def _github_product(tmp_path: Path) -> tuple[RunContext, FakeGh, Path, Path]:
+    """A bootstrapped product with a bare origin and a canned ``gh`` (GitHub mode)."""
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    fake = FakeGh()
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT), github=GitHubClient("o/r", runner=fake))
+    return ctx, fake, repo, origin
+
+
+def _squash_merge(origin: Path, fake: FakeGh, branch: str, pr: int) -> str:
+    """What GitHub's squash button does: one new commit on origin main with the branch's
+    tree, a new SHA, the branch's own commits left out of main's history (I-102)."""
+    tree = _git(origin, "rev-parse", f"refs/heads/{branch}^{{tree}}")
+    sha = _git(
+        origin,
+        *("-c", "user.name=GitHub", "-c", "user.email=noreply@github.com"),  # I-104
+        *("commit-tree", tree, "-p", "refs/heads/main", "-m", f"{branch} (#{pr})"),
+    )
+    _git(origin, "update-ref", "refs/heads/main", sha)
+    fake.merged.add(pr)
+    return sha
+
+
+def test_github_mode_survives_squash_merged_milestone_prs(tmp_path: Path) -> None:
+    """I-102: M2's PR carries M1's progress commit; a squash merge replaces its SHA, so the
+    old ``pull --ff-only`` failed. The sync resets local main to origin's when only SCIO's
+    bookkeeping is local, and the build reaches the release gate with both milestones."""
+    ctx, fake, repo, origin = _github_product(tmp_path)
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.paused and out.state.phase == "merge_wait" and out.state.pr
+        _squash_merge(origin, fake, "milestone/1", int(out.state.pr.number or 0))
+        out = resume_build(ctx, "merged")
+        assert out.paused and out.state.milestone and out.state.milestone.id == "M2"
+        assert out.state.pr and out.state.pr.number
+        squash2 = _squash_merge(origin, fake, "milestone/2", int(out.state.pr.number))
+        out = resume_build(ctx, "merged")
+        assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
+        assert out.state.milestones_done == ["M1", "M2"]
+        assert _git(repo, "rev-parse", "main~1") == squash2  # origin's squash + M2's record
+        # the release PR, squash-merged too: M2's record and the cut reach origin main in it,
+        # and the tag lands on origin main's history (I-103)
+        out = resume_build(ctx, "release")
+        assert out.paused and out.state.release and out.state.release.pr_number
+        squash3 = _squash_merge(origin, fake, "release/v0.1.0", out.state.release.pr_number)
+        out = resume_build(ctx, "merged")
+        assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
+    finally:
+        ctx.close()
+    assert _git(origin, "rev-parse", "v0.1.0^{commit}") == squash3
+    assert _git(repo, "rev-parse", "main") == squash3
+    assert [m.id for m in _progress(repo).milestones] == ["M1", "M2"]
+    assert "## [0.1.0] - " in (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_github_mode_never_drops_a_human_commit_on_local_main(tmp_path: Path) -> None:
+    """I-102: the reset applies only to SCIO's own bookkeeping; a human's commit that exists
+    only on local main halts the build with ``sync_failed`` and stays where it is."""
+    ctx, fake, repo, origin = _github_product(tmp_path)
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.state.pr
+        _squash_merge(origin, fake, "milestone/1", int(out.state.pr.number or 0))
+        out = resume_build(ctx, "merged")
+        assert out.state.pr and out.state.pr.number
+        _git(repo, "checkout", "-q", "main")
+        (repo / "LOCAL.md").write_text("a human's note\n", encoding="utf-8", newline="\n")
+        _git(repo, "add", "LOCAL.md")
+        _git(repo, "-c", "user.name=h", "-c", "user.email=h@x", "commit", "-q", "-m", "docs: note")
+        _squash_merge(origin, fake, "milestone/2", int(out.state.pr.number))
+        out = resume_build(ctx, "merged")
+        assert not out.paused and out.state.exit_reason == "sync_failed", out.state.ledger[-2:]
+        assert "docs: note" in out.state.ledger[-1].text
+    finally:
+        ctx.close()
+    assert _git(repo, "log", "-1", "--format=%s", "main") == "docs: note"
+
+
 def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> None:
     """Milestone, issues and the PR go through the GitHub client (a canned ``gh``); the branch
     is pushed to a bare origin; a resume after the PR re-applies no write; the merge is read
@@ -388,12 +471,29 @@ def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> No
         out = resume_build(ctx, "merged")
         assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
         assert "publish a GitHub Release" in str(out.interrupt["question"])
+        # issue #58, I-103: the release goes through a PR like SCIO's own; nothing pushes main
+        out = resume_build(ctx, "release")
+        assert out.paused and out.state.phase == "release_merge_wait", out.state.ledger[-3:]
+        rel = out.state.release
+        assert rel is not None and rel.pr_number is not None
+        assert _git(origin, "log", "-1", "--format=%s", "refs/heads/release/v0.1.0").startswith(
+            "chore(release): v0.1.0"
+        )
+        assert creates(["release", "create"]) == 0  # no tag and no Release before the merge
+        early = resume_build(ctx, "merged")  # not merged on GitHub yet: asked again
+        assert early.paused and any("not merged yet" in e.text for e in early.state.ledger)
+        subprocess.run(
+            ["git", "update-ref", "refs/heads/main", "refs/heads/release/v0.1.0"],
+            cwd=origin,
+            check=True,
+        )
+        fake.merged.add(int(rel.pr_number))
         fake.fail_next_release = True
         with pytest.raises(GitHubError, match="502"):
-            resume_build(ctx, "release")
-        assert _git(origin, "rev-parse", "v0.1.0^{commit}") == _git(
-            repo, "rev-parse", "v0.1.0^{commit}"
-        )
+            resume_build(ctx, "merged")
+        tagged = _git(origin, "rev-parse", "v0.1.0^{commit}")
+        assert tagged == _git(repo, "rev-parse", "v0.1.0^{commit}")
+        assert tagged == _git(origin, "rev-parse", "refs/heads/main")  # the tag is on main (I-103)
         out = resume_build(ctx, None)
         assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
         rel = out.state.release

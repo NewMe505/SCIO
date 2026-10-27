@@ -2,7 +2,7 @@
 
 A model-agnostic, multi-agent framework built on LangGraph that turns a prompt into product-ready software. Today it takes one software task, from a spec or a GitHub Issue, to a merged, tested and documented pull request, reliably and live. Product Mode (M6 to M11) extends that to whole products, from a prompt or a `PRODUCT.md`, in Python or TypeScript, one approved milestone at a time, through a release gate to a tagged release.
 
-> Status: **v0.7.0 released; Product Mode M6 to M11 done.** The product eval suite passes live on one commit: a CLI todo app (p001), a REST API (p002) and a web app graded in a real browser (p003), each built from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass ($11.63 estimated for all three, nothing billed). `scio new` and `scio build` have also bootstrapped and built live products on the Claude Code backend: `todo_tags` (M8), `bookmarks_api` (M9: a Python HTTP service with a third-party dependency, black-box acceptance against the started server, $5.38 estimated, nothing billed) and `notes_service` (M10: a TypeScript HTTP service with zod, eslint, tsc, npm audit and black-box acceptance all green, $4.61 estimated, nothing billed). Task mode is proven live: ten regression tasks at pass^5 = 1.00 offline, nightly live suites green. Roadmap: [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md); decision records: [docs/adr/](docs/adr/); board: [SCIO Product Mode](https://github.com/users/NewMe505/projects/1); milestones: [M6 to M11](https://github.com/NewMe505/SCIO/milestones).
+> Status: **v0.7.0 released; Product Mode M6 to M11 done.** The product eval suite passes live on one commit: a CLI todo app (p001), a REST API (p002) and a web app graded in a real browser (p003), each built from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass ($11.63 estimated for all three, nothing billed). `scio new` and `scio build` have also bootstrapped and built live products on the Claude Code backend: `todo_tags` (M8), `bookmarks_api` (M9: a Python HTTP service with a third-party dependency, black-box acceptance against the started server, $5.38 estimated, nothing billed) and `notes_service` (M10: a TypeScript HTTP service with zod, eslint, tsc, npm audit and black-box acceptance all green, $4.61 estimated, nothing billed). Post-M11 follow-ups ([issue #58](https://github.com/NewMe505/SCIO/issues/58), [PR #59](https://github.com/NewMe505/SCIO/pull/59), [ADR 0016](docs/adr/0016-post-m11-follow-ups.md)) are ready for review: squash-safe `--gh` merges and a release PR, `scio upgrade` (live: `bookmarks_api` upgraded and its M2 built, $4.56 estimated), Node in the Docker sandbox, `run_app` in a container, parallel CI tests. Task mode is proven live: ten regression tasks at pass^5 = 1.00 offline, nightly live suites green. Roadmap: [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md); decision records: [docs/adr/](docs/adr/); board: [SCIO Product Mode](https://github.com/users/NewMe505/projects/1); milestones: [M6 to M11](https://github.com/NewMe505/SCIO/milestones).
 
 ## Product Mode in one paragraph
 A product orchestrator sits above the proven task graph. It interviews you (two to four Opus questions), writes a normalised `PRODUCT.md`, picks a toolchain profile, and bootstraps a repository with CI and a walking skeleton. Then, milestone by milestone, it decomposes work into GitHub issues, runs each feature through the task graph with the tier pinned, verifies the integrated result against a fixed quality bar (tests with a coverage floor, lint, types, build, smoke and e2e against the running app, dependency audit, secret scan, working README instructions), and opens one milestone PR for a human to merge. Any failing check overrides any model verdict. There is one writer, so a product builds serially; there is no product-level dollar cap by default, but per-feature tier caps, stall caps and iteration caps remain as runaway guards, and cost is reported at every approval stop.
@@ -81,7 +81,8 @@ Every feature's verify also holds it to the product's coverage floor (`SCIO_COVE
 the product's own code by default). When no milestone remains, the release gate (M11) runs the whole
 bar on `main` (coverage, secret scan, release files, the README's run commands, black-box acceptance)
 and stops for you once more; `release` cuts the changelog, tags `v<version>` and keeps a source archive
-under `.scio/sandbox/release/` (with `--gh`, a GitHub Release with the archive attached).
+under `.scio/sandbox/release/`. With `--gh` the cut goes through a release PR that you merge (SCIO
+never pushes `main`), then the merge commit is tagged and a GitHub Release carries the archive.
 
 ```bash
 uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR
@@ -91,7 +92,15 @@ uv run scio build --product ./todo --decision "merge and stop"   # record the mi
 uv run scio build --product ./todo --decision skip        # or retry / stop, when a feature halted
 uv run scio status --product ./todo                       # progress.json as text
 uv run scio report --thread build-todo_cli                # feature runs, cost, escalations
+uv run scio upgrade --product ./todo                      # bring an older product to today's bar
 ```
+
+`scio upgrade` (issue #58) adds what a product bootstrapped by an older SCIO lacks, generated from the
+current scaffold for its own `PRODUCT.md`: the Dockerfile and `.dockerignore`, the README's run block,
+the coverage source for a python product, and the CI's README run step. Files the product made its own
+are kept and reported; the change is one commit, a clean tree is required, and a second run does nothing.
+In GitHub mode a squash- or rebase-merged milestone PR is fine: SCIO drops only its own bookkeeping
+commits when it syncs `main`, and stops with `sync_failed` if a commit of yours exists only locally.
 
 Running on a Claude subscription instead of the API (ADR 0012): with `SCIO_PROVIDER_OVERRIDE=claude_code`
 every tool-less role (router, planners, advisor, gates, reviewer) runs as one `claude -p` call, and with
@@ -182,7 +191,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals, 0016 post-M11 follow-ups: GitHub-mode merges and releases, upgrade, sandbox image per stack, run_app in a container)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 
@@ -203,3 +212,4 @@ Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on
 - M9 (done, 0.6.0): product environment and install phase, `install_deps` / `run_app` / `delete_file`, quality bar, acceptance against the started app, Docker by default with an egress-proxy allowlist (ADR 0013)
 - M10 (done, 0.6.0): `node-ts` profile, stack detection, a stack-neutral product path (ADR 0014); live TypeScript milestone `notes_service`
 - M11 (done, 0.7.0): product-ready quality bar, release gate, product eval suite p001 to p003 passing live (ADR 0015)
+- post-M11 (ready for review, PR #59): squash-safe `--gh` merges, a release PR, `scio upgrade`, Node in the Docker sandbox, `run_app` in a container, parallel CI tests (ADR 0016)

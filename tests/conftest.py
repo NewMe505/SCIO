@@ -16,6 +16,28 @@ from scio.settings import REPO_ROOT, Settings
 
 
 @pytest.fixture(autouse=True)
+def _ci_git_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Git as a CI runner sees it: no global config, so no user identity, and no identity
+    guessed from the host name. A commit that names none fails here as it does on CI (I-104)."""
+    empty = tmp_path_factory.getbasetemp() / "gitconfig-global"
+    empty.touch()
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    for name in (
+        "EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+
+
+@pytest.fixture(autouse=True)
 def _offline_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
     monkeypatch.delenv("SCIO_PRECISE_PRECHECK", raising=False)
