@@ -680,3 +680,75 @@ def test_same_spec_builds_in_both_stacks(tmp_path: Path, stack: str) -> None:
     tracked = _git(repo, "ls-files").splitlines()
     assert not any(t.startswith("node_modules/") or ".scio/sandbox" in t for t in tracked)
     _ci_green(repo, tc)
+
+
+@requires_node
+def test_install_phase_changes_are_committed_on_the_milestone_branch(tmp_path: Path) -> None:
+    """I-085: ``npm install --save`` rewrites ``package.json`` and writes the lockfile outside
+    any feature commit. They must land as one ``[scio:install]`` commit on the milestone
+    branch, survive the pre-attempt reset, and leave a clean tree after the merge. A ``file:``
+    package stands in for the registry, so the install runs offline."""
+    responder = ScriptedResponder(
+        product="todo_api", milestone_size=2, stack="node-ts", dependencies=["file:vendor/greet"]
+    )
+    harness = _bootstrap(tmp_path, responder)
+    repo = tmp_path / "product"
+    vendor = repo / "vendor" / "greet"
+    vendor.mkdir(parents=True)
+    (vendor / "package.json").write_text(
+        '{"name": "greet", "version": "1.0.0", "main": "index.js"}\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    (vendor / "index.js").write_text(
+        'module.exports = () => "hi";\n', encoding="utf-8", newline="\n"
+    )
+    _git(repo, "add", "vendor")
+    _git(repo, "commit", "-q", "-m", "chore: vendor a local package")
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    try:
+        out = run_build(ctx)
+        last = "\n".join(e.text for e in out.state.ledger[-4:])
+        assert out.paused and out.state.phase == "merge_wait", last
+        assert [r.status for r in out.state.feature_runs] == ["passed", "passed"]
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    assert _git(repo, "status", "--porcelain") == ""
+    tracked = _git(repo, "ls-files").splitlines()
+    assert "package-lock.json" in tracked
+    assert '"greet": "file:vendor/greet"' in _git(repo, "show", "main:package.json")
+    grep = ("--fixed-strings", "--grep=[scio:install:")
+    install = _git(repo, "log", "main", "--format=%s", *grep)
+    assert install.splitlines() == [
+        "chore: install approved dependencies [scio:install:M1:plan_milestone]"
+    ]
+    sha = _git(repo, "log", "main", "-n1", "--format=%H", *grep)
+    changed = _git(repo, "show", "--name-only", "--format=", sha)
+    assert sorted(changed.splitlines()) == ["package-lock.json", "package.json"]
+
+
+def test_progress_sync_with_product_md_survives_the_first_feature_reset(tmp_path: Path) -> None:
+    """The I-085 sweep: ``load`` re-adds a feature record that ``progress.json`` lacks. The
+    write was uncommitted, so P1's pre-attempt reset reverted it and ``update_progress``
+    wrote the stale file back; it is committed on the milestone branch now."""
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    progress = _progress(repo)
+    last = progress.features[-1].id
+    assert last not in ("P1", "P2")  # outside M1, so no feature run re-creates it
+    progress.features = progress.features[:-1]
+    (repo / PROGRESS_PATH).write_text(progress.to_json(), encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "chore: an older progress file")
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    assert _git(repo, "status", "--porcelain") == ""
+    assert last in [f.id for f in _progress(repo).features]
+    assert sum("[scio:sync:M1:plan_milestone]" in x for x in _subjects(repo, "main")) == 1

@@ -280,9 +280,13 @@ NODE_DEV_DEPENDENCIES = {
 """The product's own quality tools; its CI installs them, SCIO's sandbox never does."""
 
 
-def _npm_dependency(spec: str) -> tuple[str, str]:
-    """``zod@^3`` -> (``zod``, ``^3``); ``@scope/x`` -> (``@scope/x``, ``*``)."""
+def _npm_dependency(spec: str) -> tuple[str, str] | None:
+    """``zod@^3`` -> (``zod``, ``^3``); ``@scope/x`` -> (``@scope/x``, ``*``). A non-registry
+    spec (``file:vendor/x``, ``github:o/r``, a URL or a path) -> None: its package name lives
+    in the target's own manifest, so the install phase writes it (I-088)."""
     s = spec.strip()
+    if ":" in s or s.startswith((".", "/")) or ("/" in s and not s.startswith("@")):
+        return None
     body = s[1:] if s.startswith("@") else s
     name, sep, rng = body.partition("@")
     name = ("@" if s.startswith("@") else "") + name
@@ -312,7 +316,9 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             "typecheck": "tsc --noEmit",
             "build": "tsc -p tsconfig.build.json",
         },
-        "dependencies": dict(_npm_dependency(d) for d in spec.dependencies),
+        "dependencies": dict(
+            dep for d in spec.dependencies if (dep := _npm_dependency(d)) is not None
+        ),
         "devDependencies": NODE_DEV_DEPENDENCIES,
     }
     files = {

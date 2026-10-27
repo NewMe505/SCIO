@@ -167,6 +167,60 @@ def product_env(ctx: RunContext, spec: ProductSpec) -> str:
     return summary
 
 
+def _commit_changed(
+    ctx: RunContext,
+    plan: MilestonePlan,
+    node: str,
+    kind: str,
+    subject: str,
+    wanted: Callable[[str], bool],
+) -> str | None:
+    """Commit the changed files ``wanted`` selects on the checked-out milestone branch, once
+    per milestone and node (probe: the marker). Returns the commit, or None if none changed."""
+    sb = ctx.sandbox
+    marker = f"[scio:{kind}:{plan.id}:{node}]"
+
+    def apply() -> str | None:
+        status = git_out(sb, "status", "--porcelain", "--untracked-files=all")
+        paths = [ln.split(maxsplit=1)[1] for ln in status.splitlines() if ln.strip()]
+        files = [p for p in paths if wanted(p)]
+        if not files:
+            return None
+        _git(ctx, "add", "--", *files)
+        _git(ctx, "commit", "-q", "-m", f"chore: {subject} {marker}")
+        return head_sha(sb)
+
+    return run_effect(
+        ctx.effects,
+        thread_id=ctx.thread_id,
+        node=node,
+        intent=f"{kind}-commit:{plan.id}",
+        apply=apply,
+        probe=lambda: find_commit(sb, marker),
+    )
+
+
+def commit_install(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
+    """Commit what the install phase wrote into the product tree (I-085). ``npm install
+    --save`` rewrites ``package.json`` and writes the lockfile outside any feature commit;
+    left alone they ride every checkout, the pre-attempt reset deletes the lockfile, and the
+    merge lands them on ``main`` unreviewed. Only the profile's dependency files are
+    committed; pip writes none."""
+    deps = ctx.toolchain.dependency_files
+    return _commit_changed(
+        ctx, plan, node, "install", "install approved dependencies", lambda p: Path(p).name in deps
+    )
+
+
+def commit_progress_sync(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
+    """Commit ``load``'s sync of ``progress.json`` with ``PRODUCT.md`` (features added or
+    removed since the last run). Uncommitted, the first feature's reset reverted it and
+    ``update_progress`` wrote the stale records back (the I-085 sweep)."""
+    return _commit_changed(
+        ctx, plan, node, "sync", "sync progress.json with PRODUCT.md", lambda p: p == PROGRESS_PATH
+    )
+
+
 def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
     """The task graph's context for one feature run: the same sandbox (the product
     repository), effect log and prompts; its own thread, tier-pinned budget, cost ledger and
@@ -483,6 +537,19 @@ def plan_milestone(ctx: RunContext) -> Node:
             ),
         )
         entries.append(fact(f"branch {plan.branch} at {sha[:12]}"))
+        # The install phase's manifest and lockfile changes are committed on the new branch
+        # before any feature's reset can delete them (I-085).
+        _git(ctx, "checkout", "-q", plan.branch)
+        try:
+            product_env(ctx, spec)
+        except RuntimeError as exc:
+            return _halt(ctx, "load_failed", f"install phase: {exc}")
+        installed = commit_install(ctx, plan, "plan_milestone")
+        if installed:
+            entries.append(fact(f"install phase changes committed at {installed[:12]}"))
+        synced = commit_progress_sync(ctx, plan, "plan_milestone")
+        if synced:
+            entries.append(fact(f"progress.json sync with PRODUCT.md committed at {synced[:12]}"))
         return {
             "milestone": plan,
             "issues": {},
@@ -779,8 +846,9 @@ def integrate(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         plan = state.milestone
         assert plan is not None and state.spec is not None
-        product_env(ctx, state.spec)
         _git(ctx, "checkout", "-q", plan.branch)
+        product_env(ctx, state.spec)
+        commit_install(ctx, plan, "integrate")  # a resumed install that wrote again (I-085)
         text, ok = integration_checks(ctx, state.spec)
         entries = [
             fact(

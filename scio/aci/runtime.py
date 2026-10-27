@@ -44,8 +44,11 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*")
 def normalise_package(spec: str) -> str:
     """The canonical project name of a requirement spec: ``Flask>=3`` -> ``flask``,
     ``typing_extensions`` -> ``typing-extensions`` (PEP 503), ``@scope/Name@^1`` ->
-    ``@scope/name`` (npm; scoped names keep their shape)."""
+    ``@scope/name`` (npm; scoped names keep their shape). A non-registry spec (``file:``,
+    ``github:``, a URL or a path) is its own name, so it only ever matches itself (I-088)."""
     s = spec.strip()
+    if ":" in s or s.startswith((".", "/")):
+        return s
     if s.startswith("@"):  # npm scoped package: @scope/name[@range]
         return ("@" + s[1:].split("@", 1)[0]).lower()
     m = _NAME_RE.match(s)
