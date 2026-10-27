@@ -90,3 +90,72 @@ def test_an_entry_merged_into_a_released_section_is_caught() -> None:
     assert not cd.released_section_changed(kept, tagged, "0.6.0")
     assert not cd.released_section_changed(kept, "## [Unreleased]\n", "0.6.0")  # no tag yet
     assert cd.check_released_section_frozen() == []
+
+
+LEDGER = (
+    "# Ledger\n\n"
+    "### I-103 · older\n- Status: resolved\n\n"
+    "### I-104 · identity\n- Resolved: 2026-10-27 · Status: resolved\n\n"
+    "### I-105 · docker\n- Resolved: 2026-10-27 · Status: resolved\n\n"
+    "### I-106 · still open\n- Status: open\n"
+)
+LESSONS = (
+    "# Lessons\n\nintro\n\n## Guardrails (Always / Never)\n\nhow rules work\n\n"
+    "1. **Never** commit without SCIO's identity (I-104). Guard: `symbol:SCIO_GIT_IDENTITY`\n"
+    "2. **Always** skip on the plain image (I-105). Guard: `test:test_node_in_docker`\n"
+    "3. **Always** say the ETA (owner correction). Guard: `manual:` a chat property\n\n"
+    "## Standing pre-flight list\n\n1. not a guardrail\n"
+)
+
+
+def _all_exist(kind: str, name: str) -> bool:
+    return True
+
+
+def test_guardrails_pass_when_every_resolved_entry_is_cited_and_every_guard_exists() -> None:
+    """Issue #61: the rules are enforced, not just written."""
+    cd = _load()
+    rules = cd.guardrail_rules(LESSONS)
+    assert [r.split(".", 1)[0] for r in rules] == ["1", "2", "3"]  # pre-flight items excluded
+    assert cd.resolved_ledger_ids(LEDGER) == ["I-104", "I-105"]  # from I-104, resolved only
+    assert cd.guardrail_problems(rules, cd.resolved_ledger_ids(LEDGER), _all_exist) == []
+
+
+def test_a_resolved_entry_no_rule_cites_fails() -> None:
+    cd = _load()
+    rules = [r for r in cd.guardrail_rules(LESSONS) if "I-105" not in r]
+    problems = cd.guardrail_problems(rules, ["I-104", "I-105"], _all_exist)
+    assert problems == ["I-105 is resolved but no guardrail cites it; add an Always/Never rule"]
+
+
+def test_a_guard_that_does_not_exist_fails() -> None:
+    cd = _load()
+    rules = cd.guardrail_rules(LESSONS)
+    problems = cd.guardrail_problems(rules, [], lambda kind, name: name != "test_node_in_docker")
+    assert problems == ["guardrail 2: test:test_node_in_docker does not exist"]
+
+
+def test_a_rule_needs_always_or_never_a_guard_and_a_manual_reason() -> None:
+    cd = _load()
+    rules = [
+        "1. **Prefer** small commits (I-104). Guard: `symbol:X`",
+        "2. **Never** guess (I-104).",
+        "3. **Always** check (I-104). Guard: `manual:`",
+    ]
+    assert cd.guardrail_problems(rules, ["I-104"], _all_exist) == [
+        "guardrail 1: must start with **Always** or **Never**",
+        "guardrail 2: names no guard (symbol:, test:, check:, hook:, manual:)",
+        "guardrail 3: a manual guard needs its reason after it",
+    ]
+
+
+def test_guard_exists_looks_in_the_repository() -> None:
+    cd = _load()
+    assert cd.guard_exists("symbol", "SCIO_GIT_IDENTITY")  # a constant in scio/aci/tools.py
+    assert cd.guard_exists("symbol", "_ci_git_identity")  # a fixture in tests/conftest.py
+    assert cd.guard_exists("test", "test_a_guard_that_does_not_exist_fails")
+    assert cd.guard_exists("check", "check_guardrails")  # defined and run by main
+    assert not cd.guard_exists("check", "guard_exists")  # defined, but main never runs it
+    assert not cd.guard_exists("test", "test_that_was_never_written")
+    assert not cd.guard_exists("symbol", "NO_SUCH_SYMBOL_ANYWHERE")
+    assert not cd.guard_exists("test", "bad name(")  # not an identifier: never a match

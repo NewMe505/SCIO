@@ -860,3 +860,11 @@ Template:
 - Fix: the Node test skips when the image fails the node-ts probe and no image was named (`SCIO_SANDBOX_DOCKER_IMAGE` unset); with a named image, which CI's `docker-live` job always builds and sets, a failed probe is still a failure, so the skip cannot hide a broken sandbox image
 - Sweep: every docker-live test that needs more than Python (`grep -n "def test_" tests/live/test_docker_live.py` and what each runs): the git test (already skips on a probe), the scaffold Dockerfile builds (build their own images), the Node test (fixed); the new `run_app` test runs `python -m http.server` and `json.tool`, which the plain image has. Guard: the env-conditional skip itself, and docker-live's `-rfEs` output names any skip in that job
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-106 · A new test file reached a commit with a line over the length limit; only the pre-push chain caught it
+- Found: 2026-10-27 · issue #61, the full check on `5a51868` · `E501 Line too long (101 > 100) --> tests\unit\test_push_gate.py:106:101`; nothing was pushed
+- Symptom: a commit that fails `ruff check`, found about 2 minutes later by the pre-push chain instead of before the commit
+- Root cause: after writing `tests/unit/test_push_gate.py` I ran pytest and the docs check on it, not ruff; nothing checks lint at commit time, so the first lint run was the pre-push one
+- Fix: the line shortened. The push-gate hook (`scripts/hooks/push_gate.py`) gains a commit gate. In a repository whose `pyproject.toml` configures ruff, a `git commit` is denied until every changed Python file passes `ruff check` and `ruff format --check`, with ruff's output in the reason. "Changed" means staged, modified or untracked, because `git add ... && git commit` stages in the same line, after the hook has run. `--force-exclude` keeps ruff's own excludes.
+- Sweep: the rest of `5a51868`: `ruff check .` and `ruff format --check .` on the whole tree pass (250 files), so the line was the only instance. Guard: `test_the_commit_gate_lints_every_changed_python_file`, `test_the_commit_gate_only_runs_where_ruff_is_configured` and `test_evaluate_holds_a_commit_for_lint`, plus guardrail 11
+- Resolved: 2026-10-27 · Status: resolved

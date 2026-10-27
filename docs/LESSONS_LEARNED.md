@@ -2,6 +2,22 @@
 
 One section per milestone, written when the milestone closes. **Read this whole file before starting a milestone** and say which lessons shape the plan. Every "action" below is something that exists (a file, a test, a rule, a ledger id), not an intention. Problems referenced as `I-NNN` are in [ISSUE_LEDGER.md](ISSUE_LEDGER.md).
 
+## Guardrails (Always / Never)
+
+Every bug and every correction becomes one rule here (the owner's rule, 2026-10-27). A rule starts with **Always** or **Never**, cites its ledger id (or the correction it came from), and names its **guard**: what fails when the rule is broken. A rule is the index; the guard is what stops drift. Prefer, in order: a structural fix that makes the wrong thing impossible (`symbol:`), a regression test shown to fail on the old code (`test:`), a scan of the whole codebase (`test:` or `check:`), a Claude Code hook (`hook:`), and `manual:` with the reason only when nothing can check it. `scripts/check_docs.py::check_guardrails` fails when a resolved ledger entry from I-104 on is cited by no rule, or when a named guard does not exist.
+
+1. **Never** let a commit, merge or tag that SCIO makes depend on the machine's git identity; pass `SCIO_GIT_IDENTITY` (I-104). Guard: `symbol:SCIO_GIT_IDENTITY`, `test:test_upgrade_brings_a_pre_m11_product_to_the_current_scaffold`
+2. **Always** run the tests with git as a CI runner sees it: no global config, no guessed identity (I-104). Guard: `symbol:_ci_git_identity`
+3. **Always** confirm the previous push's CI on the branch finished green before pushing again (I-104). Guard: `hook:push_gate`
+4. **Never** assume a docker-live test runs only in the `docker-live` job; both CI jobs have a daemon, so a test that needs the built image skips only when no image is named (I-105). Guard: `test:test_a_node_product_installs_and_tests_inside_the_container`
+5. **Never** place a product in a sandbox image that cannot run its stack; probe the image for the stack's capability before choosing the backend (I-101). Guard: `test:test_auto_probes_the_image_for_the_product_stack`, `test:test_the_readiness_check_runs_the_probe_inside_the_image`
+6. **Never** drop a human's commit when syncing `main` after a merge; only SCIO's own bookkeeping commits may be reset (I-102). Guard: `test:test_github_mode_never_drops_a_human_commit_on_local_main`, `test:test_github_mode_survives_squash_merged_milestone_prs`
+7. **Never** tag a release outside `main`'s history; with `--gh` the cut goes through a release PR and the tag goes on its merge (I-103). Guard: `test:test_github_mode_survives_squash_merged_milestone_prs`, `test:test_github_mode_crash_after_the_pr_duplicates_nothing`
+8. **Always** confirm on GitHub that a PR is merged (`gh pr view N --json mergedAt` non-null) before any post-merge step (I-087). Guard: `manual:` a reported merge arrives in conversation, which no check can see; CONTRIBUTING step 5 carries the command
+9. **Never** run a bare `git stash`; other sessions share the stash stack (owner correction). Guard: `hook:push_gate`
+10. **Always** end a status update with an ETA in minutes and its basis (owner correction). Guard: `manual:` a property of chat replies, not of the repository; kept in the session memory
+11. **Never** commit a Python file that fails `ruff check` or `ruff format --check`; lint runs before the commit, not first at the pre-push chain (I-106). Guard: `hook:push_gate`, `test:test_the_commit_gate_lints_every_changed_python_file`
+
 ## Standing pre-flight list (apply at the start of every milestone)
 
 1. Read this file and the open entries in the issue ledger.
