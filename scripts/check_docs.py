@@ -6,13 +6,16 @@ Checks (M1):
 3. ``CHANGELOG.md`` has an ``[Unreleased]`` section.
 
 M2 adds: architecture diagram vs. compiled graph, runnable code samples, public-API
-docstring coverage.
+docstring coverage. Issue #61 adds the guardrails check: the Always/Never rules in
+``docs/LESSONS_LEARNED.md`` cite every resolved ledger entry from I-104 on, and every guard
+they name exists.
 """
 
 from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,6 +232,95 @@ def check_graph_sections() -> list[str]:
     return gen_mermaid.check()
 
 
+GUARDRAILS_FROM = 104  # every resolved ledger entry from here on is owed a rule (issue #61)
+LEDGER_ENTRY_RE = re.compile(r"^### (I-(\d+)) ", re.MULTILINE)
+GUARDRAIL_START_RE = re.compile(r"^\d+\. \*\*(Always|Never)\*\* ")
+GUARD_RE = re.compile(r"`(symbol|test|check|hook|manual):([^`]*)`")
+
+
+def guardrail_rules(lessons: str) -> list[str]:
+    """The numbered lines of ``## Guardrails`` in LESSONS_LEARNED.md, one rule each."""
+    if "\n## Guardrails" not in lessons:
+        return []
+    section = lessons.split("\n## Guardrails", 1)[1].split("\n## ", 1)[0]
+    return [ln for ln in section.splitlines() if re.match(r"^\d+\. ", ln)]
+
+
+def resolved_ledger_ids(ledger: str, start: int = GUARDRAILS_FROM) -> list[str]:
+    """Ids of the ledger entries numbered ``start`` or later whose status is resolved."""
+    parts = LEDGER_ENTRY_RE.split(ledger)
+    entries = zip(parts[1::3], parts[2::3], parts[3::3], strict=True)
+    return [i for i, n, body in entries if int(n) >= start and "Status: resolved" in body]
+
+
+def guardrail_problems(
+    rules: list[str], resolved: list[str], exists: Callable[[str, str], bool]
+) -> list[str]:
+    """Each rule starts with Always or Never and names guards that exist (``exists(kind,
+    name)``); a ``manual:`` guard carries its reason after the token. Every resolved id is
+    cited by some rule."""
+    errors: list[str] = []
+    cited: set[str] = set()
+    for rule in rules:
+        n = rule.split(".", 1)[0]
+        if not GUARDRAIL_START_RE.match(rule):
+            errors.append(f"guardrail {n}: must start with **Always** or **Never**")
+        cited |= set(re.findall(r"\bI-\d{3}\b", rule))
+        guard_text = rule.split("Guard:", 1)[1] if "Guard:" in rule else ""
+        guards = list(GUARD_RE.finditer(guard_text))
+        if not guards:
+            errors.append(f"guardrail {n}: names no guard (symbol:, test:, check:, hook:, manual:)")
+        for m in guards:
+            kind, name = m.group(1), m.group(2).strip()
+            if kind == "manual":
+                if not guard_text[m.end() :].strip(" ,;"):
+                    errors.append(f"guardrail {n}: a manual guard needs its reason after it")
+            elif not exists(kind, name):
+                errors.append(f"guardrail {n}: {kind}:{name} does not exist")
+    for lid in resolved:
+        if lid not in cited:
+            errors.append(f"{lid} is resolved but no guardrail cites it; add an Always/Never rule")
+    return errors
+
+
+def guard_exists(kind: str, name: str) -> bool:
+    """Whether a named guard is in the repository: a symbol defined in the code, a test
+    function under ``tests/``, a check that ``main`` runs, a hook in ``.claude/settings.json``."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return False
+    if kind == "check":
+        src = (ROOT / "scripts" / "check_docs.py").read_text(encoding="utf-8")
+        return f"def {name}(" in src and f"{name}()" in src.split("\ndef main(", 1)[-1]
+    if kind == "hook":
+        settings = ROOT / ".claude" / "settings.json"
+        return settings.exists() and name in settings.read_text(encoding="utf-8")
+    if kind == "test":
+        pattern = re.compile(rf"^\s*def {name}\(", re.MULTILINE)
+        dirs: tuple[str, ...] = ("tests",)
+    else:  # symbol
+        pattern = re.compile(rf"^\s*(?:def {name}\(|class {name}\b|{name}\s*[:=])", re.MULTILINE)
+        dirs = CODE_DIRS
+    return any(
+        pattern.search(p.read_text(encoding="utf-8"))
+        for d in dirs
+        for p in (ROOT / d).rglob("*.py")
+        if "__pycache__" not in p.parts
+    )
+
+
+def check_guardrails() -> list[str]:
+    """The Always/Never rules are enforced, not just written (issue #61): every resolved
+    ledger entry from I-104 on is cited by a rule, and every guard a rule names exists."""
+    lessons = (ROOT / "docs" / "LESSONS_LEARNED.md").read_text(encoding="utf-8")
+    ledger = (ROOT / "docs" / "ISSUE_LEDGER.md").read_text(encoding="utf-8")
+    return [
+        f"docs/LESSONS_LEARNED.md: {e}"
+        for e in guardrail_problems(
+            guardrail_rules(lessons), resolved_ledger_ids(ledger), guard_exists
+        )
+    ]
+
+
 def main() -> int:
     errors = (
         check_links()
@@ -239,6 +331,7 @@ def main() -> int:
         + check_released_section_frozen()
         + check_ignored_sources()
         + check_graph_sections()
+        + check_guardrails()
     )
     for e in errors:
         print(f"docs-check: {e}")
