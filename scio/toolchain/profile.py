@@ -230,6 +230,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
                 skip_exit_codes=frozenset(c.get("skip_exit_codes", [])),
                 skip_patterns=tuple(c.get("skip_patterns", [])),
                 timeout_s=int(c.get("timeout_s", 600)),
+                verify=bool(c.get("verify", False)),
             )
             for c in data.get("checks", [])
         ),

@@ -26,6 +26,30 @@ def lint(ctx: RunContext) -> str:
     return (findings or "")[:3000]
 
 
+QUALITY_HINT = (
+    "These checks are the product's quality bar; the milestone is held to the same bar. "
+    "Coverage counts the product's own code run inside the test process: test logic by "
+    "importing it (a test that starts the app as a child process does not count), and mark "
+    "code only a started process runs (the serve loop) with the coverage tool's ignore comment."
+)
+
+
+def quality(ctx: RunContext) -> str:
+    """Product feature runs: the profile's ``verify: true`` checks (the coverage floor, the
+    type check), so a feature meets the bar ``integrate`` holds the milestone to (M11, I-091).
+    '' when they pass or are skipped (tool absent), and always in task mode."""
+    if ctx.quality_values is None:
+        return ""
+    failed: list[str] = []
+    for check in ctx.toolchain.quality_checks():
+        if not check.verify:
+            continue
+        r = ctx.sandbox.exec(check.command(ctx.quality_values), timeout_s=check.timeout_s)
+        if check.outcome(r.exit_code, r.output) == "failed":
+            failed.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-2000:]}")
+    return "\n\n".join([*failed, QUALITY_HINT]) if failed else ""
+
+
 SELECTOR_SEP = " ; "
 
 
@@ -80,7 +104,8 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
 
 
 def verify(ctx: RunContext) -> Node:
-    """Ground truth, in order: changes exist; feature tests exist and pass; suite passes; lint."""
+    """Ground truth, in order: changes exist; feature tests exist and pass; suite passes; lint;
+    in a product feature run, the profile's verify-time quality checks (M11)."""
 
     def node(state: SCIOState) -> dict[str, Any]:
         outputs: list[str] = []
@@ -146,7 +171,11 @@ def verify(ctx: RunContext) -> Node:
         lint_out = lint(ctx)
         if lint_out:
             outputs.append(f"[lint]\n{lint_out}")
-        all_ok = tests_ok and not lint_out
+        # 4. Product feature runs: the quality checks the milestone will be held to (M11).
+        quality_out = quality(ctx) if tests_ok and not lint_out else ""
+        if quality_out:
+            outputs.append(quality_out)
+        all_ok = tests_ok and not lint_out and not quality_out
         text = "\n\n".join(outputs)
         ref = ctx.artifacts.put("test_output", text, produced_by=Role.TESTER)
 
@@ -177,6 +206,8 @@ def verify(ctx: RunContext) -> Node:
             else "no_changes"
             if no_changes
             else "lint_only"
+            if tests_ok and lint_out
+            else "quality"
             if tests_ok
             else "tests"
         )

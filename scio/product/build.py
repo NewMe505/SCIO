@@ -258,11 +258,18 @@ def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
         github=None,
         escalation=ctx.escalation,
         tool_context=ctx.tool_context,
+        quality_values=quality_values(ctx),
         tier=tier,
         tier_pin=tier,
         toolchain=ctx.toolchain,
         budget_from_tier=False,
     )
+
+
+def quality_values(ctx: RunContext) -> dict[str, object]:
+    """The placeholders of the profile's quality checks (M11): ``integrate`` and every
+    feature's verify fill the same ones, so a feature is judged by the milestone's bar."""
+    return {"coverage_floor": ctx.settings.coverage_floor}
 
 
 def feature_task(
@@ -824,8 +831,9 @@ def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tupl
         f"[tests] {outcome}",
         tests.output[-2500:],
     ]
+    values = quality_values(ctx)
     for check in tc.quality_checks():
-        r = sb.exec(list(check.argv), timeout_s=check.timeout_s)
+        r = sb.exec(check.command(values), timeout_s=check.timeout_s)
         result = check.outcome(r.exit_code, r.output)
         tail = r.output.strip().splitlines()[-1][:200] if r.output.strip() else ""
         if result == "skipped":

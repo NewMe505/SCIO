@@ -214,6 +214,22 @@ def test_lint_only_never_escalates_even_with_signals() -> None:
     assert d.route == "debug" and "lint" in d.reason
 
 
+def test_a_missed_product_quality_check_never_escalates_even_with_signals() -> None:
+    """M11, I-091: below the coverage floor with tests and lint green is a clear fix (add
+    tests), not a design question for the advisor."""
+    s = _state(
+        progress=ProgressLedger(
+            current_step_id="S1",
+            fix_attempts_on_error=5,
+            stall_count=5,
+            last_failure_kind="quality",
+        ),
+        high_impact_flags=["x"],
+    )
+    d = decide(s, CFG)
+    assert d.route == "debug" and "quality" in d.reason
+
+
 # --- caps ---
 
 

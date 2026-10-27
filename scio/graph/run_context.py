@@ -109,6 +109,10 @@ class RunContext:
     tool_context: ToolContext | None = None
     """The approved dependency list for ``install_deps`` (product builds, M9); None in task
     mode, where installs are refused."""
+    quality_values: dict[str, object] | None = None
+    """Product feature runs only (M11, I-091): the values for the profile's ``verify: true``
+    quality checks (``coverage_floor``), which verify runs once the suite and lint pass. None
+    in task mode, where a repository's own bar is not SCIO's to impose."""
 
     @classmethod
     def create(

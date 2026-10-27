@@ -29,6 +29,17 @@ class QualityCheck:
     skip_patterns: tuple[str, ...] = ()
     """Output fragments that mean the tool is absent (``No module named ...``)."""
     timeout_s: int = 600
+    verify: bool = False
+    """Also run by ``verify`` in a product feature run once the suite and lint pass (M11,
+    I-091), so a feature sees the bar it will be judged by; else only ``integrate`` runs it."""
+
+    def command(self, values: Mapping[str, object]) -> list[str]:
+        """The argv with ``{name}`` placeholders filled from ``values`` (``coverage_floor``,
+        M11); other braces are left alone."""
+        argv = list(self.argv)
+        for name, value in values.items():
+            argv = [a.replace(f"{{{name}}}", str(value)) for a in argv]
+        return argv
 
     def outcome(self, exit_code: int, output: str) -> CheckOutcome:
         if exit_code in self.pass_exit_codes:

@@ -729,6 +729,32 @@ def test_install_phase_changes_are_committed_on_the_milestone_branch(tmp_path: P
     assert sorted(changed.splitlines()) == ["package-lock.json", "package.json"]
 
 
+def test_a_feature_below_the_coverage_floor_is_fixed_inside_its_own_run(tmp_path: Path) -> None:
+    """I-091: verify runs the profile's coverage check in a product feature run, so a feature
+    that misses the floor fails its own verify (``quality``), triage sends it to the debugger,
+    and the debugger's tests lift it; ``integrate`` never sees the miss. P2 covers 93% of the
+    product as first written; the floor here is 95."""
+    harness = _bootstrap(tmp_path, ScriptedResponder(product="todo_api", milestone_size=2))
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    ctx.settings = ctx.settings.model_copy(update={"coverage_floor": 95})
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        s = out.state
+        assert [(r.feature_id, r.status) for r in s.feature_runs] == [
+            ("P1", "passed"),
+            ("P2", "passed"),
+        ]
+        p2 = s.latest_run("P2")
+        assert p2 is not None and p2.iterations == 2
+        p2_ledger = [e.text for e in _feature_state(ctx, p2.thread_id).task_ledger]
+        assert any("verify: quality" in t and "triage -> debug" in t for t in p2_ledger)
+        assert s.integration and "[coverage] passed" in s.integration
+    finally:
+        ctx.close()
+    assert (tmp_path / "product" / "tests" / "test_todos_errors.py").is_file()
+
+
 def test_progress_sync_with_product_md_survives_the_first_feature_reset(tmp_path: Path) -> None:
     """The I-085 sweep: ``load`` re-adds a feature record that ``progress.json`` lacks. The
     write was uncommitted, so P1's pre-attempt reset reverted it and ``update_progress``

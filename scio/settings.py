@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +63,10 @@ class Settings(BaseSettings):
     """The backend ``scio build`` uses (M9): ``auto`` is Docker when a daemon answers and the
     worker backend is ``aci``, else ``local`` with the reason in the ledger; ``local`` and
     ``docker`` force one. Task mode and ``scio new`` keep ``sandbox_backend``."""
+    coverage_floor: int = Field(default=80, ge=0, le=100)
+    """Line-coverage floor of the product quality bar (M11), in percent of the product's own
+    code (tests excluded): ``integrate`` fills it into ``{coverage_floor}`` in a profile
+    check's argv."""
     sandbox_docker_image: str = "python:3.12-slim"
     """Needs ``git`` for product builds: ``docker/sandbox.Dockerfile`` adds it to this image."""
     sandbox_e2b_template: str | None = None

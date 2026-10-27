@@ -44,11 +44,12 @@ health_probe_argv:
 # product's own CI installs the tools. Outputs go under .scio/sandbox/, which is git-ignored.
 checks:
   - name: coverage
-    argv: [python, -m, pytest, -q, -p, "no:cacheprovider", --no-header, --cov, --cov-report=term-missing:skip-covered, --cov-fail-under=80]
+    argv: [python, -m, pytest, -q, -p, "no:cacheprovider", --no-header, --cov, --cov-report=term-missing:skip-covered, "--cov-fail-under={coverage_floor}"]
     pass_exit_codes: [0]
     skip_exit_codes: [4]        # pytest usage error: pytest-cov is not installed
     skip_patterns: ["unrecognized arguments: --cov", "No module named"]
     timeout_s: 600
+    verify: true                # every product feature run meets the floor (M11, I-091)
   - name: build
     argv: [python, -m, build, --wheel, --outdir, .scio/sandbox/dist]
     pass_exit_codes: [0]

@@ -51,13 +51,23 @@ health_probe_argv:
 acceptance_dir: tests/acceptance
 skeleton_command: "node src/main.ts --version"
 command_words: [node, npm, npx]
+# Coverage is built into Node 22 (M11): below the floor it exits 1 with "line coverage does
+# not meet threshold"; tests are excluded so the floor measures the product's own code.
 checks:
+  - name: coverage
+    argv: [node, --test, --test-reporter=tap, --experimental-test-coverage, "--test-coverage-exclude=tests/**", "--test-coverage-lines={coverage_floor}", "tests/**/*.test.ts"]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: []
+    timeout_s: 600
+    verify: true                # every product feature run meets the floor (M11, I-091)
   - name: typecheck
     argv: [node, node_modules/typescript/bin/tsc, --noEmit]
     pass_exit_codes: [0]
     skip_exit_codes: []
     skip_patterns: ["Cannot find module"]
     timeout_s: 600
+    verify: true                # Node strips types, so only tsc sees a type error (I-091)
   - name: build
     argv: [node, node_modules/typescript/bin/tsc, -p, tsconfig.build.json, --outDir, .scio/sandbox/dist]
     pass_exit_codes: [0]

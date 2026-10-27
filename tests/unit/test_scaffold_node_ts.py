@@ -89,8 +89,9 @@ def test_cli_skeleton_runs_tests_and_lints_offline(tmp_path: Path) -> None:
     assert r.ok and r.stdout.strip() == "0.1.0", r.output
     r = sb.exec(tc.test_argv(filter=None, path=None), timeout_s=120)
     assert tc.test_outcome(r.exit_code, r.stdout) == "passed", r.output
-    # two smoke tests plus the cli acceptance test, which spawns the entry file itself
-    assert "# tests 3" in r.stdout and "# pass 3" in r.stdout
+    # three smoke tests (two in-process for the coverage floor, M11) plus the cli acceptance
+    # test, which spawns the entry file itself
+    assert "# tests 4" in r.stdout and "# pass 4" in r.stdout
     # the acceptance test alone runs black-box and passes (it spawns the entry file)
     r = sb.exec(tc.test_argv(filter=None, path=f"{sb.root}/{tc.acceptance_dir}"), timeout_s=120)
     assert tc.test_outcome(r.exit_code, r.stdout) == "passed", r.output

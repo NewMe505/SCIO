@@ -194,8 +194,10 @@ class ProgressLedger(BaseModel):
     tool_calls: int = 0
     """T0 cap = 10."""
     last_fingerprint: str | None = None
-    last_failure_kind: Literal["none", "tests", "lint_only", "no_changes"] = "none"
-    """What the last verify failed on; ``lint_only`` is on the never-escalate list."""
+    last_failure_kind: Literal["none", "tests", "lint_only", "quality", "no_changes"] = "none"
+    """What the last verify failed on; ``lint_only`` and ``quality`` (a product check such as
+    the coverage floor failed while tests and lint passed, M11) are on the never-escalate
+    list."""
     gate_replans: int = 0
     """Times the gate sent a planned run back to ``plan``; capped at one per run (I-043)."""
 

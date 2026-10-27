@@ -139,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def serve(port):
+def serve(port):  # pragma: no cover  (process lifecycle: the acceptance tests run it)
     server = HTTPServer(("127.0.0.1", port), Handler)
     print(f"serving on http://127.0.0.1:{{port}}", flush=True)
     try:
@@ -161,7 +161,7 @@ def main(argv=None):
     if args.version:
         print(__version__)
         return 0
-    if args.cmd == "serve":
+    if args.cmd == "serve":  # pragma: no cover
         return serve(args.port)
     parser.print_usage()
     return 2
@@ -200,6 +200,43 @@ def test_create_then_list_todos(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
 """
+
+TODOS_ERROR_TESTS = f"""import json
+import threading
+import urllib.error
+import urllib.request
+from http.server import HTTPServer
+
+import pytest
+
+from {PKG}.cli import Handler
+
+
+@pytest.fixture
+def base(tmp_path, monkeypatch):
+    monkeypatch.setenv("TODO_FILE", str(tmp_path / "todos.yaml"))
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{{server.server_address[1]}}"
+    server.shutdown()
+    server.server_close()
+
+
+def _status(req):
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def test_todos_reject_an_empty_title_and_unknown_paths(base):
+    empty = json.dumps({{"title": " "}}).encode()
+    assert _status(urllib.request.Request(base + "/todos", data=empty)) == 400
+    assert _status(urllib.request.Request(base + "/other", data=b"{{}}")) == 404
+"""
+"""The tests the scripted debugger adds when verify reports the coverage floor (M11, I-091):
+P2's own tests leave the two error paths of ``do_POST`` uncovered (93% of the product)."""
 
 TODOS_ACCEPTANCE = """import json
 import urllib.request
@@ -258,6 +295,7 @@ HTTP_PRODUCT_SCRIPTS: list[TaskScript] = [
                     Edit("tests/acceptance/test_todos_http.py", "", TODOS_ACCEPTANCE),
                 ],
                 test_filter="todos",
+                debug_edits=[Edit("tests/test_todos_errors.py", "", TODOS_ERROR_TESTS)],
             )
         ],
         docs=[_changelog("`POST /todos` and `GET /todos` with a YAML store (P2).")],

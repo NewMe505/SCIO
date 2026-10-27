@@ -136,3 +136,7 @@ def test_python_profile_declares_the_quality_bar_and_classifies_outcomes() -> No
     assert build.outcome(1, "error: invalid pyproject") == "failed"
     assert audit.outcome(1, "/usr/bin/python: No module named pip_audit") == "skipped"
     assert all(str(a).startswith(".scio/sandbox") for a in build.argv if "/" in str(a))
+    # M11: the floor is `Settings.coverage_floor`, filled in when integrate runs the check
+    assert "--cov-fail-under={coverage_floor}" in coverage.argv
+    assert "--cov-fail-under=65" in coverage.command({"coverage_floor": 65})
+    assert coverage.command({}) == list(coverage.argv)  # nothing to fill, nothing changes
