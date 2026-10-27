@@ -48,6 +48,7 @@ from scio.product.progress import (
     normalise_milestone,
     parse_product_md,
 )
+from scio.product.release_checks import release_report
 from scio.state.models import (
     Budget,
     ExitReason,
@@ -817,9 +818,10 @@ def after_feature(state: ProductBuildState) -> Literal["feature", "integrate", "
 
 
 def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tuple[str, bool]:
-    """The quality bar on the current checkout: lint, the full suite, then the profile's
-    quality checks (coverage, build, audit, ...). A check whose tool is absent is reported
-    as skipped and does not fail the milestone; a failing one does (M9)."""
+    """The quality bar on the current checkout: lint, the full suite, the profile's quality
+    checks (coverage, build, audit, ...), the secret scan and the release files (M11), then
+    the black-box acceptance run. A profile check whose tool is absent is reported as skipped
+    and does not fail the milestone; a failing check does (M9)."""
     sb, tc = ctx.sandbox, ctx.toolchain
     lint = sb.exec(tc.lint_argv("."), timeout_s=120)
     findings = tc.lint_findings(lint.exit_code, lint.stdout, lint.stderr)
@@ -843,6 +845,10 @@ def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tupl
         else:
             ok = False
             lines.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-1500:]}")
+    # Stack-neutral, SCIO's own code: they always run, never "tool absent" (M11).
+    release_lines, release_ok = release_report(sb)
+    lines += release_lines
+    ok = ok and release_ok
     if spec is not None:
         acceptance, acc_ok = run_acceptance(ctx, spec)
         lines.append(acceptance)

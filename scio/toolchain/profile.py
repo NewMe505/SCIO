@@ -86,6 +86,7 @@ class ProfileToolchain:
     skeleton_command_template: str = ""
     command_words: tuple[str, ...] = ()
     detect: Detect | None = None
+    release_image: str = ""
 
     def quality_checks(self) -> tuple[QualityCheck, ...]:
         return self.checks
@@ -241,6 +242,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         detect=Detect(tuple(detect["markers"]), bool(detect.get("all_of", False)))
         if detect
         else None,
+        release_image=str(data.get("release_image", "")),
     )
 
 

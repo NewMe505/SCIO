@@ -130,6 +130,12 @@ class Toolchain(Protocol):
         ...
 
     @property
+    def release_image(self) -> str:
+        """The Dockerfile lines that install the product and its runtime dependencies (M11);
+        the scaffold appends the stack-neutral ``ENV`` / ``CMD`` from the app's command."""
+        ...
+
+    @property
     def command_words(self) -> tuple[str, ...]:
         """Commands a walking-skeleton criterion may name (``python``, ``node``); any other
         backticked command is rewritten by the spec normaliser (ADR 0013 decision 8)."""

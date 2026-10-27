@@ -63,8 +63,11 @@ def test_scaffold_registry_and_file_shape() -> None:
         "LICENSE",
         ".gitignore",
         "NOTES.md",
+        "Dockerfile",
+        ".dockerignore",
     ):
         assert path in files, path
+    assert 'ENTRYPOINT ["node", "src/main.ts"]' in files["Dockerfile"]
     assert not any(p.endswith(".py") for p in files)
     assert (
         '"zod": "^3.22"' in files["package.json"] and '"@scope/thing": "*"' in files["package.json"]

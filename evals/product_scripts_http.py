@@ -96,6 +96,7 @@ CLI_P2 = f'''"""Command line entry point: an HTTP todo server."""
 
 import argparse
 import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from {PKG} import __version__, store
@@ -140,8 +141,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port):  # pragma: no cover  (process lifecycle: the acceptance tests run it)
-    server = HTTPServer(("127.0.0.1", port), Handler)
-    print(f"serving on http://127.0.0.1:{{port}}", flush=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    server = HTTPServer((host, port), Handler)
+    print(f"serving on http://{{host}}:{{port}}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

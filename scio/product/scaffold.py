@@ -76,6 +76,7 @@ def _common_files(
             "CI (SCIO bootstrap).\n"
         ),
         "LICENSE": MIT.format(year=datetime.now(UTC).year, owner=owner),
+        ".dockerignore": ".git\n.scio\n" + "".join(f"{p}\n" for p in tc.cache_excludes),
         ".gitignore": gitignore + ".scio/sandbox/\n.scio/ledger/\n.scio/artifacts/\n",
         "NOTES.md": (
             "# Notes\n\nWorking notes SCIO and humans leave for the next session. "
@@ -84,6 +85,29 @@ def _common_files(
             "walking skeleton, CI, smoke test.\n"
         ),
     }
+
+
+DOCKER_PORT = 8000
+
+
+def dockerfile(spec: ProductSpec, tc: Toolchain) -> str:
+    """The release artifact every scaffold ships (M11, PRODUCT_MODE component 5): the
+    profile's ``release_image`` lines, then the same command the acceptance runner starts
+    (``app_argv`` and target). An http product listens on 0.0.0.0 inside the container."""
+    target = [*tc.runtime().app_argv, tc.app_target(spec.name, spec.app.module)]
+    image = spec.name.replace("_", "-")
+    head = (
+        f"# The release image: docker build -t {image} . && docker run --rm {image}\n"
+        + tc.release_image
+    )
+    if spec.app.kind == "http":
+        args = [a.replace("{port}", str(DOCKER_PORT)) for a in spec.app.args]
+        return (
+            head
+            + f"ENV HOST=0.0.0.0\nEXPOSE {DOCKER_PORT}\n"
+            + f"CMD {json.dumps([*target, *args])}\n"
+        )
+    return head + f"ENTRYPOINT {json.dumps(target)}\nCMD {json.dumps(['--version'])}\n"
 
 
 # ---------- python ----------
@@ -130,6 +154,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             if spec.app.kind == "http"
             else _cli_acceptance(pkg)
         ),
+        "Dockerfile": dockerfile(spec, tc),
         "tests/conftest.py": (
             "import pathlib\nimport sys\n\n"
             "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))\n"
@@ -229,6 +254,7 @@ def _http_cli(pkg: str) -> str:
         '"""Command line entry point: the walking skeleton with a health endpoint."""\n\n'
         "import argparse\n"
         "import json\n"
+        "import os\n"
         "from http.server import BaseHTTPRequestHandler, HTTPServer\n\n"
         f"from {pkg} import __version__\n\n"
         'HEALTH_PATH = "/health"\n\n\n'
@@ -248,8 +274,9 @@ def _http_cli(pkg: str) -> str:
         "# Process lifecycle: the black-box acceptance tests run it against the started app;\n"
         "# the coverage floor counts in-process code only (M11).\n"
         "def serve(port):  # pragma: no cover\n"
-        '    server = HTTPServer(("127.0.0.1", port), Handler)\n'
-        '    print(f"serving on http://127.0.0.1:{port}", flush=True)\n'
+        '    host = os.environ.get("HOST", "127.0.0.1")  # the Dockerfile sets 0.0.0.0\n'
+        "    server = HTTPServer((host, port), Handler)\n"
+        '    print(f"serving on http://{host}:{port}", flush=True)\n'
         "    try:\n"
         "        server.serve_forever()\n"
         "    except KeyboardInterrupt:\n"
@@ -394,6 +421,7 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             indent=2,
         )
         + "\n",
+        "Dockerfile": dockerfile(spec, tc),
         "eslint.config.js": (
             'import js from "@eslint/js";\n'
             'import tseslint from "typescript-eslint";\n\n'
@@ -535,8 +563,9 @@ def _node_http_cli(pkg: str, health_path: str) -> str:
         "// Process lifecycle: the black-box acceptance tests run it against the started app.\n"
         "export function serve(port: number): number {\n"
         "  const server = createApp();\n"
-        '  server.listen(port, "127.0.0.1", () => {\n'
-        "    console.log(`serving on http://127.0.0.1:${port}`);\n"
+        '  const host = process.env.HOST ?? "127.0.0.1"; // the Dockerfile sets 0.0.0.0\n'
+        "  server.listen(port, host, () => {\n"
+        "    console.log(`serving on http://${host}:${port}`);\n"
         "  });\n"
         '  process.on("SIGTERM", () => server.close());\n'
         "  return 0;\n"

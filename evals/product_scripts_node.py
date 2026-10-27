@@ -166,8 +166,9 @@ export function createApp(store: Store = defaultStore()): Server {
 /* node:coverage disable */
 export function serve(port: number): number {
   const server = createApp();
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`serving on http://127.0.0.1:${port}`);
+  const host = process.env.HOST ?? "127.0.0.1";
+  server.listen(port, host, () => {
+    console.log(`serving on http://${host}:${port}`);
   });
   process.on("SIGTERM", () => server.close());
   return 0;

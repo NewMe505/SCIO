@@ -49,6 +49,14 @@ health_probe_argv:
   - -e
   - "fetch('{url}').then(r => process.exit(r.status < 400 ? 0 : 1), () => process.exit(1))"
 acceptance_dir: tests/acceptance
+# The release image (M11): Node 22 runs the TypeScript sources directly (type stripping), so
+# the image needs the runtime dependencies only; the scaffold appends ENV / EXPOSE / CMD.
+release_image: |
+  FROM node:22-slim
+  WORKDIR /app
+  COPY package*.json ./
+  RUN npm install --omit=dev --no-audit --no-fund
+  COPY . .
 skeleton_command: "node src/main.ts --version"
 command_words: [node, npm, npx]
 # Coverage is built into Node 22 (M11): below the floor it exits 1 with "line coverage does
