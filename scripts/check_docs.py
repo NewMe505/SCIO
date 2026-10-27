@@ -130,6 +130,44 @@ def check_release_cadence() -> list[str]:
     ]
 
 
+def released_section_changed(current: str, tagged: str, version: str) -> bool:
+    """True when ``version``'s CHANGELOG section differs from the one its tag shipped."""
+    parts = SECTION_RE.split(current)
+    now = dict(zip(parts[1::2], parts[2::2], strict=True)).get(version)
+    parts = SECTION_RE.split(tagged)
+    then = dict(zip(parts[1::2], parts[2::2], strict=True)).get(version)
+    return then is not None and (now or "").strip() != then.strip()
+
+
+def check_released_section_frozen() -> list[str]:
+    """The newest released CHANGELOG section stays what its tag shipped (I-089): a branch
+    that merges ``main`` across a release cut gets its own ``[Unreleased]`` entries moved
+    under the new version by git's merge, silently. Skipped before the tag exists (the
+    release PR itself) and in a clone without tags."""
+    import subprocess
+
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    m = re.search(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE)
+    if not m:
+        return []
+    version = m.group(1)
+    proc = subprocess.run(
+        ["git", "show", f"v{version}:CHANGELOG.md"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if proc.returncode != 0:
+        return []
+    if released_section_changed(changelog, proc.stdout, version):
+        return [
+            f"CHANGELOG.md: the [{version}] section differs from tag v{version}; new entries "
+            "belong under [Unreleased] (I-089)"
+        ]
+    return []
+
+
 def check_readme_status() -> list[str]:
     """The README is the repository's landing page and must say where the project stands at
     every push (owner's rule, 2026-10-26). Its ``> Status:`` line names the latest released
@@ -197,6 +235,7 @@ def main() -> int:
         + check_changelog()
         + check_readme_status()
         + check_release_cadence()
+        + check_released_section_frozen()
         + check_ignored_sources()
         + check_graph_sections()
     )

@@ -722,3 +722,19 @@ Template:
 - Fix: `_npm_dependency` returns None for a non-registry spec and the scaffold leaves it to the install phase, which writes the right name from the target's own manifest; `normalise_package` returns such a spec unchanged, so it only matches itself
 - Sweep: `grep -rn "partition(\"@\")\|split(\"@\"" scio` finds the two parsers above and nothing else; the python scaffold writes specs verbatim into `pyproject.toml` (PEP 508 already allows `name @ url`). Guard: the I-085 test bootstraps with a `file:` spec, so both parsers are exercised end to end
 - Resolved: 2026-10-26 · Status: resolved
+
+### I-089 · Merging `main` across the 0.6.0 cut moved the branch's unreleased changelog entries into the released `[0.6.0]` section, without a conflict
+- Found: 2026-10-27 · M11 slice 1 · `git merge origin/main` into `feat/54-m11-product-ready` after PR #55: the branch had added two `### Fixed` entries under `[Unreleased]`; the release had inserted `## [0.6.0]` between `[Unreleased]` and that `### Fixed` list, so git's merge placed the entries under `[0.6.0]`
+- Symptom: none from git (the changelog auto-merged; only the ledger conflicted); `grep -n "^## \[\|^### "` after the merge showed the I-085 and I-088 lines inside `[0.6.0]`, which v0.6.0 never shipped
+- Root cause: `release_notes.py --cut` renames the `[Unreleased]` header in place and opens a new empty one above it, so every entry list a branch extended now sits under the version header; a text merge has no idea which section a line belongs to
+- Fix: the two entries moved back under `[Unreleased]` by hand in the merge commit
+- Sweep: the other files the cut touches (`pyproject.toml`, `scio/__init__.py`, `uv.lock`, the README status line) are whole-line values a merge either takes or conflicts on; only the changelog has lists that grow under a header. Guard: `check_released_section_frozen` in `scripts/check_docs.py` compares the newest released section with `git show v<version>:CHANGELOG.md` and fails on any difference (skipped before the tag exists and in a clone without tags); replayed on git's real auto-merge result (`git merge-tree b1efbfc 8bd6e38`) it reports the change, on the fixed branch it passes; `test_an_entry_merged_into_a_released_section_is_caught`
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-090 · Three command slips during M11 slice 1, each caught by the tool on the first run
+- Found: 2026-10-26 and 2026-10-27 · M11 start and slice 1
+- Symptom: (1) `gh release view --json isLatest`: "Unknown JSON field"; (2) a test used git's `:/<text>` commit lookup with `[scio:install:...]`, which git reads as a regex character class; (3) two test lines over the 100-character limit (ruff E501)
+- Root cause: (1) a field remembered from `gh release list`, not checked against `gh release view`'s list; (2) the bracketed SCIO markers are regex metacharacters everywhere git takes a pattern; (3) long literal strings in tests
+- Fix: (1) `gh release list` shows the Latest flag; (2) the test finds the commit with `git log --fixed-strings --grep=` (the form `find_commit` uses); (3) the strings were split
+- Sweep: `grep -rn ':/\[' scio evals tests` finds no other `:/` lookup with a marker. `grep -rn -- "--grep=" scio` found a real instance of (2) in production: the bootstrap commit's crash-resume probe in `scio/product/graph.py` ran `git log --grep=[scio:bootstrap]` without `--fixed-strings`, a character class that matches nearly any message (in a scratch repo it returned `docs: add readme`), so `scio new` resumed in a directory with history could take an unrelated commit for the bootstrap; it calls `find_commit` now. Guard: ruff and the gh error caught (1) and (3) at once; `test_every_git_grep_for_a_marker_is_a_fixed_string` fails on any `--grep=` in `scio/` without `--fixed-strings`
+- Resolved: 2026-10-27 · Status: resolved

@@ -20,6 +20,7 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from scio.aci.tools import find_commit
 from scio.graph.checkpointer import DURABILITY, open_checkpointer
 from scio.graph.effects import run_effect
 from scio.graph.nodes.common import fact, git_out
@@ -275,8 +276,8 @@ def bootstrap(ctx: RunContext) -> Node:
             return git_out(sb, "rev-parse", "HEAD")
 
         def commit_probe() -> str | None:
-            found = git_out(sb, "log", "--format=%H", f"--grep={BOOTSTRAP_MARKER}", "-n", "1")
-            return found if found and not found.startswith("(git") else None
+            # fixed-string: as a regex the bracketed marker is a character class (I-090)
+            return find_commit(sb, BOOTSTRAP_MARKER)
 
         sha = _effect("bootstrap-commit", commit_apply, commit_probe)
         # progress.json records the commit; it is a second commit so the first stays the marker

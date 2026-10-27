@@ -111,6 +111,18 @@ def test_no_stack_specific_command_outside_the_toolchain_package() -> None:
     assert offenders == [], "\n".join(offenders)
 
 
+def test_every_git_grep_for_a_marker_is_a_fixed_string() -> None:
+    """I-090: SCIO's markers (``[scio:bootstrap]``) are regex character classes to git, so a
+    ``--grep=`` without ``--fixed-strings`` matches almost any commit message."""
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}:{i}"
+        for path in (REPO_ROOT / "scio").rglob("*.py")
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "--grep=" in line and "--fixed-strings" not in line
+    ]
+    assert offenders == [], offenders
+
+
 def test_python_profile_declares_the_quality_bar_and_classifies_outcomes() -> None:
     """M9: coverage, build and audit are profile data; an absent tool is a skip, not a pass."""
     tc = python_toolchain()

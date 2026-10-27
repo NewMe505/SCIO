@@ -4,7 +4,10 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `check_released_section_frozen` in `scripts/check_docs.py`: the newest released CHANGELOG section must match what its tag shipped, which catches a branch's `[Unreleased]` entries that a merge across a release cut moved under the new version (I-089).
 ### Fixed
+- `scio new`'s crash-resume probe for the bootstrap commit searched `git log --grep=[scio:bootstrap]` as a regex, a character class that matches nearly any commit message; it uses the fixed-string `find_commit` now, and a scan test keeps every `--grep=` in `scio/` fixed-string (I-090).
 - `scio build` commits the install phase's manifest and lockfile changes (`npm install --save` rewrites `package.json` and writes `package-lock.json`) on the milestone branch as `chore: install approved dependencies [scio:install:<M>:<node>]`, before the first feature's reset could delete the lockfile; a merged milestone no longer leaves a dirty tree (I-085). `load`'s sync of `progress.json` with `PRODUCT.md` is committed the same way (`[scio:sync:<M>:plan_milestone]`) instead of being reverted by that reset.
 - The node scaffold no longer writes a non-registry dependency (`file:`, `github:`, a URL or a path) into `package.json` as a package of that name; the install phase writes it. Such a spec is also its own name on the approved list, so it only matches itself in `install_deps` (I-088).
 
