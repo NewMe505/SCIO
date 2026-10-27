@@ -502,6 +502,13 @@ def load(ctx: RunContext) -> Node:
         entries = [fact(n) for n in notes]
         if notes:
             _write_progress(ctx, progress)
+        # A product bootstrapped before I-107 may still promise tools its profile does not
+        # use; the build runs the profile's, so it says so instead of diverging silently.
+        _, bar_notes = ctx.toolchain.resolve_quality_bar(spec.quality_bar)
+        entries += [
+            fact(f"{n}; this build runs the profile's tools, so edit PRODUCT.md to match")
+            for n in bar_notes
+        ]
         if progress.bootstrap_commit:
             r = sb.exec(["git", "cat-file", "-e", progress.bootstrap_commit], timeout_s=30)
             if not r.ok:

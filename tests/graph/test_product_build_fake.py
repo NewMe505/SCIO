@@ -1025,8 +1025,12 @@ def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_p
     repo = tmp_path / "product"
     md = repo / PRODUCT_MD
     first, second = "Edited by hand before the build.", "Edited by hand at the M1 merge stop."
+    # a product bootstrapped before I-107 can still promise other tools: the build says so
+    bar = "## Quality bar (release gate)\n"
     md.write_text(
-        md.read_text(encoding="utf-8").replace("## Vision\n", f"## Vision\n{first}\n", 1),
+        md.read_text(encoding="utf-8")
+        .replace("## Vision\n", f"## Vision\n{first}\n", 1)
+        .replace(bar, f"{bar}- Tests use only the stdlib unittest module\n", 1),
         encoding="utf-8",
         newline="\n",
     )
@@ -1034,6 +1038,10 @@ def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_p
     try:
         out = run_build(ctx)
         assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        assert any(
+            "contradicts the python profile" in e.text and "edit PRODUCT.md" in e.text
+            for e in out.state.ledger
+        )
         assert first in _git(repo, "show", f"milestone/1:{PRODUCT_MD}")  # survived P1's reset
         # the human edits again while the PR waits; milestone/1's PRODUCT.md now differs
         # from main's, so a plain checkout of main would refuse to run over the edit

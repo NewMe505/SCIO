@@ -880,6 +880,7 @@ Template:
   - Each profile names its `fixed_facts` and the `quality_bar_conflicts` (pattern, the profile's fact) that contradict them (`configs/profiles/*.yaml`, `ProfileToolchain`, `Toolchain.fixed_facts` and `resolve_quality_bar`).
   - `stack_menu` carries the facts; interviewer v2 renders it and never offers a choice the facts settle; product_planner v3 keeps the quality bar to the stack's tools.
   - `normalise_spec` replaces a conflicting line with the profile's fact and quotes the original (`... (replaces: Tests use only the stdlib unittest module ...)`), with a note, so the owner sees the change in the draft they approve.
+  - A product bootstrapped before this fix (graphcalc) still carries the old lines, so `load` writes a ledger line for every contradicting line, saying the build runs the profile's tools and PRODUCT.md should be edited to match. The I-109 fix makes that edit stick.
   - For graphcalc, the owner chose to keep SCIO's stack (pytest, Python 3.12) and revise the product's quality bar, rather than add a unittest profile.
 - Sweep: every place that turns the owner's words into the build's tools: the interviewer (fixed), the planner (fixed), the normaliser (fixed), and the scaffold (it renders from the profile, correct once the bar agrees). node-ts gets the same data (jest, mocha, vitest and others; Node versions below 22). Guard: `test_a_quality_bar_never_promises_tools_the_profile_does_not_use` (graphcalc's own lines and a node-ts case), `test_the_interviewer_and_planner_see_what_each_stack_fixes`, the prompt placeholder test, plus guardrail 13
 - Resolved: 2026-10-27 · Status: resolved
@@ -939,4 +940,12 @@ Template:
 - Root cause: `guard_exists` (issue #61) matched `def <name>(`; a PEP 695 generic puts its type parameters between the name and the parenthesis
 - Fix: the symbol and test patterns accept `def <name>[` as well as `def <name>(`
 - Sweep: every pattern in `scripts/check_docs.py` and `scripts/hooks/push_gate.py` that finds a definition by name (`grep -n 'def {name}' scripts`): the two in `guard_exists` (fixed). The codebase's other generics (`grep -rn "def [a-z_]*\[" scio`: `run_effect`, `effect`, `carrying_product_md`) are now matched. Guard: `test_guard_exists_looks_in_the_repository` asserts `symbol:run_effect` and `symbol:carrying_product_md`, plus guardrail 16
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-112 · A shell-embedded Python edit missed its anchor because the anchor held backslashes (I-071, I-072 again)
+- Found: 2026-10-27 · issue #64, extending the I-109 test · `AssertionError: anchor` from a `python - <<'PY'` script whose old text contained `"## Vision\n"` meant to match the test file's literal backslash-n; the same edit made with the Edit tool applied first time
+- Symptom: no damage; the script's own `assert t.count(old) == 1` stopped it before writing
+- Root cause: I broke the standing rule (CLAUDE.md, pre-flight item 6): text with a backslash goes through the file tools, never through a shell-embedded script; inside the heredoc the escape meant something else than in the file
+- Fix: the edit was made with the Edit tool
+- Sweep: the edits of this session made through `python - <<` scripts (CHANGELOG, README, PR bodies, tests): every one asserted its anchor count before writing, so a miss fails loudly; this was the only one whose anchor needed a backslash. Guard: guardrail 17, `manual` with its reason (a hook cannot tell a mangled backslash from an intended `\n` escape, which those scripts use correctly), and the anchor-count assert as the convention that turns a miss into a failure
 - Resolved: 2026-10-27 · Status: resolved
