@@ -61,11 +61,13 @@ GitHub repository is created when `--gh` is given. A prompt starts a thread, no 
 uv run scio new --prompt "A CLI todo app with tags and JSON export" --dir ./todo [--gh you/todo]
 uv run scio new --thread new-ab12cd34 --dir ./todo --decision "1: developers; 2: add and list; 3: no sync"
 uv run scio new --thread new-ab12cd34 --dir ./todo --decision approve      # or revision notes
+uv run scio new --spec PRODUCT.md --dir ./todo     # M11: bootstrap your own PRODUCT.md as written
 ```
 
 The result is a git repository on `main` with `PRODUCT.md`, `NOTES.md`, `.scio/product/progress.json`,
-a package that answers `--version`, one smoke test, CI that runs the profile's lint and tests, README,
-CHANGELOG, LICENSE and `.gitignore`; lint and tests ran green before the bootstrap commit.
+a package that answers `--version`, smoke tests that drive the app in-process, CI that runs the
+profile's lint and tests and the README's run commands, README, CHANGELOG, LICENSE, a Dockerfile and
+`.gitignore`; lint and tests ran green before the bootstrap commit.
 
 The milestone loop (M8, ADR 0011) then builds the product one approved milestone at a time. Every
 feature in `PRODUCT.md` starts `todo`, the walking skeleton included; the orchestrator always takes the
@@ -75,10 +77,16 @@ the task graph on its own checkpoint thread on branch `milestone/<n>`. After the
 profile's full suite and lint run on the branch, an Opus milestone gate gives a verdict that any failing
 check overrides, and one milestone PR waits for you. A crash at any point resumes without a duplicated
 issue, commit or PR; a feature that halts stops for one decision (`retry`, `skip`, or stop).
+Every feature's verify also holds it to the product's coverage floor (`SCIO_COVERAGE_FLOOR`, 80% of
+the product's own code by default). When no milestone remains, the release gate (M11) runs the whole
+bar on `main` (coverage, secret scan, release files, the README's run commands, black-box acceptance)
+and stops for you once more; `release` cuts the changelog, tags `v<version>` and keeps a source archive
+under `.scio/sandbox/release/` (with `--gh`, a GitHub Release with the archive attached).
 
 ```bash
 uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR
 uv run scio build --product ./todo --decision merged      # after you merged the PR (offline: "merge")
+uv run scio build --product ./todo --decision release     # at the release gate (or "stop")
 uv run scio build --product ./todo --decision "merge and stop"   # record the milestone, end the thread
 uv run scio build --product ./todo --decision skip        # or retry / stop, when a feature halted
 uv run scio status --product ./todo                       # progress.json as text
@@ -99,6 +107,11 @@ SCIO_PROVIDER_OVERRIDE=claude_code SCIO_WORKER_BACKEND=claude_code uv run scio r
 
 After a run, `uv run scio report --thread <id>` writes `.scio/reports/<id>.md` and `.json`:
 tokens and dollars by role, every escalation with its outcome, and the ledger timeline.
+
+Product evals (M11, ADR 0015): `python -m evals.runner --suite product [--task p001_cli_todo]` builds
+each task's fixed `PRODUCT.md` through `scio new --spec` and `scio build` to a release, then runs
+hidden black-box tests against the released product (p003 in a real browser: run
+`python -m playwright install chromium` once).
 
 Evals: `python -m evals.runner --suite regression|capability --provider fake --config evals/configs/<ab>.yaml`
 runs a suite under an A/B role configuration (`sonnet_only`, `sonnet_opus_advisor`, `opus_only`);
@@ -169,7 +182,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/RESEARCH.md](docs/RESEARCH.md): the evidence behind each design decision
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 

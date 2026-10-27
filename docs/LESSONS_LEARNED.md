@@ -505,3 +505,35 @@ Lessons:
 - `scio/toolchain/profile.py` (`ProfileToolchain`, `StackParsers`, `load_profile`), `node_ts.py`, `configs/profiles/node-ts.yaml`, the registry with `available_toolchains` and `detect_toolchain`; `Runtime` generalised; `resolve_command`; `ensure_product_env` on `env_marker`; the stack-neutral normaliser, acceptance runner, `run_app`, tool descriptions, allow-rules, planner prompt v2; `node_ts_scaffold` and the `scaffold_for` registry; `resolve_toolchain`, `adopt_toolchain` and the four call sites; `evals/product_scripts_node.py` and `ScriptedResponder(stack=)`; `LocalSandbox` without `RLIMIT_AS` (I-084); `check_readme_status` (the landing page current at every push).
 - Tests: `test_toolchain_node_ts.py`, `test_scaffold_node_ts.py`, the node cases in `test_runtime.py` and `test_sandbox.py`, the normaliser test in both stacks, `test_same_spec_builds_in_both_stacks`, `tests/node_support.py`; CI `setup-node`.
 - ADR 0014; PRODUCT_MODE status; README status, table and roadmap; CHANGELOG; ledger I-081 to I-085.
+
+## M11: Product-ready + evals (2026-10-26 to 2026-10-27, issue #54, ADR 0015, PR #56)
+
+### Lessons applied
+- Inventory first (M6 to M10): a read-only sweep listed the quality-bar gaps, the loop's end, the install path and the eval runner before any code; it became the issue body and the nine slices.
+- Measure before designing (pre-flight 8): npm's save and lockfile behaviour, Node 22's coverage flags and its coverage-ignore comments, the scaffold's real coverage (78.57% and 33.33% once tests stopped counting) and a headless Chromium launch were each probed before the code that depends on them.
+- A node that interrupts does nothing else (I-065): `release_decision` only asks; the tag and the Release are effects in `release`.
+- The failure must be visible to the worker (t008, t009): coverage and node's `typecheck` run in each feature's verify, not only in `integrate` (I-091).
+- Green here, red there (I-074, I-080, I-084): the Docker image tests were written for CI's daemon and passed there first time; the browser tests run in CI's `checks` job, which installs Chromium.
+- A hint is not a pin (I-050): each product eval pins its stack and interface in a fixed `PRODUCT.md`.
+- One live trial before scaling (M5), adjusted by the owner on 2026-10-27: on the Claude Code backend nothing is billed, so the live evals ran without a stop between them.
+
+### What succeeded
+- The release gate caught two real defects that every per-feature check had passed: a flaky scripted server (I-096) on the Fake, and nothing on live p001, whose release was clean. Running the whole bar once more on `main` is cheap and earned its place on its first day.
+- The honest coverage floor plus the verify-time check works as designed on the Fake: P2 at 93% against a floor of 95 failed its own verify (`quality`), went to the debugger, gained the error-path tests and passed in its second iteration; without the verify step the milestone halts at `integrate`.
+- Live p001 (a CLI todo app with tags and JSON export) went from a fixed `PRODUCT.md` to a released v0.1.0 with 3 of 3 features over 2 milestones, the 5 hidden black-box tests green, no intervention beyond the designed merge and release stops: $3.96 estimated, 24.5 minutes, nothing billed.
+- Writing guards before trusting green found more than the guards themselves: the offline I-085 test found I-088, the I-090 sweep found the bootstrap probe's regex bug, the I-085 sweep found the uncommitted progress sync.
+
+### What failed
+- Live p002's first run halted at its first feature (I-097): the coder rightly found the health endpoint already built and "proved" it with black-box tests that skip outside `integrate`; verify accepted an all-skipped run, and only the model gate's `replan` noticed. The M3 lesson covered "no tests collected" but not "all skipped". A pass that ran nothing is not a pass, in every reader of a test run.
+- Release cadence slipped for two weeks (I-086) and I acted on a reported merge without checking GitHub (I-087); both are now checks or rules, not intentions.
+- Three of my own mistakes reached a check before a test did: stack data in product code (I-093, caught by the M6 boundary test), a CI timeout nobody had measured (I-094, cancelled a green run), the trial spend that missed every feature's child harness (I-095, caught on the first Fake run before any live run).
+- Git's auto-merge silently moved branch entries into a released changelog section (I-089); a text merge does not know which section a line belongs to.
+
+### Actions
+- `commit_install`, `commit_progress_sync` (I-085); `_npm_dependency` and `normalise_package` for non-registry specs (I-088); `check_release_cadence` (I-086), `check_released_section_frozen` (I-089); `find_commit` in the bootstrap probe and the fixed-string scan test (I-090).
+- `Settings.coverage_floor`, `QualityCheck.command` and `verify`, `RunContext.quality_values`, the `quality` failure kind; both scaffolds test in-process and mark the serve lifecycle; `test_scaffold_coverage.py`; the coverage-floor failure-path test (I-091).
+- `scio/product/release_checks.py` (secret scan, release files, README run block; I-092), `release_image` in both profiles (I-093), Dockerfiles in both scaffolds, the four `docker-live` image tests; CI `checks` budget 25 minutes with `--durations` (I-094).
+- The release gate (`release_check`, `release_decision`, `release`, `ReleaseRecord`, `GitHubClient.find_release` / `ensure_release`) and its Fake tests.
+- `scio new --spec`; the product suite (`grader: product`, `evals/product_solver.py`, p001 to p003, `--task`), `TrialOutcome.usd_elsewhere` (I-095); Playwright and the CI browser step; `test_product_evals_fake.py`.
+- `Toolchain.skipped_only`, the `no tests ran` result, verify's refusal and hint, the acceptance and grader checks (I-097); `test_skipped_only.py`.
+- ADR 0015; CONTRIBUTING steps 5 and 6; ledger I-085 to I-097; EVAL_HISTORY rows for the live product runs.
