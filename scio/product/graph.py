@@ -20,7 +20,7 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from scio.aci.tools import find_commit
+from scio.aci.tools import SCIO_GIT_IDENTITY, find_commit
 from scio.graph.checkpointer import DURABILITY, open_checkpointer
 from scio.graph.effects import run_effect
 from scio.graph.nodes.common import fact, git_out
@@ -271,7 +271,7 @@ def bootstrap(ctx: RunContext) -> Node:
         def commit_apply() -> str:
             sb.exec(["git", "add", "-A"], timeout_s=60)
             msg = f"chore: bootstrap {spec.name} walking skeleton {BOOTSTRAP_MARKER}"
-            r = sb.exec(["git", "commit", "-q", "-m", msg], timeout_s=60)
+            r = sb.exec(["git", *SCIO_GIT_IDENTITY, "commit", "-q", "-m", msg], timeout_s=60)
             if not r.ok and "nothing to commit" not in (r.stdout + r.stderr):
                 raise RuntimeError(f"git commit failed: {r.stderr.strip()[:300]}")
             return git_out(sb, "rev-parse", "HEAD")
@@ -287,7 +287,14 @@ def bootstrap(ctx: RunContext) -> Node:
         )
         sb.exec(["git", "add", "-A"], timeout_s=60)
         sb.exec(
-            ["git", "commit", "-q", "-m", "chore: record bootstrap commit in progress.json"],
+            [
+                "git",
+                *SCIO_GIT_IDENTITY,
+                "commit",
+                "-q",
+                "-m",
+                "chore: record bootstrap commit in progress.json",
+            ],
             timeout_s=60,
         )
         entries.append(fact(f"bootstrap commit {sha[:12]}", source=Role.SYSTEM))

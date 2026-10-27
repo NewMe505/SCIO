@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from scio import __version__
 from scio.aci.sandbox.base import Sandbox
+from scio.aci.tools import SCIO_GIT_IDENTITY
 from scio.product.progress import PRODUCT_MD, parse_product_md
 from scio.product.release_checks import RUN_END, RUN_START
 from scio.product.scaffold import README_RUN_STEP, scaffold_for
@@ -48,7 +49,7 @@ class UpgradeReport:
 
 
 def _git(sb: Sandbox, *args: str) -> str:
-    r = sb.exec(["git", *args], timeout_s=60)
+    r = sb.exec(["git", *SCIO_GIT_IDENTITY, *args], timeout_s=60)  # I-104
     if not r.ok:
         raise UpgradeRefused(f"git {' '.join(args)} failed: {(r.stderr or r.stdout).strip()[:300]}")
     return r.stdout.strip()

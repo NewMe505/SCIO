@@ -331,7 +331,11 @@ def _squash_merge(origin: Path, fake: FakeGh, branch: str, pr: int) -> str:
     """What GitHub's squash button does: one new commit on origin main with the branch's
     tree, a new SHA, the branch's own commits left out of main's history (I-102)."""
     tree = _git(origin, "rev-parse", f"refs/heads/{branch}^{{tree}}")
-    sha = _git(origin, "commit-tree", tree, "-p", "refs/heads/main", "-m", f"{branch} (#{pr})")
+    sha = _git(
+        origin,
+        *("-c", "user.name=GitHub", "-c", "user.email=noreply@github.com"),  # I-104
+        *("commit-tree", tree, "-p", "refs/heads/main", "-m", f"{branch} (#{pr})"),
+    )
     _git(origin, "update-ref", "refs/heads/main", sha)
     fake.merged.add(pr)
     return sha

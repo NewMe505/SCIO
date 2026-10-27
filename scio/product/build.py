@@ -29,7 +29,7 @@ from langgraph.types import Command, interrupt
 
 from scio.aci.runtime import ToolContext, ensure_product_env
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.tools import find_commit, git_push, head_sha
+from scio.aci.tools import SCIO_GIT_IDENTITY, find_commit, git_push, head_sha
 from scio.context.artifacts import ArtifactStore
 from scio.graph.checkpointer import DURABILITY, open_checkpointer
 from scio.graph.effects import run_effect
@@ -160,7 +160,7 @@ def _branch_exists(ctx: RunContext, name: str) -> bool:
 
 
 def _git(ctx: RunContext, *args: str) -> str:
-    r = ctx.sandbox.exec(["git", *args], timeout_s=120)
+    r = ctx.sandbox.exec(["git", *SCIO_GIT_IDENTITY, *args], timeout_s=120)  # I-104
     if not r.ok:
         raise RuntimeError(f"git {' '.join(args)} failed: {(r.stderr or r.stdout).strip()[:300]}")
     return r.stdout.strip()
