@@ -81,7 +81,8 @@ Every feature's verify also holds it to the product's coverage floor (`SCIO_COVE
 the product's own code by default). When no milestone remains, the release gate (M11) runs the whole
 bar on `main` (coverage, secret scan, release files, the README's run commands, black-box acceptance)
 and stops for you once more; `release` cuts the changelog, tags `v<version>` and keeps a source archive
-under `.scio/sandbox/release/` (with `--gh`, a GitHub Release with the archive attached).
+under `.scio/sandbox/release/`. With `--gh` the cut goes through a release PR that you merge (SCIO
+never pushes `main`), then the merge commit is tagged and a GitHub Release carries the archive.
 
 ```bash
 uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR

@@ -770,6 +770,7 @@ Template:
 - Fix: `timeout-minutes: 25` for `checks`, with the measurements in a comment; `--durations=15` on the CI test step so the slowest tests are in every log. Moving the evals to their own parallel job was rejected: the ruleset requires `checks` only, so a separate job could fail without blocking a merge
 - Sweep: the other job (`docker-live`, 20 minutes) ran 54 s; the nightly and release workflows have their own budgets and are not on this path. Guard: the measured durations next to the number, and `--durations` in the log
 - Resolved: 2026-10-27 · Status: resolved
+- Follow-up (issue #58, slice 1): the job reached about 18 of its 25 minutes at v0.7.0 (tests 789 s serial on `f475829`). With pytest-xdist and twice the runner's cores (CI printed `runner cores: 4`, so 8 workers) the same suite ran in 314 s with identical counts, 353 passed and 4 skipped (`949ed1f`); locally 8 workers gave 341 passed, 16 skipped, the serial counts, in 292 s against 750 s
 
 ### I-095 · The product eval trials reported only the orchestrator's spend: every feature runs on a child harness the trial never saw
 - Found: 2026-10-27 · M11 slice 6 · the first Fake run of the product suite: p001 built three features through two milestones and a release and reported `$0.0130` and 2,761 tokens, about what the milestone planner and gate alone cost
@@ -830,12 +831,14 @@ Template:
 - Found: 2026-10-27 · issue #58 inventory (read-only) · `merge_wait` pulls `main` with `--ff-only`; local `main` carries the previous milestone's progress commit, which a squash merge replaces with a new SHA on origin, so the histories diverge and `_git` raises
 - Symptom: not yet seen live; the GitHub-mode Fake test fakes every merge as a fast-forward (`git update-ref`)
 - Root cause: the sync assumes merge-commit merges; GitHub's squash and rebase buttons are just as common
-- Fix: open (issue #58 slice 2)
-- Status: open
+- Fix: `sync_main` (`scio/product/build.py`) fetches origin; a fast-forward when local `main` is an ancestor; otherwise a reset to `origin/main` only when every local-only commit carries a SCIO bookkeeping marker (`[scio:progress:`, `[scio:release:`) and origin's `progress.json` still records the milestones those commits recorded; anything else raises `SyncRefused` and the build halts `sync_failed` with the commits named
+- Sweep: every pull or merge of `main` in product code: `grep -n '"pull"\|"merge"' scio/product/*.py` finds the GitHub-mode pull (fixed, now `sync_main`), the offline local merge (a `--no-ff` merge SCIO makes itself) and the feature fast-forward into the milestone branch (a local branch SCIO owns); neither of the last two meets a GitHub merge. Guard: `test_github_mode_survives_squash_merged_milestone_prs` (two real squash merges on a bare origin: a new commit with the branch's tree and a new SHA; the build reaches the release gate with M1 and M2 recorded; against the old code it fails with `git pull -q --ff-only origin main failed`), `test_github_mode_never_drops_a_human_commit_on_local_main`
+- Resolved: 2026-10-27 · Status: resolved
 
 ### I-103 · In GitHub mode the release tag points at a commit outside `main`'s history, and the last progress commit never reaches origin `main`
 - Found: 2026-10-27 · issue #58 inventory and review · `release` cuts the changelog on local `main` and pushes only the tag; nothing pushes `main` (by design: a product's `main` may be protected), so the final progress commit and the cut exist on GitHub only behind the tag
 - Symptom: not yet seen live (the live evals ran offline); a `--gh` product's `main` would never show its own release in its changelog
 - Root cause: the release flow was written for the offline case and reused for GitHub without the PR step SCIO's own releases use (CONTRIBUTING step 6)
-- Fix: open (issue #58 slice 3)
-- Status: open
+- Fix: `release` cuts the changelog on a `release/<tag>` branch from local `main` (which also carries the last progress commit), pushes it and opens a ready PR; `release_merge_wait` (its own node, I-065) waits until GitHub says the PR is merged, then `sync_main` brings local `main` to origin's (I-102); `release_publish` tags `main`'s head, which is the release PR's merge, keeps the artifacts, pushes the tag and publishes the Release. Offline the cut stays a commit on `main` and `release_publish` tags it. Nothing pushes `main`
+- Sweep: every place a tag is made or pushed (`grep -n '"tag"' scio/product/*.py`): `release_publish` only. Guard: the GitHub-mode tests assert no tag and no Release before the merge, "not merged yet" when asked early, and the tag equal to origin `main`'s head after a fast-forward merge (`test_github_mode_crash_after_the_pr_duplicates_nothing`) and after three squash merges, M1, M2 and the release PR (`test_github_mode_survives_squash_merged_milestone_prs`), with local `main` equal to origin's and the changelog cut on it
+- Resolved: 2026-10-27 · Status: resolved

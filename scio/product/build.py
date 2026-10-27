@@ -3,7 +3,8 @@
     load -> plan_milestone -> issues -> feature (x N: the task graph as a subgraph, one
     checkpoint thread per feature attempt) -> integrate -> milestone_gate -> [gate_decision]
     -> milestone_pr -> merge_wait -> update_progress -> plan_milestone | release_check
-    -> [release_decision] -> release -> done          (the release gate, M11)
+    -> [release_decision] -> release -> [release_merge_wait, GitHub only] -> release_publish
+    -> done                                            (the release gate, M11; issue #58)
 
 The orchestrator, not a model, picks the next feature (the first open one in ``PRODUCT.md``
 order); the milestone planner only proposes how many to group and at what tier. Every
@@ -15,6 +16,7 @@ duplicated issue, commit or pull request (ADR 0003).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -1098,6 +1100,55 @@ def milestone_pr(ctx: RunContext) -> Node:
     return node
 
 
+BOOKKEEPING_MARKERS = ("[scio:progress:", "[scio:release:")
+"""Commit markers of SCIO's own records on local ``main`` (progress, the changelog cut);
+their content reaches origin inside the next PR, so they may be replaced by origin's."""
+_PROGRESS_ID_RE = re.compile(r"\[scio:progress:(?P<id>[^\]]+)\]")
+
+
+class SyncRefused(RuntimeError):
+    """Local ``main`` cannot follow origin without losing something (I-102)."""
+
+
+def sync_main(ctx: RunContext) -> str:
+    """Bring local ``main`` to origin's after a merge confirmed on GitHub (I-102).
+
+    A merge commit is a fast-forward. A squash or rebase merge gives origin new SHAs for
+    content local ``main`` already has: the previous milestone's progress commit rode in the
+    merged branch. Then local ``main`` is reset to origin's, but only when every commit that
+    exists only locally is SCIO bookkeeping and origin's ``progress.json`` still records the
+    milestones those commits recorded; anything else (a human's commit) halts the build."""
+    sb = ctx.sandbox
+    _git(ctx, "checkout", "-q", "main")
+    _git(ctx, "fetch", "-q", "origin", "main")
+    ancestor = sb.exec(["git", "merge-base", "--is-ancestor", "main", "origin/main"], timeout_s=30)
+    if ancestor.ok:
+        _git(ctx, "merge", "-q", "--ff-only", "origin/main")
+        return head_sha(sb)
+    log = git_out(sb, "log", "--format=%s", "origin/main..main")
+    local_only = [s for s in log.splitlines() if s]
+    foreign = [s for s in local_only if not any(m in s for m in BOOKKEEPING_MARKERS)]
+    if foreign:
+        raise SyncRefused(
+            "local main has commits that are neither on origin nor SCIO bookkeeping: "
+            + "; ".join(foreign[:5])
+            + ". Push them in a PR or remove them, then resume the build"
+        )
+    recorded = {m.group("id") for s in local_only if (m := _PROGRESS_ID_RE.search(s))}
+    shown = sb.exec(["git", "show", f"origin/main:{PROGRESS_PATH}"], timeout_s=30)
+    on_origin = (
+        {m.id for m in ProgressFile.from_json(shown.stdout).milestones} if shown.ok else set()
+    )
+    if recorded - on_origin:
+        raise SyncRefused(
+            f"origin main's progress.json does not record {sorted(recorded - on_origin)}, which "
+            "local main does; the merge dropped SCIO's records. Restore them on origin, then "
+            "resume the build"
+        )
+    _git(ctx, "reset", "-q", "--hard", "origin/main")
+    return head_sha(sb)
+
+
 def merge_wait(ctx: RunContext) -> Node:
     """The human approval stop of every product milestone (ADR 0007). With GitHub, the human
     merges the PR and replies 'merged'; offline, 'merge' lets the orchestrator merge locally."""
@@ -1152,18 +1203,16 @@ def merge_wait(ctx: RunContext) -> Node:
                     "ledger": [fact(f"PR #{pr.number} is not merged yet; asking again")],
                 }
 
-            def pull() -> str:
-                _git(ctx, "checkout", "-q", "main")
-                _git(ctx, "pull", "-q", "--ff-only", "origin", "main")
-                return head_sha(sb)
-
-            merged = run_effect(
-                ctx.effects,
-                thread_id=ctx.thread_id,
-                node="merge_wait",
-                intent=f"pull:{plan.id}",
-                apply=pull,
-            )
+            try:
+                merged = run_effect(
+                    ctx.effects,
+                    thread_id=ctx.thread_id,
+                    node="merge_wait",
+                    intent=f"pull:{plan.id}",
+                    apply=lambda: sync_main(ctx),
+                )
+            except SyncRefused as exc:
+                return _halt(ctx, "sync_failed", str(exc))
         else:
 
             def merge() -> str:
@@ -1405,10 +1454,11 @@ def after_release_decision(
 
 
 def release(ctx: RunContext) -> Node:
-    """Cut the changelog on ``main``, tag, keep the artifacts; with GitHub, push the tag and
-    publish the Release with the artifacts attached. Each step is an effect with a world
-    probe, so a resumed release neither tags nor publishes twice (ADR 0003). ``main`` itself
-    is not pushed: like the progress commits, the cut reaches GitHub with the tag."""
+    """Cut the product's changelog for ``rel.tag``. Offline the cut is a commit on ``main``,
+    tagged by ``release_publish``. With GitHub it goes where SCIO's own releases go
+    (CONTRIBUTING step 6): a ``release/<tag>`` branch from local ``main`` (which also carries
+    the last progress commit), pushed, with a PR the human merges; ``main`` is never pushed
+    (I-103). Each step is an effect with a world probe (ADR 0003)."""
 
     def node(state: ProductBuildState) -> dict[str, Any]:
         spec, rel = state.spec, state.release
@@ -1416,9 +1466,13 @@ def release(ctx: RunContext) -> Node:
         sb = ctx.sandbox
         marker = f"[scio:release:{rel.tag}]"
         changelog = f"{sb.root}/CHANGELOG.md"
+        gh = ctx.github
+        branch = f"release/{rel.tag}"
 
         def cut() -> str:
             _git(ctx, "checkout", "-q", "main")
+            if gh is not None:
+                _git(ctx, "checkout", "-q", "-B", branch)
             text = sb.read_text(changelog) if sb.exists(changelog) else "# Changelog\n"
             sb.write_text(changelog, cut_changelog(text, rel.version))
             _git(ctx, "add", "CHANGELOG.md")
@@ -1434,6 +1488,135 @@ def release(ctx: RunContext) -> Node:
             apply=cut,
             probe=lambda: find_commit(sb, marker),
         )
+        if gh is None:
+            return {
+                "release": rel.model_copy(update={"commit": commit}),
+                "phase": "release_publish",
+                **_fact(f"changelog cut for {rel.tag} at {commit[:12]}"),
+            }
+        default = gh.default_branch()
+        run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"push:{branch}",
+            apply=lambda: git_push(sb, branch, default_branch=default),
+        )
+        notes = release_notes(sb.read_text(changelog), rel.version)
+        pr = run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"pr:{branch}",
+            apply=lambda: (
+                gh.ensure_draft_pr(
+                    head=branch,
+                    base=default,
+                    title=f"chore(release): {rel.tag}",
+                    body=f"Release {rel.tag} of {spec.title}, cut by `scio build`.\n\n{notes}",
+                ).__dict__
+            ),
+            probe=lambda: p.__dict__ if (p := gh.find_pr(branch)) else None,
+        )
+        number = int(pr["number"])
+        run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"ready:{number}",
+            apply=lambda: gh.mark_ready(number),
+        )
+        return {
+            "release": rel.model_copy(update={"pr_number": number, "pr_url": str(pr["url"])}),
+            "phase": "release_merge_wait",
+            **_fact(f"release PR #{number} for {rel.tag} is ready: {pr['url']}"),
+        }
+
+    return node
+
+
+def after_release(state: ProductBuildState) -> Literal["publish", "merge_wait"]:
+    return "merge_wait" if state.phase == "release_merge_wait" else "publish"
+
+
+def release_merge_wait(ctx: RunContext) -> Node:
+    """With GitHub: the human merges the release PR (its own node, I-065). Once GitHub says
+    it is merged, local ``main`` follows origin's (``sync_main``), so the tag that
+    ``release_publish`` puts on ``main``'s head sits on ``main``'s history (I-103)."""
+
+    def node(state: ProductBuildState) -> dict[str, Any]:
+        rel = state.release
+        assert rel is not None and rel.pr_number is not None
+        answer = str(
+            interrupt(
+                {
+                    "question": f"Merge release PR #{rel.pr_number} ({rel.tag}) on GitHub, then "
+                    "reply 'merged'; reply 'stop' to end the build without tagging.",
+                    "pr": rel.pr_url,
+                    "tag": rel.tag,
+                    "cost_usd": total_usd(state),
+                    "resume": 'scio build --product <dir> --decision "<merged|stop>"',
+                }
+            )
+        )
+        choice = answer.strip().lower()
+        note = [f"{rel.tag} release PR: {answer.strip()[:120]}"]
+        if choice.startswith(STOP_ANSWERS):
+            return {
+                "phase": "done",
+                "human_notes": note,
+                "ledger": [decision(f"{rel.tag} release PR not merged", source=Role.HUMAN)],
+            }
+        gh = ctx.github
+        if not choice.startswith(MERGE_ANSWERS) or gh is None or not gh.pr_merged(rel.pr_number):
+            return {
+                "phase": "release_merge_wait",
+                "human_notes": note,
+                "ledger": [fact(f"release PR #{rel.pr_number} is not merged yet; asking again")],
+            }
+        try:
+            merged = run_effect(
+                ctx.effects,
+                thread_id=ctx.thread_id,
+                node="release_merge_wait",
+                intent=f"pull:{rel.tag}",
+                apply=lambda: sync_main(ctx),
+            )
+        except SyncRefused as exc:
+            return _halt(ctx, "sync_failed", str(exc))
+        return {
+            "release": rel.model_copy(update={"commit": str(merged)}),
+            "phase": "release_publish",
+            "human_notes": note,
+            "ledger": [decision(f"release PR #{rel.pr_number} merged", source=Role.HUMAN)],
+        }
+
+    return node
+
+
+def after_release_merge_wait(
+    state: ProductBuildState,
+) -> Literal["publish", "release_merge_wait", "done"]:
+    if state.exit_reason is not None:
+        return "done"
+    if state.phase in ("release_publish", "release_merge_wait"):
+        return "publish" if state.phase == "release_publish" else "release_merge_wait"
+    return "done"
+
+
+def release_publish(ctx: RunContext) -> Node:
+    """Tag ``main``'s head (offline: the changelog cut; with GitHub: the release PR's merge),
+    keep the artifacts, and with GitHub push the tag and publish the Release with the
+    artifacts attached. Each step is an effect with a world probe, so a resumed release
+    neither tags nor publishes twice (ADR 0003)."""
+
+    def node(state: ProductBuildState) -> dict[str, Any]:
+        spec, rel = state.spec, state.release
+        assert spec is not None and rel is not None and rel.commit is not None
+        sb = ctx.sandbox
+        changelog = f"{sb.root}/CHANGELOG.md"
+        commit = rel.commit
+        gh = ctx.github
 
         def tag() -> str:
             _git(ctx, "tag", "-a", rel.tag, "-m", f"{spec.title} {rel.tag}", commit)
@@ -1442,7 +1625,7 @@ def release(ctx: RunContext) -> Node:
         run_effect(
             ctx.effects,
             thread_id=ctx.thread_id,
-            node="release",
+            node="release_publish",
             intent=f"tag:{rel.tag}",
             apply=tag,
             probe=lambda: tag_exists(sb, rel.tag),
@@ -1450,17 +1633,16 @@ def release(ctx: RunContext) -> Node:
         artifacts = run_effect(
             ctx.effects,
             thread_id=ctx.thread_id,
-            node="release",
+            node="release_publish",
             intent=f"artifacts:{rel.tag}",
             apply=lambda: build_artifacts(sb, spec, rel.version, rel.tag),
         )
         url: str | None = None
-        gh = ctx.github
         if gh is not None:
             run_effect(
                 ctx.effects,
                 thread_id=ctx.thread_id,
-                node="release",
+                node="release_publish",
                 intent=f"push-tag:{rel.tag}",
                 apply=lambda: _git(ctx, "push", "origin", f"refs/tags/{rel.tag}"),
             )
@@ -1468,7 +1650,7 @@ def release(ctx: RunContext) -> Node:
             url = run_effect(
                 ctx.effects,
                 thread_id=ctx.thread_id,
-                node="release",
+                node="release_publish",
                 intent=f"gh-release:{rel.tag}",
                 apply=lambda: gh.ensure_release(
                     tag=rel.tag,
@@ -1527,6 +1709,8 @@ def build_product_build_graph(
     n("release_check", release_check)
     n("release_decision", release_decision)
     n("release", release)
+    n("release_merge_wait", release_merge_wait)
+    n("release_publish", release_publish)
     n("done", done)
     g.add_edge(START, "load")
     g.add_conditional_edges("load", after_load, {"plan": "plan_milestone", "halt": "done"})
@@ -1571,7 +1755,21 @@ def build_product_build_graph(
         after_release_decision,
         {"release": "release", "release_decision": "release_decision", "done": "done"},
     )
-    g.add_edge("release", "done")
+    g.add_conditional_edges(
+        "release",
+        after_release,
+        {"publish": "release_publish", "merge_wait": "release_merge_wait"},
+    )
+    g.add_conditional_edges(
+        "release_merge_wait",
+        after_release_merge_wait,
+        {
+            "publish": "release_publish",
+            "release_merge_wait": "release_merge_wait",
+            "done": "done",
+        },
+    )
+    g.add_edge("release_publish", "done")
     g.add_edge("done", END)
     return g
 
