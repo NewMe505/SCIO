@@ -846,7 +846,7 @@ def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tupl
             ok = False
             lines.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-1500:]}")
     # Stack-neutral, SCIO's own code: they always run, never "tool absent" (M11).
-    release_lines, release_ok = release_report(sb)
+    release_lines, release_ok = release_report(sb, tc)
     lines += release_lines
     ok = ok and release_ok
     if spec is not None:

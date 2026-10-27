@@ -16,6 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from scio.product.progress import ProgressFile
+from scio.product.release_checks import RUN_END, RUN_START
 from scio.state.models import ProductSpec
 from scio.toolchain import Toolchain, get_toolchain
 
@@ -65,9 +66,9 @@ def _common_files(
     return {
         "README.md": (
             f"# {spec.title}\n\n{spec.vision}\n\n"
-            "## Run\n\n```\n"
-            f"{run_cmd}\n"
-            "```\n\n## Develop\n\n```\n" + "\n".join(develop_cmds) + "\n```\n\n"
+            # the run block: `scio build` runs these commands and so does the product's CI (M11)
+            f"## Run\n\n{RUN_START}\n```\n{run_cmd}\n```\n{RUN_END}\n\n"
+            "## Develop\n\n```\n" + "\n".join(develop_cmds) + "\n```\n\n"
             "Product specification: [PRODUCT.md](PRODUCT.md). "
             "Progress: `.scio/product/progress.json`.\n"
         ),
@@ -86,6 +87,15 @@ def _common_files(
         ),
     }
 
+
+README_RUN_STEP = (
+    "      - name: README run commands\n"
+    "        run: |\n"
+    f"          awk '/{RUN_END[5:-4]}/{{f=0}} f && !/^```/; /{RUN_START[5:]}/{{f=1}}' "
+    "README.md > readme-run.sh\n"
+    "          bash -e readme-run.sh\n"
+)
+"""The product CI step that runs the README's run block, the one ``integrate`` runs (M11)."""
 
 DOCKER_PORT = 8000
 
@@ -173,8 +183,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             '          python-version: "3.12"\n'
             "      - run: pip install ruff pytest\n"
             f"      - run: {lint_cmd}\n"
-            f"      - run: {test_cmd}\n"
-            f"      - run: {tc.skeleton_command(pkg)}\n"
+            f"      - run: {test_cmd}\n" + README_RUN_STEP
         ),
     }
     files.update(
@@ -454,8 +463,7 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             "      - run: npm install\n"
             "      - run: npm run lint\n"
             "      - run: npm run typecheck\n"
-            "      - run: npm test\n"
-            f"      - run: {tc.skeleton_command(pkg)}\n"
+            "      - run: npm test\n" + README_RUN_STEP
         ),
     }
     files.update(

@@ -1,14 +1,22 @@
 """Stack-neutral parts of the product-ready quality bar (M11, ADR 0007 decision 5): the
-secret scan and the release files. Both are SCIO's own code, not a tool the product must
-install, so they run on every machine and are never "skipped: tool absent"."""
+secret scan, the release files and the README's run commands. All are SCIO's own code, not
+a tool the product must install, so they run on every machine and are never "skipped: tool
+absent"; the README commands come from the profile's command words."""
 
 from __future__ import annotations
 
 import math
 import re
+import shlex
 from collections import Counter
 
 from scio.aci.sandbox.base import Sandbox
+from scio.toolchain import Toolchain
+
+RUN_START = "<!-- scio:run -->"
+RUN_END = "<!-- scio:run-end -->"
+"""The README block whose commands must work (PRODUCT_MODE component 5): ``integrate`` runs
+them, and the product's own CI runs the same block."""
 
 RELEASE_FILES = ("README.md", "CHANGELOG.md", "LICENSE", "Dockerfile")
 """What a released product carries besides its code (PRODUCT_MODE component 5)."""
@@ -89,10 +97,42 @@ def missing_release_files(sb: Sandbox) -> list[str]:
     return [f for f in RELEASE_FILES if not sb.exists(f"{sb.root}/{f}")]
 
 
-def release_report(sb: Sandbox) -> tuple[list[str], bool]:
-    """The ``[secrets]`` and ``[release files]`` lines of the integration report."""
+def readme_run_commands(text: str) -> list[str] | None:
+    """The command lines between the run markers (code fences dropped); None without them."""
+    if RUN_START not in text or RUN_END not in text:
+        return None
+    block = text.split(RUN_START, 1)[1].split(RUN_END, 1)[0]
+    lines = (ln.strip() for ln in block.splitlines())
+    return [ln for ln in lines if ln and not ln.startswith("```")]
+
+
+def readme_report(sb: Sandbox, tc: Toolchain) -> tuple[str, bool]:
+    """Run the README's run block. Every command must start with one of the profile's
+    command words (no free-form shell, PRODUCT_MODE component 4) and exit 0."""
+    path = f"{sb.root}/README.md"
+    commands = readme_run_commands(sb.read_text(path)) if sb.exists(path) else None
+    if not commands:
+        return (
+            f"[readme] FAILED: README.md has no run commands between {RUN_START} and {RUN_END}",
+            False,
+        )
+    for command in commands:
+        argv = shlex.split(command)
+        if argv[0] not in tc.command_words:
+            words = ", ".join(tc.command_words)
+            return f"[readme] FAILED: `{command}`: only {words} commands are run", False
+        r = sb.exec(argv, timeout_s=120)
+        if not r.ok:
+            return f"[readme] FAILED: `{command}` exited {r.exit_code}\n{r.output[-800:]}", False
+    return f"[readme] passed: {len(commands)} run command(s)", True
+
+
+def release_report(sb: Sandbox, tc: Toolchain) -> tuple[list[str], bool]:
+    """The ``[secrets]``, ``[release files]`` and ``[readme]`` lines of the integration
+    report."""
     secrets = scan_secrets(sb)
     missing = missing_release_files(sb)
+    readme, readme_ok = readme_report(sb, tc)
     lines = [
         "[secrets] clean"
         if not secrets
@@ -100,5 +140,6 @@ def release_report(sb: Sandbox) -> tuple[list[str], bool]:
         "[release files] present: " + ", ".join(RELEASE_FILES)
         if not missing
         else "[release files] FAILED: missing " + ", ".join(missing),
+        readme,
     ]
-    return lines, not secrets and not missing
+    return lines, not secrets and not missing and readme_ok

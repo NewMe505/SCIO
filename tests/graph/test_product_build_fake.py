@@ -672,6 +672,7 @@ def test_same_spec_builds_in_both_stacks(tmp_path: Path, stack: str) -> None:
         assert "[release files] present: README.md, CHANGELOG.md, LICENSE, Dockerfile" in (
             s.integration
         )
+        assert "[readme] passed: 1 run command(s)" in s.integration
         if stack == "node-ts":
             assert "[typecheck] skipped: tool absent" in s.integration
             assert any("product environment not needed yet" in e.text for e in s.ledger)

@@ -7,16 +7,26 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+import yaml
+
 from scio.aci.sandbox.local import LocalSandbox
 from scio.product.release_checks import (
     ALLOW_MARKER,
     RELEASE_FILES,
+    RUN_END,
+    RUN_START,
     entropy,
     missing_release_files,
+    readme_report,
+    readme_run_commands,
     release_report,
     scan_secrets,
     secrets_in,
 )
+from scio.product.scaffold import scaffold_for
+from scio.state.models import ProductFeature, ProductSpec
+from scio.toolchain import get_toolchain, python_toolchain
 
 AWS = "AK" + "IA" + "Q3EGRZ7XN5VYT2KD"
 GITHUB = "gh" + "p_" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5"
@@ -81,7 +91,7 @@ def test_the_scan_reads_tracked_files_only_and_the_report_fails_on_a_finding(
     (tmp_path / "logo.bin").write_bytes(b"\xff\xfe\x00binary")
     subprocess.run(["git", "add", "logo.bin"], cwd=tmp_path, check=True)
     assert scan_secrets(sb) == ["app/config.py:1: AWS access key id"]
-    lines, ok = release_report(sb)
+    lines, ok = release_report(sb, python_toolchain())
     assert not ok and lines[0].startswith("[secrets] FAILED: 1 likely secret(s)")
     assert lines[1] == "[release files] present: " + ", ".join(RELEASE_FILES)
 
@@ -89,8 +99,56 @@ def test_the_scan_reads_tracked_files_only_and_the_report_fails_on_a_finding(
 def test_a_missing_release_file_fails_the_report(tmp_path: Path) -> None:
     sb = _repo(tmp_path, {"README.md": "# x\n", "LICENSE": "MIT\n"})
     assert missing_release_files(sb) == ["CHANGELOG.md", "Dockerfile"]
-    lines, ok = release_report(sb)
+    lines, ok = release_report(sb, python_toolchain())
     assert not ok and lines == [
         "[secrets] clean",
         "[release files] FAILED: missing CHANGELOG.md, Dockerfile",
+        f"[readme] FAILED: README.md has no run commands between {RUN_START} and {RUN_END}",
     ]
+
+
+def _readme(*commands: str) -> str:
+    return "# P\n\n## Run\n\n" + RUN_START + "\n```\n" + "\n".join(commands) + "\n```\n" + RUN_END
+
+
+def test_the_readme_run_block_is_parsed_without_fences() -> None:
+    assert readme_run_commands(_readme("python -m p --version", "python -m p list")) == [
+        "python -m p --version",
+        "python -m p list",
+    ]
+    assert readme_run_commands("# P\n\n```\npython -m p\n```\n") is None
+
+
+def test_readme_commands_run_from_the_profile_words_only(tmp_path: Path) -> None:
+    tc = python_toolchain()
+    sb = LocalSandbox(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text(_readme('python -c "print(1)"'), encoding="utf-8")
+    assert readme_report(sb, tc) == ("[readme] passed: 1 run command(s)", True)
+    readme.write_text(_readme('python -c "import sys; sys.exit(3)"'), encoding="utf-8")
+    text, ok = readme_report(sb, tc)
+    assert not ok and text.startswith("[readme] FAILED: `python -c")
+    assert "exited 3" in text
+    readme.write_text(_readme("rm -rf build"), encoding="utf-8")
+    text, ok = readme_report(sb, tc)
+    assert not ok and "only python, pytest commands are run" in text
+
+
+@pytest.mark.parametrize("stack", ["python", "node-ts"])
+def test_every_scaffold_carries_the_run_block_and_its_ci_step(stack: str) -> None:
+    spec = ProductSpec(
+        name="shop_api",
+        title="Shop",
+        vision="v",
+        users=["u"],
+        features=[ProductFeature(id="P1", description="d", acceptance=["a"])],
+        quality_bar=["q"],
+        stack=stack,
+    )
+    files = scaffold_for(spec)
+    assert readme_run_commands(files["README.md"]) == [
+        get_toolchain(stack).skeleton_command("shop_api")
+    ]
+    steps = yaml.safe_load(files[".github/workflows/ci.yml"])["jobs"]["checks"]["steps"]
+    run = next(s["run"] for s in steps if s.get("name") == "README run commands")
+    assert "README.md > readme-run.sh" in run and "bash -e readme-run.sh" in run
