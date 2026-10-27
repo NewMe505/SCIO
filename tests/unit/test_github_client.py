@@ -19,6 +19,9 @@ class FakeGh:
         self.milestones: dict[str, int] = {}  # title -> number
         self.issues: dict[int, dict[str, object]] = {}  # number -> issue
         self.merged: set[int] = set()
+        self.releases: dict[str, dict[str, object]] = {}  # tag -> release
+        self.fail_next_release = False
+        """Make the next ``release create`` fail once (a crash between tag and Release)."""
         self.next_id = 100
 
     def __call__(self, argv: Sequence[str], *, stdin: str | None = None) -> RunResult:
@@ -56,6 +59,22 @@ class FakeGh:
                 "milestone": a[a.index("--milestone") + 1] if "--milestone" in a else None,
             }
             return RunResult(0, f"https://github.com/o/r/issues/{n}\n", "")
+        if a[:2] == ["release", "view"]:
+            rel = self.releases.get(a[2])
+            return (
+                RunResult(0, json.dumps({"url": rel["url"]}), "")
+                if rel
+                else RunResult(1, "", "release not found")
+            )
+        if a[:2] == ["release", "create"]:
+            if self.fail_next_release:
+                self.fail_next_release = False
+                return RunResult(1, "", "HTTP 502: Bad Gateway")
+            tag = a[2]
+            assets = a[a.index("--verify-tag") + 1 :]
+            url = f"https://github.com/o/r/releases/tag/{tag}"
+            self.releases[tag] = {"url": url, "notes": stdin, "assets": assets}
+            return RunResult(0, url + "\n", "")
         if a[0] == "api":
             path = next(x for x in a[1:] if x.startswith("repos/"))
             if "/milestones" in path:
@@ -246,3 +265,20 @@ def test_pr_merged_reads_the_merge_state(gh: tuple[GitHubClient, FakeGh]) -> Non
     assert client.pr_merged(pr.number) is False
     fake.merged.add(pr.number)
     assert client.pr_merged(pr.number) is True
+
+
+def test_ensure_release_creates_once_with_its_assets(gh: tuple[GitHubClient, FakeGh]) -> None:
+    """M11: the release gate's GitHub step is idempotent by tag."""
+    client, fake = gh
+    assert client.find_release("v0.1.0") is None
+    url = client.ensure_release(
+        tag="v0.1.0", title="Todo v0.1.0", notes="### Added\n- x\n", assets=["a.tar.gz"]
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.1.0"
+    assert fake.releases["v0.1.0"]["assets"] == ["a.tar.gz"]
+    assert fake.releases["v0.1.0"]["notes"] == "### Added\n- x\n"
+    again = client.ensure_release(tag="v0.1.0", title="Todo v0.1.0", notes="n", assets=[])
+    assert again == url and client.find_release("v0.1.0") == url
+    creates = [a for a, _ in fake.calls if a[:2] == ["release", "create"]]
+    assert len(creates) == 1 and "--verify-tag" in creates[0]
+    assert [(w.op, w.noop) for w in client.writes] == [("release", False), ("release", True)]

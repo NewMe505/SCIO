@@ -20,7 +20,7 @@ from scio.graph.run_context import RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
-from scio.harness.github.client import GitHubClient
+from scio.harness.github.client import GitHubClient, GitHubError
 from scio.harness.providers.fake import FakeProvider
 from scio.harness.retry import RetryPolicy
 from scio.harness.types import CompletionRequest
@@ -219,9 +219,20 @@ def test_two_milestone_product_builds_through_the_task_graph(tmp_path: Path) -> 
         assert [f.status for f in progress.features] == ["done", "done", "todo"]
         assert progress.feature("P2") and progress.feature("P2").commit == p2.commit_sha
 
+        # the last merge leads to the release gate (M11): the bar is green on main, a human
+        # approves, the changelog is cut, the tag and the artifact exist
         out = resume_build(ctx, "merged")
-        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+        assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
         assert out.state.milestones_done == ["M1", "M2"]
+        rel = out.state.release
+        assert rel is not None and rel.ok and rel.tag == "v0.1.0"
+        assert out.interrupt and out.interrupt["tag"] == "v0.1.0"
+        assert "[secrets] clean" in out.interrupt["report"]
+        out = resume_build(ctx, "release")
+        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+        rel = out.state.release
+        assert rel is not None and rel.commit and rel.url is None
+        assert rel.artifacts == [".scio/sandbox/release/v0.1.0/todo_cli-0.1.0.tar.gz"]
     finally:
         ctx.close()
 
@@ -234,6 +245,12 @@ def test_two_milestone_product_builds_through_the_task_graph(tmp_path: Path) -> 
         sum("[scio:merge:" in x for x in main) == 2
         and sum("[scio:progress:" in x for x in main) == 2
     )
+    assert main[0] == "chore(release): v0.1.0 [scio:release:v0.1.0]"
+    assert (
+        _git(repo, "rev-parse", "v0.1.0^{commit}") == rel.commit == _git(repo, "rev-parse", "HEAD")
+    )
+    assert "## [0.1.0] - " in (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert (repo / rel.artifacts[0]).stat().st_size > 0
     assert _git(repo, "status", "--porcelain") == ""
     notes = (repo / "NOTES.md").read_text(encoding="utf-8")
     assert "M1 Milestone 1 merged" in notes and "M2 Milestone 2 merged" in notes
@@ -356,6 +373,35 @@ def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> No
         assert progress.milestones[0].pr_number == s.pr.number
         assert progress.feature("P1") and progress.feature("P1").issue == s.issues["P1"]
         assert _git(repo, "merge-base", "--is-ancestor", "milestone/1", "main") == ""
+
+        # M11: M2 merges on GitHub, the release gate approves, the tag is pushed, and the
+        # Release create fails once; the resume publishes it once and pushes nothing twice
+        m2 = out.state.pr
+        assert m2 is not None and m2.number is not None
+        subprocess.run(
+            ["git", "update-ref", "refs/heads/main", "refs/heads/milestone/2"],
+            cwd=origin,
+            check=True,
+        )
+        fake.merged.add(int(m2.number))
+        out = resume_build(ctx, "merged")
+        assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
+        assert "publish a GitHub Release" in str(out.interrupt["question"])
+        fake.fail_next_release = True
+        with pytest.raises(GitHubError, match="502"):
+            resume_build(ctx, "release")
+        assert _git(origin, "rev-parse", "v0.1.0^{commit}") == _git(
+            repo, "rev-parse", "v0.1.0^{commit}"
+        )
+        out = resume_build(ctx, None)
+        assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
+        rel = out.state.release
+        assert rel is not None and rel.url == "https://github.com/o/r/releases/tag/v0.1.0"
+        assert creates(["release", "create"]) == 2  # the failed one and the one that stuck
+        assert list(fake.releases) == ["v0.1.0"]
+        assets = fake.releases["v0.1.0"]["assets"]
+        assert isinstance(assets, list) and str(assets[0]).endswith("todo_cli-0.1.0.tar.gz")
+        assert "### Added" in str(fake.releases["v0.1.0"]["notes"])
     finally:
         ctx.close()
 
@@ -759,6 +805,41 @@ def test_a_feature_below_the_coverage_floor_is_fixed_inside_its_own_run(tmp_path
     finally:
         ctx.close()
     assert (tmp_path / "product" / "tests" / "test_todos_errors.py").is_file()
+
+
+def test_the_release_gate_can_be_declined_reentered_and_is_idempotent(tmp_path: Path) -> None:
+    """M11: 'stop' at the release gate ends the build with nothing tagged; a later build of
+    the finished product goes straight to the gate and releases; a build after that finds
+    the tag and ends with nothing to do. No duplicate tag or changelog cut."""
+    harness = _bootstrap(tmp_path, ScriptedResponder(milestone_size=4))  # one milestone
+    repo = tmp_path / "product"
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        out = resume_build(ctx, "merge")
+        assert out.paused and out.state.phase == "release_decision"
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+    finally:
+        ctx.close()
+    assert _git(repo, "tag", "--list") == ""
+
+    for thread in (build_thread_id(PRODUCT, 2), "build-todo_cli-again"):
+        ctx = _ctx(tmp_path, harness, thread)
+        try:
+            out = run_build(ctx)
+            if thread.endswith("-m2"):  # every feature done: plan -> the release gate
+                assert out.paused and out.state.phase == "release_decision", out.state.ledger
+                out = resume_build(ctx, "release")
+            assert not out.paused and out.state.phase == "done"
+            assert out.state.release and out.state.release.tag == "v0.1.0"
+        finally:
+            ctx.close()
+    assert "v0.1.0 already exists" in out.state.ledger[-1].text
+    assert _git(repo, "tag", "--list") == "v0.1.0"
+    assert sum("[scio:release:v0.1.0]" in s for s in _subjects(repo)) == 1
+    assert _git(repo, "status", "--porcelain") == ""
 
 
 def test_progress_sync_with_product_md_survives_the_first_feature_reset(tmp_path: Path) -> None:

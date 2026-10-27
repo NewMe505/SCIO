@@ -99,6 +99,11 @@ def _print_build(outcome: Any) -> None:
     from scio.product.build import total_usd
 
     print(f"usd {total_usd(s):.4f} (orchestrator {s.budgets.usd_used:.4f})")
+    if s.release is not None:  # the release gate (M11)
+        shipped = s.release.url or ", ".join(s.release.artifacts) or "not tagged"
+        print(f"release {s.release.tag} {'green' if s.release.ok else 'FAILED'}: {shipped}")
+        if not s.release.ok:
+            print(s.release.report[-2000:])
     if outcome.interrupt:
         print("PAUSED for a human:")
         print(json.dumps(outcome.interrupt, indent=2, default=str))

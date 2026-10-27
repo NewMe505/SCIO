@@ -518,6 +518,22 @@ class MilestonePR(BaseModel):
     """Offline: where the PR body was written instead."""
 
 
+class ReleaseRecord(BaseModel):
+    """The release gate's outcome (M11): what was checked on ``main`` and what was shipped."""
+
+    version: str
+    tag: str
+    report: str
+    """The product-ready bar on ``main``, as ``integrate`` reports it."""
+    ok: bool
+    commit: str | None = None
+    """The changelog-cut commit the tag points at, once tagged."""
+    artifacts: list[str] = Field(default_factory=list)
+    """Repository-relative paths under ``.scio/sandbox/release/`` (git-ignored)."""
+    url: str | None = None
+    """The GitHub Release, when the build runs with ``--gh``."""
+
+
 ProductBuildPhase = Literal[
     "load",
     "plan",
@@ -528,6 +544,9 @@ ProductBuildPhase = Literal[
     "pr",
     "merge_wait",
     "update",
+    "release_check",
+    "release_decision",
+    "release",
     "done",
     "halted",
 ]
@@ -557,9 +576,12 @@ class ProductBuildState(BaseModel):
     """The human answered ``merge and stop``: record the milestone, then end the thread instead
     of planning the next milestone (``scio build`` starts a new thread for it)."""
     milestones_done: list[str] = Field(default_factory=list)
+    release: ReleaseRecord | None = None
+    """Set by the release gate once no milestone remains (M11)."""
     exit_reason: str | None = None
     """None while running or on success; ``feature_failed``, ``integration_failed``,
-    ``gate_escalated``, ``stopped``, ``budget`` or ``load_failed`` otherwise."""
+    ``gate_escalated``, ``stopped``, ``budget``, ``load_failed`` or ``release_failed``
+    otherwise."""
     human_notes: Annotated[list[str], operator.add] = Field(default_factory=list)
     ledger: Annotated[list[LedgerEntry], operator.add] = Field(default_factory=list)
     budgets: Budget

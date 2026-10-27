@@ -952,6 +952,9 @@ graph TD;
 	milestone_pr(milestone_pr)
 	merge_wait(merge_wait)
 	update_progress(update_progress)
+	release_check(release_check)
+	release_decision(release_decision)
+	release(release)
 	done(done)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load;
@@ -970,13 +973,21 @@ graph TD;
 	milestone_gate -.-> gate_decision;
 	milestone_gate -. &nbsp;pr&nbsp; .-> milestone_pr;
 	milestone_pr --> merge_wait;
-	plan_milestone -.-> done;
+	plan_milestone -. &nbsp;halt&nbsp; .-> done;
 	plan_milestone -.-> issues;
+	plan_milestone -. &nbsp;release&nbsp; .-> release_check;
+	release --> done;
+	release_check -.-> done;
+	release_check -. &nbsp;decide&nbsp; .-> release_decision;
+	release_decision -.-> done;
+	release_decision -.-> release;
 	update_progress -.-> done;
 	update_progress -. &nbsp;plan&nbsp; .-> plan_milestone;
+	update_progress -. &nbsp;release&nbsp; .-> release_check;
 	done --> __end__;
 	feature -.-> feature;
 	merge_wait -.-> merge_wait;
+	release_decision -.-> release_decision;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
