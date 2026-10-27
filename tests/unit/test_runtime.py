@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import socket
 import sys
 import sysconfig
@@ -224,6 +225,91 @@ def test_run_app_reports_an_exiting_command_and_refuses_remote_urls(tmp_path: Pa
     assert "exited 0" in out and "usage" in out.lower()
     with pytest.raises(ToolError, match="local"):
         run_app(sb, RunAppInput(module="http.server", health_url="http://example.com"), ctx)
+
+
+class AppSandbox(RemoteRecordingSandbox):
+    """A non-local sandbox that plays the in-sandbox app wrapper of ``scio.aci.apps``: the
+    start command writes the pid file (and, for an app that exits, the exit file); the
+    health probe answers ``healthy``."""
+
+    def __init__(self, root: Path, *, exit_code: int | None = None, healthy: bool = True):
+        super().__init__(root)
+        self.files: dict[str, str] = {}
+        self._exit_code = exit_code
+        self._healthy = healthy
+
+    def exec(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        timeout_s: int | None = None,
+        env: Mapping[str, str] | None = None,
+        network: bool | None = None,
+    ) -> ExecResult:
+        self.calls.append((list(argv), network))
+        cmd = " ".join(argv)
+        if cmd.startswith("sh -c nohup"):
+            self.write_text(f"{self.root}/.scio/sandbox/app.pid", "42\n")
+            self.write_text(f"{self.root}/.scio/sandbox/app.log", "serving\n")
+            if self._exit_code is not None:
+                self.write_text(f"{self.root}/.scio/sandbox/app.exit", f"{self._exit_code}\n")
+            return ExecResult(exit_code=0, stdout="", stderr="")
+        if cmd.startswith("sh -c kill"):
+            return ExecResult(exit_code=0, stdout="", stderr="")
+        return ExecResult(exit_code=0 if self._healthy else 7, stdout="", stderr="")
+
+    def read_text(self, path: str) -> str:
+        return self.files.get(path, "")
+
+    def write_text(self, path: str, content: str) -> None:
+        super().write_text(path, content)
+        self.files[path] = content
+
+    def delete(self, path: str) -> None:
+        super().delete(path)
+        self.files.pop(path, None)
+
+
+def test_run_app_on_a_non_local_sandbox_starts_probes_and_stops_inside(tmp_path: Path) -> None:
+    """Issue #58: run_app no longer refuses a Docker sandbox. The app starts detached inside
+    it with the pid wrapper, health is probed with the profile's command from inside, and it
+    is stopped by pid with its log returned and the run files removed."""
+    sb = AppSandbox(tmp_path)
+    tc = python_toolchain()
+    url = "http://127.0.0.1:8000/health"
+    out = run_app(
+        sb, RunAppInput(module="shop_api", health_url=url, timeout_s=10), ToolContext(toolchain=tc)
+    )
+    assert out.splitlines()[0] == f"run_app -m shop_api: healthy: {url}"
+    assert "serving" in out
+    sh, dash_c, start = sb.calls[0][0]
+    words = shlex.split(start)  # nohup sh -c '<inner>' > .scio/sandbox/app.log 2>&1 &
+    assert (sh, dash_c, words[:3], words[4:]) == (
+        "sh",
+        "-c",
+        ["nohup", "sh", "-c"],
+        [">", ".scio/sandbox/app.log", "2>&1", "&"],
+    )
+    assert words[3] == (
+        "'python' '-m' 'shop_api' & echo $! > .scio/sandbox/app.pid; "
+        "wait $!; echo $? > .scio/sandbox/app.exit"
+    )
+    assert (tc.health_probe_argv(url), None) in sb.calls
+    assert any(
+        " ".join(argv).startswith("sh -c kill $(cat .scio/sandbox/app.pid)") for argv, _ in sb.calls
+    )
+    assert not sb.files  # pid, log and exit files are gone
+
+
+def test_run_app_on_a_non_local_sandbox_reports_the_apps_exit_code(tmp_path: Path) -> None:
+    sb = AppSandbox(tmp_path, exit_code=3, healthy=False)
+    tc = python_toolchain()
+    out = run_app(
+        sb, RunAppInput(module="shop_api", args=["--help"], timeout_s=10), ToolContext(toolchain=tc)
+    )
+    assert out.splitlines()[0] == "run_app -m shop_api --help: exited 3"
+    assert [argv[2].split()[0] for argv, _ in sb.calls] == ["nohup", "kill"]  # no probe
 
 
 def test_node_ts_environment_is_node_modules_created_by_the_first_install(tmp_path: Path) -> None:
