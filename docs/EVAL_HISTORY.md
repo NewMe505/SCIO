@@ -8,3 +8,4 @@ One row per nightly suite run (live provider unless noted). Appended by `scripts
 | 2026-10-11 03:40 | capability | anthropic+sonnet_opus_advisor | 3 | 0.67 | 0.67 | 0.00 | 0.00 | $0.91 of $4 | no |
 | 2026-10-12 01:42 | regression | anthropic+sonnet_opus_advisor | 3 | 1.00 | 1.00 | 0.00 | 0.00 | $2.76 of $6 | no |
 | 2026-10-27 03:17 | product | claude_code | 1 | 0.50 | 0.50 | 0.50 | 1.00 | $4.77 | no |
+| 2026-10-27 04:21 | product | claude_code | 1 | 0.50 | 0.50 | 0.00 | 0.00 | $2.47 | no |

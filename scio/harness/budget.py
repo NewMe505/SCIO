@@ -124,6 +124,20 @@ def budget_factor(settings: Any) -> float:
     return 1.0
 
 
+def token_factor(settings: Any) -> float:
+    """How much to scale token caps for the worker backend; differs from the dollar factor.
+
+    A Claude Code turn's tokens are mostly cache reads and writes of its own prompt, cheap per
+    token: the live product evals measured about 380,000 billable tokens per estimated dollar
+    against 125,000 to 200,000 in ``budgets.yaml``, so scaling tokens by the dollar factor made
+    the token cap bind first, at about half a feature's dollar cap (I-099). The ``claude_code``
+    backend scales tokens by ``settings.claude_code_token_factor`` so both caps bind together.
+    """
+    if getattr(settings, "worker_backend", "aci") == "claude_code":
+        return float(getattr(settings, "claude_code_token_factor", 1.0))
+    return 1.0
+
+
 class BudgetsConfig(BaseModel):
     tiers: dict[str, BudgetLimits]
     reserve_output_fraction: float = 1.0
@@ -136,18 +150,23 @@ class BudgetsConfig(BaseModel):
 
     @classmethod
     def for_settings(cls, settings: Any) -> BudgetsConfig:
-        """The tier budgets for a run: ``budgets.yaml`` scaled by :func:`budget_factor`."""
-        return cls.load(settings.budgets_path).scaled(budget_factor(settings))
+        """The tier budgets for a run: ``budgets.yaml`` with dollar caps scaled by
+        :func:`budget_factor` and token caps by :func:`token_factor`."""
+        return cls.load(settings.budgets_path).scaled(
+            budget_factor(settings), tokens=token_factor(settings)
+        )
 
-    def scaled(self, factor: float) -> BudgetsConfig:
-        """Every tier's dollar and token caps multiplied by ``factor`` (I-069)."""
-        if factor == 1.0:
+    def scaled(self, factor: float, *, tokens: float | None = None) -> BudgetsConfig:
+        """Every tier's dollar caps multiplied by ``factor`` (I-069) and token caps by
+        ``tokens`` (the same factor when not given, I-099)."""
+        token_scale = factor if tokens is None else tokens
+        if factor == 1.0 and token_scale == 1.0:
             return self
         tiers = {
             name: lim.model_copy(
                 update={
                     "usd_max": round(lim.usd_max * factor, 4),
-                    "tokens_max": int(lim.tokens_max * factor),
+                    "tokens_max": int(lim.tokens_max * token_scale),
                 }
             )
             for name, lim in self.tiers.items()

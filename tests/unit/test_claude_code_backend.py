@@ -417,14 +417,19 @@ def test_worker_without_a_result_line_fails_loudly(tmp_path: Path) -> None:
 def test_tier_budgets_scale_on_the_claude_code_backend() -> None:
     """I-069: a T0 task that costs $0.11 on the API reads as about $0.57 through Claude Code,
     so the API-price caps in budgets.yaml are scaled for this backend."""
-    from scio.harness.budget import BudgetsConfig, budget_factor
+    from scio.harness.budget import BudgetsConfig, budget_factor, token_factor
 
     aci = Settings(provider_override="fake")
     cc = Settings(provider_override="fake", worker_backend="claude_code")
     assert budget_factor(aci) == 1.0 and budget_factor(cc) == 4.0
+    assert token_factor(aci) == 1.0 and token_factor(cc) == 10.0
     base = BudgetsConfig.load(aci.budgets_path).tiers["T0"]
     scaled = BudgetsConfig.for_settings(cc).tiers["T0"]
-    assert scaled.usd_max == base.usd_max * 4 and scaled.tokens_max == base.tokens_max * 4
+    assert scaled.usd_max == base.usd_max * 4 and scaled.tokens_max == base.tokens_max * 10
+    # I-099: at the measured ~380,000 billable tokens per estimated dollar on this backend,
+    # no tier's token cap binds before about 80% of its dollar cap
+    for tier in BudgetsConfig.for_settings(cc).tiers.values():
+        assert tier.tokens_max >= 0.8 * tier.usd_max * 380_000, tier
     assert scaled.max_iters == base.max_iters and scaled.advisor_calls_max == base.advisor_calls_max
     assert BudgetsConfig.for_settings(aci).tiers["T0"] == base
     custom = Settings(

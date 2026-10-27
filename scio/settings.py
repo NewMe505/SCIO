@@ -86,8 +86,12 @@ class Settings(BaseSettings):
     claude_code_bin: str = "claude"
     """The unmodified Claude Code binary (on PATH, or an absolute path)."""
     claude_code_budget_factor: float = 4.0
-    """Scale for the tier caps in ``budgets.yaml`` on the ``claude_code`` backend: Claude
-    Code's cost estimate for the same work is about four times the API figure (I-069)."""
+    """Scale for the tier dollar caps in ``budgets.yaml`` on the ``claude_code`` backend:
+    Claude Code's cost estimate for the same work is about four times the API figure (I-069)."""
+    claude_code_token_factor: float = 10.0
+    """Scale for the tier token caps on the ``claude_code`` backend: its tokens are mostly
+    cheap cache traffic (about 380,000 billable tokens per estimated dollar in the live product
+    evals), so tokens need a larger factor than dollars for both caps to bind together (I-099)."""
 
 
 def get_settings() -> Settings:

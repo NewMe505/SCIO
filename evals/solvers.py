@@ -26,7 +26,7 @@ from scio.aci.tools import RunTestsInput, ToolError, run_tests
 from scio.graph.nodes.common import acceptance_from_issue_body
 from scio.graph.run import resume_graph, run_graph
 from scio.graph.run_context import RunContext
-from scio.harness.budget import BudgetLimits, BudgetsConfig, budget_factor
+from scio.harness.budget import BudgetLimits, BudgetsConfig, budget_factor, token_factor
 from scio.harness.core import Harness
 from scio.harness.providers.fake import FakeProvider
 from scio.harness.types import Message
@@ -168,7 +168,7 @@ class GraphSolver:
         default_cap = tier_defaults.advisor_calls_max if tier_defaults else 0
         factor = budget_factor(settings)  # I-069: Claude Code estimates run about 4x the API
         limits = BudgetLimits(
-            tokens_max=int(task.tokens * factor),
+            tokens_max=int(task.tokens * token_factor(settings)),  # I-099: its own factor
             usd_max=task.usd * factor,
             advisor_calls_max=int(task.scenario.get("advisor_calls_max", default_cap)),
             max_iters=tier_defaults.max_iters if tier_defaults else 30,

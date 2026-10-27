@@ -165,7 +165,15 @@ def document(ctx: RunContext) -> Node:
             ],
             tags={"thread": ctx.thread_id},
         )
-        body = ctx.harness.structured(pr_req, PRBody).value
+        try:
+            body = ctx.harness.structured(pr_req, PRBody).value
+        except BudgetExceeded as exc:  # I-098: an unguarded call crashed a live product build
+            entry = fact(f"budget exhausted writing the PR body: {exc.message}", source=Role.SYSTEM)
+            return {
+                "exit_reason": ExitReason.BUDGET,
+                "task_ledger": [entry],
+                **ctx.budget_update(),
+            }
         body_text = render_pr_body(state, body, docs_check)
         body_ref = ctx.artifacts.put(
             "pr_body", body_text, produced_by=Role.DOCUMENTER, name="pr-body"

@@ -8,8 +8,9 @@ from typing import Any, Literal
 from scio.context.assembler import router_message
 from scio.graph.nodes.common import acceptance_from_issue_body, fact, features_from_acceptance
 from scio.graph.run_context import RunContext
+from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
-from scio.state.models import Role, RouterOutput, Routing, SCIOState, Tier
+from scio.state.models import ExitReason, Role, RouterOutput, Routing, SCIOState, Tier
 
 Node = Callable[[SCIOState], dict[str, Any]]
 
@@ -72,7 +73,15 @@ def route(ctx: RunContext) -> Node:
             messages=[Message.user(router_message(state.task, repo_stats=stats))],
             tags={"thread": ctx.thread_id},
         )
-        result = ctx.harness.structured(req, RouterOutput)
+        try:
+            result = ctx.harness.structured(req, RouterOutput)
+        except BudgetExceeded as exc:  # every model call in a node is guarded (I-098)
+            entry = fact(f"budget exhausted at routing: {exc.message}", source=Role.SYSTEM)
+            return {
+                "exit_reason": ExitReason.BUDGET,
+                "task_ledger": [entry],
+                **ctx.budget_update(),
+            }
         out = result.value
         routing = Routing(
             tier=out.tier,
