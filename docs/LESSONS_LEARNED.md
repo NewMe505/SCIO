@@ -520,11 +520,11 @@ Lessons:
 ### What succeeded
 - The release gate caught two real defects that every per-feature check had passed: a flaky scripted server (I-096) on the Fake, and nothing on live p001, whose release was clean. Running the whole bar once more on `main` is cheap and earned its place on its first day.
 - The honest coverage floor plus the verify-time check works as designed on the Fake: P2 at 93% against a floor of 95 failed its own verify (`quality`), went to the debugger, gained the error-path tests and passed in its second iteration; without the verify step the milestone halts at `integrate`.
-- Live p001 (a CLI todo app with tags and JSON export) went from a fixed `PRODUCT.md` to a released v0.1.0 with 3 of 3 features over 2 milestones, the 5 hidden black-box tests green, no intervention beyond the designed merge and release stops: $3.96 estimated, 24.5 minutes, nothing billed.
+- On the final commit all three product evals pass live, in parallel: a CLI todo app with tags and JSON export (p001, 3 features), a REST todo API (p002, 2 features) and a todo web app graded in a real browser (p003, 2 features), each from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass, with no intervention beyond the designed merge and release stops: $11.63 estimated in all, 21 to 31 minutes each, nothing billed.
 - Writing guards before trusting green found more than the guards themselves: the offline I-085 test found I-088, the I-090 sweep found the bootstrap probe's regex bug, the I-085 sweep found the uncommitted progress sync.
 
 ### The live product evals (2026-10-27, Claude Code backend, the owner's Max login, nothing billed)
-Every attempt, one trial each; dollars are Claude Code's API-price estimates. First attempts passed 1 of 3, and each failure was a defect in SCIO, not in the model's work.
+Every attempt, one trial each; dollars are Claude Code's API-price estimates. First attempts passed 1 of 3, and each failure was a defect in SCIO, not in the model's work. On the final commit all three pass.
 
 | task | commit | result | features (tier, iterations, cost) | release | hidden | estimate | time | stops / interventions | found |
 |---|---|---|---|---|---|---:|---:|---|---|
@@ -535,7 +535,11 @@ Every attempt, one trial each; dollars are Claude Code's API-price estimates. Fi
 | p003 web app | `94b8849` | pass | P1 T1 3 $1.75; P2 T1 2 $1.71 (1 escalation) | v0.1.0 | 4 passed in Chromium | $3.51 | 24.4 min | 2 / 0 | both features planned at T1, so this run did not exercise I-099 (the measured ratio and its unit test are the evidence) |
 | p001 CLI todo | `94b8849` | pass | P1 T0 1 $0.56; P2 T1 3 $1.72; P3 T1 2 $1.44 | v0.1.0 | 5 passed | $3.84 | 25.6 min | 3 / 0 | none |
 | p002 REST API | `94b8849` | crash | P1's PR body: Claude Code's schema check refused every answer within three turns | none | not run | not recorded | 5.6 min | 0 / 0 | I-100 |
-| p001, p002, p003 | final | PENDING | | | | | | | |
+| p001 CLI todo | `dda626f` | pass | P1 T0 $0.82; P2 T1 $1.26; P3 T1 $2.19 (one milestone) | v0.1.0 | 5 passed | $4.41 | 31.0 min | 2 / 0 | none |
+| p002 REST API | `dda626f` | pass | P1 T0 $0.76; P2 T1 $1.90 | v0.1.0 | 5 passed | $2.79 | 21.0 min | 2 / 0 | none |
+| p003 web app | `dda626f` | pass | P1 T1 $2.03; P2 T1 $2.27 | v0.1.0 | 4 passed in Chromium | $4.43 | 30.6 min | 2 / 0 | none |
+
+On the final commit `dda626f` all three pass, one trial each, run in parallel: $11.63 estimated in all, nothing billed, no intervention beyond the designed merge and release stops. Across the day: 7 passes in 10 attempts; each of the other 3 (one failure, two crashes) found SCIO defects (I-097; I-098 with I-099; I-100), fixed with a guard before the next attempt.
 
 ### What failed
 - Live p002's first run halted at its first feature (I-097): the coder rightly found the health endpoint already built and "proved" it with black-box tests that skip outside `integrate`; verify accepted an all-skipped run, and only the model gate's `replan` noticed. The M3 lesson covered "no tests collected" but not "all skipped". A pass that ran nothing is not a pass, in every reader of a test run.

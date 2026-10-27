@@ -11,3 +11,4 @@ One row per nightly suite run (live provider unless noted). Appended by `scripts
 | 2026-10-27 04:21 | product | claude_code | 1 | 0.50 | 0.50 | 0.00 | 0.00 | $2.47 | no |
 | 2026-10-27 05:07 | product | claude_code | 1 | 1.00 | 1.00 | 1.00 | 1.00 | $3.51 | no |
 | 2026-10-27 05:38 | product | claude_code | 1 | 0.50 | 0.50 | 0.00 | 0.00 | $3.87 | no |
+| 2026-10-27 06:33 | product | claude_code | 1 | 1.00 | 1.00 | 1.00 | 1.00 | $11.63 | no |
