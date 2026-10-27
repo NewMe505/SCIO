@@ -10,6 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - CI runs the test suite in parallel (pytest-xdist, twice the runner's cores); `pytest-xdist` joins the dev group (issue #58).
 - With `--gh` a product's release goes through a release PR, as SCIO's own do: `release` cuts the changelog on `release/v<version>` (with the last progress record), pushes it and opens the PR; `release_merge_wait` stops until GitHub shows it merged; `release_publish` tags the merge commit, so the tag is on `main`'s history, and publishes the GitHub Release. Offline the release is unchanged (I-103). New state fields `ReleaseRecord.pr_number` and `pr_url`.
 ### Fixed
+- A node-ts product can build in the Docker sandbox: the sandbox image carries Node 22 next to Python, each profile names a capability probe (`sandbox_probe`; node-ts: Node with TypeScript type stripping) that the readiness check runs inside the image, and `scio build` reads `PRODUCT.md`'s stack before choosing the backend, falling back to local with the reason when the image cannot run the stack (I-101).
 - In GitHub mode a squash- or rebase-merged milestone PR no longer breaks the next milestone: after a confirmed merge `scio build` resets local `main` to origin's when only SCIO's own bookkeeping commits are local and origin's `progress.json` still records them, and halts with `sync_failed` (naming the commits) when a human's commit exists only locally (I-102).
 
 ## [0.7.0] - 2026-10-27

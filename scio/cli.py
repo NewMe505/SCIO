@@ -131,9 +131,14 @@ def _build(args: argparse.Namespace) -> int:
         return 2
     progress = ProgressFile.from_json(progress_path.read_text(encoding="utf-8"))
     settings = get_settings()
-    # Docker by default for product builds when it is there (M9); the reason lands in the
-    # build ledger from `load`.
-    backend, _reason = product_sandbox_backend(settings)
+    # Docker by default for product builds when it is there (M9) and the image can run the
+    # product's stack, read from PRODUCT.md before any sandbox exists (I-101); the reason
+    # lands in the build ledger from `load`.
+    from scio.product.progress import PRODUCT_MD, parse_product_md
+    from scio.toolchain import get_toolchain
+
+    stack = parse_product_md((args.product / PRODUCT_MD).read_text(encoding="utf-8")).stack
+    backend, _reason = product_sandbox_backend(settings, get_toolchain(stack))
     settings = settings.model_copy(update={"sandbox_backend": backend})
     gh_repo = args.gh or settings.gh_repo
     harness = _scripted_harness(settings)

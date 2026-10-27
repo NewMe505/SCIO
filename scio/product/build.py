@@ -463,7 +463,7 @@ def load(ctx: RunContext) -> Node:
         )
         # Which sandbox this build runs in and why (M9): Docker by default when it is there;
         # a local fallback says what it does not enforce.
-        entries.append(fact(product_sandbox_backend(ctx.settings)[1]))
+        entries.append(fact(product_sandbox_backend(ctx.settings, ctx.toolchain)[1]))
         # The install phase (M9): the product environment with the approved dependencies,
         # network open for this step only; every later command runs inside it, offline.
         try:

@@ -136,6 +136,12 @@ class Toolchain(Protocol):
         ...
 
     @property
+    def sandbox_probe_argv(self) -> tuple[str, ...]:
+        """A command that exits 0 inside a sandbox image able to build this stack (issue
+        #58, I-101): run before a product build picks Docker; empty means no requirement."""
+        ...
+
+    @property
     def command_words(self) -> tuple[str, ...]:
         """Commands a walking-skeleton criterion may name (``python``, ``node``); any other
         backticked command is rewritten by the spec normaliser (ADR 0013 decision 8)."""

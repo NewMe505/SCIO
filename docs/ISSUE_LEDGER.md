@@ -824,8 +824,9 @@ Template:
 - Found: 2026-10-27 · issue #58 inventory (read-only) · `docker/sandbox.Dockerfile` is `python:3.12-slim` plus git; `docker_product_ready` (`scio/aci/sandbox/docker.py`) probes git only; `product_sandbox_backend` runs in `scio/cli.py` before `PRODUCT.md`'s stack is known, and `adopt_toolchain` never changes the image
 - Symptom: not yet seen live (the dev machine has no Docker; CI's docker-live tests are Python only): a node-ts build on a machine with the image would fail at its first `npm` or `node` command inside the container
 - Root cause: the backend choice and the image are stack-blind; M10 made every command stack-neutral but not the sandbox's runtime
-- Fix: open (issue #58 slice 5)
-- Status: open
+- Fix: `docker/sandbox.Dockerfile` carries Node 22 next to Python (copied from `node:22-slim`; one image because the egress proxy runs this image's python); each profile names a `sandbox_probe` (python 3.12+; node-ts: Node with TypeScript type stripping, a capability rather than a binary) exposed as `Toolchain.sandbox_probe_argv`; `docker_product_ready` runs it inside the image; `product_sandbox_backend` takes the toolchain, and `scio build` reads `PRODUCT.md`'s stack before choosing, so a node-ts product never lands in an image that cannot run it (it falls back to local with the reason)
+- Sweep: every caller of the backend choice (`grep -rn "product_sandbox_backend(" scio`): the CLI and `load`'s ledger line, both pass the toolchain now. Guards: `test_auto_probes_the_image_for_the_product_stack`, `test_the_readiness_check_runs_the_probe_inside_the_image`, `test_each_profile_probe_passes_on_a_machine_that_has_the_stack` (the yaml probes run for real here and in CI), and docker-live's `test_a_node_product_installs_and_tests_inside_the_container` (a real `npm install` through the allowlist proxy, `node --test` on a TypeScript test inside the container; written blind, the first CI run is the experiment)
+- Status: open until the docker-live run passes
 
 ### I-102 · In GitHub mode a squash or rebase merge of a milestone PR breaks the next milestone's `pull --ff-only`
 - Found: 2026-10-27 · issue #58 inventory (read-only) · `merge_wait` pulls `main` with `--ff-only`; local `main` carries the previous milestone's progress commit, which a squash merge replaces with a new SHA on origin, so the histories diverge and `_git` raises

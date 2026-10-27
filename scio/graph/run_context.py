@@ -28,13 +28,17 @@ from scio.toolchain import Toolchain, detect_toolchain, get_toolchain
 T0_TOOL_CAP = 10
 
 
-def product_sandbox_backend(settings: Settings) -> tuple[str, str]:
+def product_sandbox_backend(
+    settings: Settings, toolchain: Toolchain | None = None
+) -> tuple[str, str]:
     """The sandbox backend a product build runs with and a one-line reason for the ledger.
 
-    ``product_sandbox_backend=auto`` (the default) picks Docker when a daemon answers and the
-    worker backend is SCIO's own loop; it falls back to ``local`` otherwise, saying why, so a
-    build never fails for want of Docker but never claims isolation it does not have (M9,
-    ADR 0013 decision 10). An explicit ``local`` or ``docker`` is taken as given.
+    ``product_sandbox_backend=auto`` (the default) picks Docker when a daemon answers, the
+    worker backend is SCIO's own loop and the image passes the product's stack probe
+    (``toolchain.sandbox_probe_argv``: a node-ts product needs Node with type stripping in
+    the image, I-101); it falls back to ``local`` otherwise, saying why, so a build never
+    fails for want of Docker but never claims isolation it does not have (M9, ADR 0013
+    decision 10). An explicit ``local`` or ``docker`` is taken as given.
     """
     choice = settings.product_sandbox_backend
     if choice == "local":
@@ -51,7 +55,8 @@ def product_sandbox_backend(settings: Settings) -> tuple[str, str]:
         )
     from scio.aci.sandbox.docker import docker_product_ready
 
-    why_not = docker_product_ready(settings.sandbox_docker_image)
+    probe = toolchain.sandbox_probe_argv if toolchain is not None else ()
+    why_not = docker_product_ready(settings.sandbox_docker_image, probe)
     if why_not is None:
         return "docker", (
             f"sandbox: docker ({settings.sandbox_docker_image}; internal network, egress "

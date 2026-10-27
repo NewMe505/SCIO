@@ -90,10 +90,12 @@ def host_git_identity() -> tuple[str, str]:
     return out[0] or "SCIO", out[1] or "scio@localhost"
 
 
-def docker_product_ready(image: str) -> str | None:
+def docker_product_ready(image: str, probe: Sequence[str] = ()) -> str | None:
     """None when a product build can run in Docker with ``image``, else the reason it cannot:
-    no daemon, the image is not available locally, or it has no ``git`` (product builds run
-    git through the sandbox; ``docker/sandbox.Dockerfile`` adds it to the Python image)."""
+    no daemon, the image is not available locally, it has no ``git`` (product builds run git
+    through the sandbox; ``docker/sandbox.Dockerfile`` adds it), or it fails the stack's
+    ``probe`` (a toolchain's ``sandbox_probe_argv``: Node with type stripping for node-ts,
+    I-101)."""
     if not docker_ready():
         return "no Docker daemon reachable"
     try:
@@ -111,6 +113,20 @@ def docker_product_ready(image: str) -> str | None:
         return f"docker did not answer: {exc}"
     if git.returncode != 0:
         return f"image {image} has no git (build docker/sandbox.Dockerfile)"
+    if probe:
+        try:
+            ran = subprocess.run(
+                ["docker", "run", "--rm", "--network", "none", image, *probe],
+                capture_output=True,
+                timeout=180,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"docker did not answer: {exc}"
+        if ran.returncode != 0:
+            return (
+                f"image {image} cannot run this stack ({probe[0]} probe failed; build "
+                "docker/sandbox.Dockerfile)"
+            )
     return None
 
 

@@ -249,3 +249,48 @@ def test_the_scaffold_dockerfile_builds_and_runs(tmp_path: Path, stack: str, kin
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
     finally:
         subprocess.run(["docker", "image", "rm", "-f", tag], capture_output=True, timeout=120)
+
+
+def test_a_node_product_installs_and_tests_inside_the_container(tmp_path: Path, image: str) -> None:
+    """I-101 (issue #58): the sandbox image runs a node-ts product. A real ``npm install``
+    reaches the registry only through the allowlist proxy, then ``node --test`` runs a
+    TypeScript test (type stripping) that imports the installed package. Written without a
+    local daemon: the first docker-live run is the experiment."""
+    from scio.toolchain import node_ts_toolchain
+
+    tc = node_ts_toolchain()
+    sb = DockerSandbox(
+        tmp_path,
+        image=image,
+        limits=Limits(
+            timeout_s=300,
+            memory_mb=1024,
+            cpus=1.0,
+            network_allowlist=tc.runtime().index_allowlist,
+        ),
+        git_identity=("SCIO CI", "ci@scio.local"),
+    )
+    try:
+        assert sb.exec(list(tc.sandbox_probe_argv)).ok, "the image fails the node-ts probe"
+        sb.write_text(
+            "/work/package.json",
+            '{"name": "p", "version": "0.1.0", "private": true, "type": "module"}\n',
+        )
+        sb.write_text(
+            "/work/tests/num.test.ts",
+            'import { test } from "node:test";\n'
+            'import assert from "node:assert/strict";\n'
+            'import isNumber from "is-number";\n\n'
+            'test("the installed package loads", () => {\n'
+            "  const n: number = 3;\n"
+            "  assert.equal(isNumber(n), true);\n"
+            "});\n",
+        )
+        summary = ensure_product_env(sb, tc, ["is-number@7.0.0"])
+        assert "installed is-number@7.0.0" in summary, summary
+        assert sb.exists("/work/node_modules/is-number/package.json")
+        r = sb.exec(tc.test_argv(filter=None, path=None), timeout_s=120)
+        assert tc.test_outcome(r.exit_code, r.stdout) == "passed", r.output
+        assert "# pass 1" in r.stdout
+    finally:
+        sb.close()
