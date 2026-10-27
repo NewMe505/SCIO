@@ -177,3 +177,65 @@ def test_walking_skeleton_criteria_never_need_an_installed_entry_point() -> None
     ]
     assert any("2 rewritten" in n for n in notes)
     assert spec.features[1].acceptance == ["`tagtodo add x` stores x"]  # later features untouched
+
+
+@pytest.mark.parametrize(
+    ("stack", "bar", "kept", "replaced"),
+    [
+        (
+            "python",
+            [
+                "Tests use only the stdlib unittest module (python -m unittest discover)",
+                "Targets Python 3.11 or higher",
+                "Zero third-party test packages",
+                "lint clean with ruff",
+                "Runs on Python 3.12 and 3.13",
+            ],
+            ["lint clean with ruff", "Runs on Python 3.12 and 3.13"],
+            3,
+        ),
+        ("node-ts", ["tests pass under jest", "Node 20 support", "tsc --noEmit is clean"], 1, 2),
+    ],
+)
+def test_a_quality_bar_never_promises_tools_the_profile_does_not_use(
+    stack: str, bar: list[str], kept: list[str] | int, replaced: int
+) -> None:
+    """I-107: the graphcalc interview offered "pytest or only unittest?" and the approved bar
+    said unittest and Python 3.11; the python profile's skeleton, CI and pyproject use pytest
+    and 3.12. A line that promises other tools is replaced by the profile's fact, quoting the
+    original, so the owner sees the change in the draft they approve."""
+    from scio.product.spec import normalise_spec
+    from scio.state.models import ProductSpecOutput
+
+    out = ProductSpecOutput(
+        product_name="graphcalc",
+        title="t",
+        vision="v",
+        users=["u"],
+        features=[ProductFeature(id="P1", description="skeleton", acceptance=["it starts"])],
+        quality_bar=bar,
+        stack=stack,
+    )
+    spec, notes = normalise_spec(out)
+    swapped = [q for q in spec.quality_bar if "(replaces: " in q]
+    assert len(swapped) == replaced and len(spec.quality_bar) == len(bar)
+    assert sum("contradicts the" in n for n in notes) == replaced
+    if isinstance(kept, list):
+        assert all(k in spec.quality_bar for k in kept)  # 3.12+ and ruff are the profile's own
+    if stack == "python":
+        assert spec.quality_bar[0].startswith("Tests run with pytest")
+        assert spec.quality_bar[1].startswith("Targets Python 3.12 or newer")
+        assert "Targets Python 3.11 or higher" in spec.quality_bar[1]  # the original, quoted
+
+
+def test_the_interviewer_and_planner_see_what_each_stack_fixes() -> None:
+    """I-107: the stack menu names each profile's fixed tools, and both prompts render it."""
+    from scio.product.spec import stack_menu
+    from scio.prompt.registry import PromptRegistry
+
+    menu = stack_menu()
+    assert "pytest" in menu and "Python 3.12 or newer" in menu and "node --test" in menu
+    reg = PromptRegistry()
+    for role in ("interviewer", "product_planner"):
+        text = reg.get(role).render(stacks=menu)
+        assert "pytest" in text and "{{" not in text, role

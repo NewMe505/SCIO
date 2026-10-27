@@ -27,9 +27,10 @@ EXPECTED_ROLES = {
 def test_registry_has_every_role_at_v1() -> None:
     reg = PromptRegistry()
     assert set(reg.roles()) == EXPECTED_ROLES
-    # Templates are static (cacheable). The one placeholder is the product planner's stack
-    # menu, rendered from the toolchain registry: constant for a SCIO version (M10).
-    static_values = {"product_planner": ["stacks"]}
+    # Templates are static (cacheable). The one placeholder is the stack menu, rendered from
+    # the toolchain registry: constant for a SCIO version (M10); the interviewer reads it too,
+    # so it never offers a choice a stack's fixed tools settle (I-107).
+    static_values = {"product_planner": ["stacks"], "interviewer": ["stacks"]}
     for role in EXPECTED_ROLES:
         t = reg.get(role)
         assert t.version >= 1 and t.text.strip()

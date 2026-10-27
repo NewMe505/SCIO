@@ -321,3 +321,21 @@ def test_normaliser_speaks_the_stacks_skeleton_language() -> None:
     assert spec_py.features[0].acceptance[0] == (
         "`python -m shop --version` prints the version and exits 0"
     )
+
+
+def test_a_thread_records_the_spend_of_every_invocation(tmp_path: Path) -> None:
+    """I-110: every CLI invocation's budget guard starts at zero, and the state kept only the
+    latest one's spend; the graphcalc interview ($0.91) ended at $0.00 after a publish step
+    that spent nothing. Each step here runs with a fresh harness, as separate processes do."""
+    spends: list[float] = []
+    outcome = None
+    for step in (None, "answers", "approve"):
+        ctx = _ctx(tmp_path, "new-spend")
+        try:
+            outcome = run_product(ctx, prompt=PROMPT) if step is None else resume_product(ctx, step)
+            spends.append(ctx.harness.budget.snapshot().usd_used)
+        finally:
+            ctx.close()
+    assert outcome is not None and outcome.state.phase == "done"
+    assert spends[0] > 0 and spends[1] > 0 and spends[-1] < sum(spends)
+    assert outcome.state.budgets.usd_used == pytest.approx(sum(spends))

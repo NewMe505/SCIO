@@ -10,7 +10,7 @@ stack is a yaml file and a parser module.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -92,9 +92,31 @@ class ProfileToolchain:
     detect: Detect | None = None
     release_image: str = ""
     sandbox_probe_argv: tuple[str, ...] = ()
+    fixed_facts: str = ""
+    quality_bar_conflicts: tuple[tuple[str, str], ...] = ()
+    """(pattern, the profile's fact) pairs: a quality-bar line matching the pattern promises
+    something this profile cannot do and is replaced by the fact (I-107)."""
 
     def quality_checks(self) -> tuple[QualityCheck, ...]:
         return self.checks
+
+    def resolve_quality_bar(self, lines: Sequence[str]) -> tuple[list[str], list[str]]:
+        out: list[str] = []
+        notes: list[str] = []
+        for line in lines:
+            fact = next(
+                (use for pattern, use in self.quality_bar_conflicts if re.search(pattern, line)),
+                None,
+            )
+            if fact is None:
+                out.append(line)
+                continue
+            out.append(f"{fact} (replaces: {line})")
+            notes.append(
+                f"quality bar line {line!r} contradicts the {self.name} profile; "
+                f"replaced by {fact!r}"
+            )
+        return out, notes
 
     def runtime(self) -> Runtime:
         return self.runtime_config
@@ -258,6 +280,10 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         else None,
         release_image=str(data.get("release_image", "")),
         sandbox_probe_argv=tuple(str(a) for a in data.get("sandbox_probe", [])),
+        fixed_facts=str(data.get("fixed_facts", "")).strip(),
+        quality_bar_conflicts=tuple(
+            (str(c["pattern"]), str(c["use"])) for c in data.get("quality_bar_conflicts", [])
+        ),
     )
 
 

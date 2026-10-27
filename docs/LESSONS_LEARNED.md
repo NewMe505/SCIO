@@ -17,6 +17,11 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 9. **Never** run a bare `git stash`; other sessions share the stash stack (owner correction). Guard: `hook:push_gate`
 10. **Always** end a status update with an ETA in minutes and its basis (owner correction). Guard: `manual:` a property of chat replies, not of the repository; kept in the session memory
 11. **Never** commit a Python file that fails `ruff check` or `ruff format --check`; lint runs before the commit, not first at the pre-push chain (I-106). Guard: `hook:push_gate`, `test:test_the_commit_gate_lints_every_changed_python_file`
+12. **Never** let SCIO reset, check out or merge over a hand edit of PRODUCT.md; the edit is committed as bookkeeping on a milestone branch and re-read by the next milestone (I-109). Guard: `symbol:carrying_product_md`, `test:test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main`
+13. **Never** let a quality bar promise tools the stack's profile does not use, and never let the interviewer offer a choice the profile settles (I-107). Guard: `symbol:resolve_quality_bar`, `test:test_a_quality_bar_never_promises_tools_the_profile_does_not_use`, `test:test_the_interviewer_and_planner_see_what_each_stack_fixes`
+14. **Always** read a checkpoint with the model of the graph that wrote it; every kind of thread (task, `scio new`, `scio build`) has a report (I-108). Guard: `symbol:load_product_state`, `test:test_cli_build_status_and_report`
+15. **Always** record a thread's spend across processes: a resume carries the checkpoint's spend into the new process, and the guard still caps each process (I-110). Guard: `symbol:carry_spend`, `test:test_a_thread_records_the_spend_of_every_invocation`
+16. **Always** match a Python definition by name with its generic form too (`def name[T](`), not only `def name(` (I-111). Guard: `test:test_guard_exists_looks_in_the_repository`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 

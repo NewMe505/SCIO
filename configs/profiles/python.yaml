@@ -90,6 +90,17 @@ acceptance_dir: tests/acceptance
 # What a sandbox image must be able to do for this stack (issue #58): run inside the
 # container before the build picks Docker; a capability, not just a binary on PATH.
 sandbox_probe: [python, -c, "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"]
+# What this profile settles (I-107): the interviewer must not offer these as choices, and a
+# quality-bar line that promises otherwise is replaced by the profile's fact, quoted, so the
+# owner sees it in the draft they approve. The skeleton, CI and pyproject follow these.
+fixed_facts: "tests run with pytest (python -m pytest) and pytest-cov for the coverage floor, lint with ruff, Python 3.12 or newer"
+quality_bar_conflicts:
+  - pattern: '(?i)\bunittest\b|\bnose2?\b|\bdoctest\b'
+    use: "Tests run with pytest (python -m pytest), the python profile's test runner"
+  - pattern: '(?i)\b(?:no|zero|without)\s+third[- ]party\s+test|\bstdlib[- ]only\s+tests?\b'
+    use: "Tests run with pytest and pytest-cov, the python profile's test tools"
+  - pattern: '(?i)\bpython\s*3\.(?:[0-9]|1[01])\b(?!\.)'
+    use: "Targets Python 3.12 or newer, the python profile's minimum"
 skeleton_command: "python -m {name} --version"
 command_words: [python, pytest]
 detect: { markers: [pyproject.toml, setup.py, setup.cfg, requirements.txt], all_of: false }

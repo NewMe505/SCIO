@@ -85,6 +85,7 @@ def resume_graph(
     config = {"configurable": {"thread_id": ctx.thread_id}}
     with _saver(ctx, saver) as cp:
         graph = compile_graph(ctx, cp, tier)
+        ctx.carry_spend(graph.get_state(config).values)  # this thread's spend so far (I-110)
         inp: Any = Command(resume=decision) if decision is not None else None
         raw = graph.invoke(inp, config=config, durability=DURABILITY)
     return _outcome(raw)
