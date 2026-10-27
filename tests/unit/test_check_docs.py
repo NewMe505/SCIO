@@ -46,3 +46,33 @@ def test_repo_docs_pass() -> None:
     assert cd.check_links() == []
     assert cd.check_model_ids() == []
     assert cd.check_changelog() == []
+    assert cd.check_release_cadence() == []
+
+
+PM_STATUS = (
+    "- **Status:** in progress. M6 Foundations done (PR #41); M7 Greenfield bootstrap done; "
+    "M8 Decompose + milestone loop done; M9 Dependencies + runtime done; M10 Second stack "
+    "done (PR #52); M11 next."
+)
+
+
+def test_milestones_done_but_only_unreleased_are_reported() -> None:
+    """I-086: the changelog as it stood before 0.6.0 (M8 to M10 under Unreleased)."""
+    cd = _load()
+    changelog = (
+        "# Changelog\n\n## [Unreleased]\n### Added\n- M10 Second stack\n- M9 runtime\n"
+        "- `scio build` (Product Mode M8)\n- carried into M11\n\n"
+        "## [0.5.0] - 2026-10-12\n### Added\n- M7 `scio new`; M6 profiles\n"
+    )
+    assert cd.unreleased_done_milestones(changelog, PM_STATUS) == ["M8", "M9", "M10"]
+
+
+def test_a_milestone_already_released_is_not_pending_again() -> None:
+    cd = _load()
+    changelog = (
+        "## [Unreleased]\n- M11 release gate; a fix to the M10 install phase\n\n"
+        "## [0.6.0] - 2026-10-26\n- M10 Second stack; M9 runtime; M8 loop\n"
+    )
+    assert cd.unreleased_done_milestones(changelog, PM_STATUS) == []
+    done_m11 = PM_STATUS.replace("M11 next", "M11 Product-ready + evals done")
+    assert cd.unreleased_done_milestones(changelog, done_m11) == ["M11"]

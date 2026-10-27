@@ -94,6 +94,42 @@ def check_changelog() -> list[str]:
     return [] if "## [Unreleased]" in text else ["CHANGELOG.md: missing '## [Unreleased]' section"]
 
 
+MILESTONE_RE = re.compile(r"\bM(\d+)\b")
+SECTION_RE = re.compile(r"^## \[([^\]]+)\][^\n]*$", re.MULTILINE)
+
+
+def _product_mode_status() -> str:
+    pm = (ROOT / "docs" / "PRODUCT_MODE.md").read_text(encoding="utf-8")
+    return next((ln for ln in pm.splitlines() if ln.startswith("- **Status:**")), "")
+
+
+def unreleased_done_milestones(changelog: str, pm_status: str) -> list[str]:
+    """Milestones the PRODUCT_MODE status line calls done that CHANGELOG.md names under
+    ``[Unreleased]`` and in no released section (I-086)."""
+    done = set(re.findall(r"\b(M\d+) [A-Za-z +\-]+? done\b", pm_status))
+    parts = SECTION_RE.split(changelog)
+    bodies = dict(zip(parts[1::2], parts[2::2], strict=True))
+    unreleased = bodies.pop("Unreleased", "")
+    released = "\n".join(bodies.values())
+    named = {f"M{n}" for n in MILESTONE_RE.findall(unreleased)}
+    named -= {f"M{n}" for n in MILESTONE_RE.findall(released)}
+    return sorted(done & named, key=lambda m: int(m[1:]))
+
+
+def check_release_cadence() -> list[str]:
+    """A release follows every milestone merge: one finished milestone may wait under
+    ``[Unreleased]`` for its release PR, two may not (I-086: M8 to M10 piled up behind
+    v0.5.0 for two weeks)."""
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    pending = unreleased_done_milestones(changelog, _product_mode_status())
+    if len(pending) < 2:
+        return []
+    return [
+        f"CHANGELOG.md: {', '.join(pending)} are done but unreleased; cut a release after "
+        "each milestone merges (I-086)"
+    ]
+
+
 def check_readme_status() -> list[str]:
     """The README is the repository's landing page and must say where the project stands at
     every push (owner's rule, 2026-10-26). Its ``> Status:`` line names the latest released
@@ -111,8 +147,7 @@ def check_readme_status() -> list[str]:
             f"README.md status line does not say 'v{released.group(1)} released' "
             "(CHANGELOG.md's latest release)"
         )
-    pm = (ROOT / "docs" / "PRODUCT_MODE.md").read_text(encoding="utf-8")
-    pm_status = next((ln for ln in pm.splitlines() if ln.startswith("- **Status:**")), "")
+    pm_status = _product_mode_status()
     for milestone in re.findall(r"(M\d+) [A-Za-z +\-]+? in progress", pm_status):
         if not re.search(rf"\b{milestone}\b.{{0,40}}in progress", status):
             errors.append(
@@ -161,6 +196,7 @@ def main() -> int:
         + check_model_ids()
         + check_changelog()
         + check_readme_status()
+        + check_release_cadence()
         + check_ignored_sources()
         + check_graph_sections()
     )

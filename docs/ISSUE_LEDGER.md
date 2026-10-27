@@ -698,3 +698,19 @@ Template:
 - Fix: open. Candidates: the install phase commits its manifest and lockfile changes as `chore: install approved dependencies [scio:install]` on the milestone branch (a `run_effect` with the lockfile's hash as the probe), or `install_argv` drops `--save` and the scaffold's `package.json` is the single source of ranges
 - Sweep: the Fake `todo_api` node build has no dependency, so `test_same_spec_builds_in_both_stacks` passes its clean-tree assertion; a Fake case with one dependency would need the registry, so the guard belongs with the fix
 - Status: open
+
+### I-086 · Three finished milestones (M8, M9, M10) piled up under `[Unreleased]` behind v0.5.0 for two weeks
+- Found: 2026-10-26 · after the PR #52 merge · the owner asked "what about releases"; `git tag` showed v0.5.0 (2026-10-12) as the newest while CHANGELOG `[Unreleased]` held M8, the Claude Code backend, M9 and M10. A local `release/0.6.0` branch from 2026-10-13 existed with no commit on it: a release was started after M8 and dropped
+- Symptom: the README said "v0.5.0 released" next to four finished milestones; anyone installing the latest release got M7-era SCIO
+- Root cause: nothing tied a release to a milestone merge. The release rule (IDEAS_TRIAGE item 1, the auto-version-control memory) said how to cut one, not when; each session ended at "PR ready, awaiting merge" and the next session started the next milestone, so the cut never had a moment of its own
+- Fix: v0.6.0 cut (PR `release/0.6.0`, tag after merge); CONTRIBUTING workflow step 6: a release PR follows every milestone merge; the stale empty branch deleted (`git branch -d`, nothing unmerged)
+- Sweep: `git tag` against the CHANGELOG sections and `git branch --list 'release/*'` locally and on origin: v0.1.0 to v0.5.0 each have a section and a tag; the only stale release branch was the empty `release/0.6.0` (origin also keeps a merged `release/0.3.0`, harmless). Guard: `check_release_cadence` in `scripts/check_docs.py` fails when two or more milestones that PRODUCT_MODE.md calls done are named only under `[Unreleased]`; `test_milestones_done_but_only_unreleased_are_reported` replays the pre-0.6.0 changelog, and `test_a_milestone_already_released_is_not_pending_again` checks that one pending milestone passes
+- Resolved: 2026-10-26 · Status: resolved
+
+### I-087 · Acted on "PR #52 merged" without checking GitHub, and deleted the local branch of an unmerged PR
+- Found: 2026-10-26 · M11 start · the owner said "merge 52 is done"; the next command chained `gh pr view 52` (it printed `OPEN`) into `git branch -d feat/51-m10-node-ts` with `&&`, which only needs the view to succeed, not the PR to be merged; git warned "not yet merged to HEAD" and deleted it
+- Symptom: the M10 branch gone locally while its PR waited on the required `checks` job; restored from `origin` at the same commit, nothing lost. The owner said "merged now" a second time while GitHub still showed `OPEN`, `BLOCKED`
+- Root cause: a human's "merged" was treated as a fact about GitHub, and a status query sat in an `&&` chain as if its output were an exit code (the I-018 pattern: a chain that reaches a destructive step must have been able to fail)
+- Fix: branch clean-up runs only after `gh pr view N --json mergedAt` is non-null, checked in its own step; the actual merge happened at 23:32 (`b97d942`) after CI went green
+- Sweep: the same "printed state, ignored exit" shape in this session's other chains: the CI-equivalent chain uses exit codes only; the wait loop compared `.state` to `MERGED` explicitly. Guard: CONTRIBUTING workflow step 5 (confirm `mergedAt` before any post-merge step); the merge-permission memory carries the same rule
+- Resolved: 2026-10-26 · Status: resolved
