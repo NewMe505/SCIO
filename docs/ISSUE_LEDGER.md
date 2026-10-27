@@ -818,3 +818,24 @@ Template:
 - Fix: (1) the provider re-asks a schema call that ends `error_max_turns` once, with the required keys and every string field's length limit spelled out (`schema_hint`); a plain completion keeps its one turn. (2) The product `feature` node catches `HarnessError` from the feature's subgraph: the attempt is recorded `failed` with `exit_reason: error`, its spend from the feature's own harness and the error in the ledger, and the build ends `feature_failed`; the next `scio build` starts the next attempt. No interrupt in that path, because a resumed node would re-run the failing call before the human's answer (I-065). A simulated process death (the crash tests' own exception) is not a `HarnessError` and still escapes
 - Sweep: every `--json-schema` call on the Claude Code backend: the provider (fixed) and the worker's summary (I-077, already re-asks); every place a subgraph runs inside a product node: `feature` only (`run_graph`, `resume_graph`). Guard: `test_provider_re_asks_a_schema_answer_capped_by_claude_codes_check_once` (re-asked once with the limits, fatal on a second cap, a plain completion not re-asked) and `test_a_provider_failure_inside_a_feature_ends_the_build_gracefully` (a `FatalError` at P1's PR body ends the build `feature_failed` with the attempt recorded; the next build runs attempt 2 to the milestone PR)
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-101 · With the Docker sandbox image present, a node-ts product is placed in a container that has no Node
+- Found: 2026-10-27 · issue #58 inventory (read-only) · `docker/sandbox.Dockerfile` is `python:3.12-slim` plus git; `docker_product_ready` (`scio/aci/sandbox/docker.py`) probes git only; `product_sandbox_backend` runs in `scio/cli.py` before `PRODUCT.md`'s stack is known, and `adopt_toolchain` never changes the image
+- Symptom: not yet seen live (the dev machine has no Docker; CI's docker-live tests are Python only): a node-ts build on a machine with the image would fail at its first `npm` or `node` command inside the container
+- Root cause: the backend choice and the image are stack-blind; M10 made every command stack-neutral but not the sandbox's runtime
+- Fix: open (issue #58 slice 5)
+- Status: open
+
+### I-102 · In GitHub mode a squash or rebase merge of a milestone PR breaks the next milestone's `pull --ff-only`
+- Found: 2026-10-27 · issue #58 inventory (read-only) · `merge_wait` pulls `main` with `--ff-only`; local `main` carries the previous milestone's progress commit, which a squash merge replaces with a new SHA on origin, so the histories diverge and `_git` raises
+- Symptom: not yet seen live; the GitHub-mode Fake test fakes every merge as a fast-forward (`git update-ref`)
+- Root cause: the sync assumes merge-commit merges; GitHub's squash and rebase buttons are just as common
+- Fix: open (issue #58 slice 2)
+- Status: open
+
+### I-103 · In GitHub mode the release tag points at a commit outside `main`'s history, and the last progress commit never reaches origin `main`
+- Found: 2026-10-27 · issue #58 inventory and review · `release` cuts the changelog on local `main` and pushes only the tag; nothing pushes `main` (by design: a product's `main` may be protected), so the final progress commit and the cut exist on GitHub only behind the tag
+- Symptom: not yet seen live (the live evals ran offline); a `--gh` product's `main` would never show its own release in its changelog
+- Root cause: the release flow was written for the offline case and reused for GitHub without the PR step SCIO's own releases use (CONTRIBUTING step 6)
+- Fix: open (issue #58 slice 3)
+- Status: open
