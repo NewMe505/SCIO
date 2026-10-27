@@ -16,7 +16,10 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A runaway guard, not a speed target (I-094): the job measured 12.9, 14.3 and 15.2 min
+    # over M11 slices 1 to 3 (tests 512 to 615 s, regression evals about 265 s), so 15 cut
+    # it off; keep the evals in this job, the one the ruleset requires.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +46,7 @@ jobs:
         run: uv run mypy
 
       - name: Tests (Fake provider, offline)
-        run: uv run pytest --cov=scio --cov=evals --cov-report=term-missing
+        run: uv run pytest --cov=scio --cov=evals --cov-report=term-missing --durations=15
 
       - name: Docs checks
         run: uv run python scripts/check_docs.py

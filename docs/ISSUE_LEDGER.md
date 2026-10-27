@@ -762,3 +762,11 @@ Template:
 - Fix: `release_image` is a profile field (yaml block in both profiles) and a read-only protocol member; `dockerfile()` appends the stack-neutral `ENV` / `EXPOSE` / `CMD` from the app's start command; `.dockerignore` is built from `cache_excludes`, as `.gitignore` already was
 - Sweep: `grep -n '"python"\|"node-ts"' scio/product/*.py` finds the `SCAFFOLDS` registry, each per-stack scaffold function loading its own profile, and the `python` fallback stack in `spec.py` and `progress.py`: all pre-existing, none a command literal. Guard: the boundary test itself caught it; the slice's targeted test runs now include `tests/unit/test_toolchain.py` whenever product code changes
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-094 · CI's `checks` job hit its 15-minute timeout during the regression evals and was cancelled
+- Found: 2026-10-27 · M11 slice 3 · run for `96271bc`: `checks: cancelled` at 15m12s, in "Regression evals (Fake provider)", after lint, types, tests and docs checks had passed; `docker-live` green (13 passed, the four new image tests among them)
+- Symptom: a red required check on a commit whose every check passed locally
+- Root cause: the timeout was a fixed number with no record of the job's real duration, and M11 grows the product suite every slice: step times from the GitHub API were tests 512 s, 591 s, 615 s and evals 261 s, 265 s, 269 s for slices 1, 2 and 3, a job of 12.9, 14.3 and 15.2 minutes. Slice 2 passed with 40 seconds to spare and nobody looked
+- Fix: `timeout-minutes: 25` for `checks`, with the measurements in a comment; `--durations=15` on the CI test step so the slowest tests are in every log. Moving the evals to their own parallel job was rejected: the ruleset requires `checks` only, so a separate job could fail without blocking a merge
+- Sweep: the other job (`docker-live`, 20 minutes) ran 54 s; the nightly and release workflows have their own budgets and are not on this path. Guard: the measured durations next to the number, and `--durations` in the log
+- Resolved: 2026-10-27 · Status: resolved
