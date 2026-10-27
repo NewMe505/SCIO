@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-10-27
 ### Added
 - `check_released_section_frozen` in `scripts/check_docs.py`: the newest released CHANGELOG section must match what its tag shipped, which catches a branch's `[Unreleased]` entries that a merge across a release cut moved under the new version (I-089).
 - M11 coverage floor (issue #54, I-091): `SCIO_COVERAGE_FLOOR` (default 80) is filled into the profiles' coverage commands; the `node-ts` profile gains a coverage check (Node's built-in `--experimental-test-coverage` with `--test-coverage-lines`). A quality check marked `verify: true` (coverage in both stacks, `typecheck` in `node-ts`) also runs in every product feature's verify once the suite and lint pass; a miss is the failure kind `quality`, sent to the debugger and never escalated, so a feature meets the bar `integrate` holds the milestone to.
