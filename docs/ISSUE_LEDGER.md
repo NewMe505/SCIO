@@ -770,3 +770,11 @@ Template:
 - Fix: `timeout-minutes: 25` for `checks`, with the measurements in a comment; `--durations=15` on the CI test step so the slowest tests are in every log. Moving the evals to their own parallel job was rejected: the ruleset requires `checks` only, so a separate job could fail without blocking a merge
 - Sweep: the other job (`docker-live`, 20 minutes) ran 54 s; the nightly and release workflows have their own budgets and are not on this path. Guard: the measured durations next to the number, and `--durations` in the log
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-095 · The product eval trials reported only the orchestrator's spend: every feature runs on a child harness the trial never saw
+- Found: 2026-10-27 · M11 slice 6 · the first Fake run of the product suite: p001 built three features through two milestones and a release and reported `$0.0130` and 2,761 tokens, about what the milestone planner and gate alone cost
+- Symptom: a product trial's `$` and tokens columns would have under-reported every live run, the very numbers M11's live evals exist to measure
+- Root cause: `run_trial` reads the trial harness's budget snapshot; `Harness.child` gives each feature run its own budget guard and ledger (ADR 0011, deliberately, so a feature's tier cap is its own), and nothing carried those numbers back to the trial. `scio build`'s own report was right all along: `total_usd` adds the feature runs
+- Fix: `TrialOutcome.usd_elsewhere` and `tokens_elsewhere`, which `run_trial` adds to the snapshot; the product solver reports the sum of its `FeatureRun.usd` and `tokens`
+- Sweep: `grep -rn "budget.snapshot()" evals scio` finds the runner (fixed), `RunContext.budget_update` and `Harness.report` (per harness, by design) and the Claude Code worker's remaining-budget check (per turn, by design); the task-mode `GraphSolver` runs on one harness. Guard: `test_the_product_suite_builds_releases_and_passes_its_hidden_tests` asserts p001's trial spend is above what the orchestrator alone costs on the Fake
+- Resolved: 2026-10-27 · Status: resolved

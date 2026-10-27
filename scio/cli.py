@@ -205,15 +205,19 @@ def _new(args: argparse.Namespace) -> int:
 
     settings = get_settings()
     harness = _scripted_harness(settings)
-    # A prompt starts a product thread (optionally under a chosen --thread id); no prompt
-    # means resume the thread named by --thread (I-061).
-    resuming = args.prompt is None
+    # A prompt, or a PRODUCT.md given with --spec (M11: bootstrapped as written, no interview),
+    # starts a product thread; neither means resume the thread named by --thread (I-061).
+    resuming = args.prompt is None and args.spec is None
     if resuming and args.thread is None:
-        print("scio new needs --prompt and --dir to start, or --thread to resume", file=sys.stderr)
+        print(
+            "scio new needs --prompt (or --spec) and --dir to start, or --thread to resume",
+            file=sys.stderr,
+        )
         return 2
     if not resuming and args.dir is None:
-        print("scio new --prompt also needs --dir (the target directory)", file=sys.stderr)
+        print("scio new --prompt/--spec also needs --dir (the target directory)", file=sys.stderr)
         return 2
+    spec_md = args.spec.read_text(encoding="utf-8") if args.spec is not None else None
     thread = args.thread or f"new-{uuid.uuid4().hex[:8]}"
     target: Path
     if resuming:
@@ -242,7 +246,8 @@ def _new(args: argparse.Namespace) -> int:
         if resuming:
             outcome = resume_product(ctx, args.decision)
         else:
-            outcome = run_product(ctx, prompt=args.prompt, gh_repo=args.gh)
+            prompt = args.prompt or f"bootstrap from {args.spec}"
+            outcome = run_product(ctx, prompt=prompt, gh_repo=args.gh, spec_md=spec_md)
     finally:
         ctx.close()
     _print_product(outcome)
@@ -276,6 +281,12 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--out", type=Path, default=Path(".scio") / "reports")
     new = sub.add_parser("new", help="product mode: a prompt becomes a bootstrapped repository")
     new.add_argument("--prompt", default=None, help="the product idea (omit when resuming)")
+    new.add_argument(
+        "--spec",
+        type=Path,
+        default=None,
+        help="a PRODUCT.md to bootstrap from as written, without the interview (M11)",
+    )
     new.add_argument("--dir", type=Path, default=None, help="target directory (created if absent)")
     new.add_argument("--gh", default=None, help="owner/name to publish to, after confirmation")
     new.add_argument("--thread", default=None, help="resume this product thread")

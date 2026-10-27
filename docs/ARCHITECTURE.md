@@ -914,7 +914,8 @@ graph TD;
 	publish(publish)
 	done(done)
 	__end__([<p>__end__</p>]):::last
-	__start__ --> interview;
+	__start__ -.-> bootstrap;
+	__start__ -.-> interview;
 	answers --> specify;
 	approval -.-> bootstrap;
 	approval -. &nbsp;halt&nbsp; .-> done;

@@ -27,6 +27,7 @@ from scio.graph.nodes.common import fact, git_out
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
+from scio.product.progress import parse_product_md
 from scio.product.scaffold import progress_json, scaffold_for
 from scio.product.spec import normalise_spec, render_product_md, stack_menu
 from scio.state.models import InterviewOutput, ProductSpecOutput, ProductState, Role
@@ -387,6 +388,12 @@ def _unbound(name: str) -> Any:
     return node
 
 
+def start_route(state: ProductState) -> Literal["interview", "bootstrap"]:
+    """A ``PRODUCT.md`` handed in (``scio new --spec``, the product evals, M11) is already the
+    approved contract: no interview, no planner, its text is written as it is."""
+    return "bootstrap" if state.approved and state.spec is not None else "interview"
+
+
 def build_product_graph(ctx: RunContext | None) -> Any:
     """``ctx=None`` compiles a structural graph for the docs diagram (ADR 0011)."""
     g: Any = StateGraph(ProductState)  # Any: node callables are closures, as in build.py
@@ -401,7 +408,9 @@ def build_product_graph(ctx: RunContext | None) -> Any:
     n("bootstrap", bootstrap)
     n("publish", publish)
     n("done", done)
-    g.add_edge(START, "interview")
+    g.add_conditional_edges(
+        START, start_route, {"interview": "interview", "bootstrap": "bootstrap"}
+    )
     g.add_conditional_edges("interview", after_interview, {"answers": "answers", "halt": "done"})
     g.add_edge("answers", "specify")
     g.add_conditional_edges("specify", after_specify, {"approval": "approval", "halt": "done"})
@@ -418,12 +427,20 @@ def build_product_graph(ctx: RunContext | None) -> Any:
     return g
 
 
-def initial_product_state(ctx: RunContext, *, prompt: str, gh_repo: str | None) -> ProductState:
+def initial_product_state(
+    ctx: RunContext, *, prompt: str, gh_repo: str | None, spec_md: str | None = None
+) -> ProductState:
+    """``spec_md``: a ``PRODUCT.md`` to bootstrap from as written (it must parse)."""
+    spec = parse_product_md(spec_md) if spec_md is not None else None
     return ProductState(
         thread_id=ctx.thread_id,
         prompt=prompt,
         target_dir=str(ctx.sandbox.root),
         gh_repo=gh_repo,
+        spec=spec,
+        product_md=spec_md,
+        approved=spec is not None,
+        phase="bootstrap" if spec is not None else "interview",
         budgets=ctx.budget,
     )
 
@@ -437,12 +454,14 @@ def _outcome(raw: dict[str, Any]) -> ProductOutcome:
     return ProductOutcome(state=ProductState.model_validate(raw), interrupt=payload)
 
 
-def run_product(ctx: RunContext, *, prompt: str, gh_repo: str | None = None) -> ProductOutcome:
+def run_product(
+    ctx: RunContext, *, prompt: str, gh_repo: str | None = None, spec_md: str | None = None
+) -> ProductOutcome:
     config = {"configurable": {"thread_id": ctx.thread_id}}
     with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
         graph: Any = build_product_graph(ctx).compile(checkpointer=saver)
         raw = graph.invoke(
-            initial_product_state(ctx, prompt=prompt, gh_repo=gh_repo),
+            initial_product_state(ctx, prompt=prompt, gh_repo=gh_repo, spec_md=spec_md),
             config=config,
             durability=DURABILITY,
         )

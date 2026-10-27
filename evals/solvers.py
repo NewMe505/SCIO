@@ -42,6 +42,10 @@ class TrialOutcome(BaseModel):
     advisor_calls: int = 0
     advisor_resolved: int = 0
     notes: str = ""
+    usd_elsewhere: float = 0.0
+    tokens_elsewhere: int = 0
+    """Spend the trial's harness did not see: a product build's feature runs each have a
+    child harness with its own budget guard (ADR 0011), so the solver reports them (I-095)."""
 
 
 class PlaceholderAnswer(BaseModel):
