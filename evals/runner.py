@@ -16,6 +16,7 @@ import importlib
 import sys
 import time
 import traceback
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,7 +42,7 @@ class TaskBudget(BaseModel):
 
 class EvalTask(BaseModel):
     id: str
-    suite: Literal["regression", "capability"]
+    suite: Literal["regression", "capability", "product"]
     title: str
     spec_file: str = "spec.md"
     tier_hint: str | None = None
@@ -51,7 +52,9 @@ class EvalTask(BaseModel):
     (ledger I-050). Also sizes the budget, so set ``tier_hint`` to the same value."""
     trials: int = 5
     budget: TaskBudget = Field(default_factory=TaskBudget)
-    grader: Literal["placeholder", "tests"] = "placeholder"
+    grader: Literal["placeholder", "tests", "product"] = "placeholder"
+    """``product`` (M11): a whole product built from the task's ``PRODUCT.md`` to a release,
+    graded by the hidden black-box tests in ``hidden_tests`` (a directory)."""
     hidden_tests: str | None = None
     fixture: str | None = None
     """Another task's id whose ``repo/`` and ``hidden/`` this task reuses (scenario tasks)."""
@@ -108,6 +111,10 @@ def to_task_like(task: EvalTask) -> EvalTaskLike:
 def select_solver(task: EvalTask, override: Solver | None) -> Solver:
     if override is not None:
         return override
+    if task.grader == "product":
+        from evals.product_solver import ProductSolver
+
+        return ProductSolver()
     return GraphSolver() if task.grader == "tests" else PlaceholderSolver()
 
 
@@ -135,8 +142,8 @@ def run_trial(task: EvalTask, trial: int, solver: Solver, settings: Settings) ->
         task_id=task.id,
         trial=trial,
         passed=outcome.passed,
-        tokens=snap.tokens_used,
-        usd=snap.usd_used,
+        tokens=snap.tokens_used + outcome.tokens_elsewhere,
+        usd=snap.usd_used + outcome.usd_elsewhere,
         latency_s=time.perf_counter() - t0,
         advisor_calls=outcome.advisor_calls,
         advisor_resolved=outcome.advisor_resolved,
@@ -155,7 +162,9 @@ def run_suite(
     config: Path | None = None,
     parallel: int = 1,
     max_usd: float | None = None,
+    only: Sequence[str] | None = None,
 ) -> SuiteReport:
+    """``only``: run just these task ids of the suite (M11: one product eval at a time)."""
     kwargs: dict[str, Any] = {}
     if provider:
         kwargs["provider_override"] = provider
@@ -164,6 +173,11 @@ def run_suite(
     settings = Settings(**kwargs)
     started = datetime.now(UTC)
     tasks = load_tasks(tasks_dir, suite)
+    if only:
+        unknown = set(only) - {t.id for t in tasks}
+        if unknown:
+            raise ValueError(f"no task {sorted(unknown)} in suite {suite!r}")
+        tasks = [t for t in tasks if t.id in only]
     results: list[TrialResult] = []
     metrics = []
     k = trials or (max(t.trials for t in tasks) if tasks else 0)
@@ -207,7 +221,9 @@ def run_suite(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Run a SCIO eval suite.")
-    ap.add_argument("--suite", choices=["regression", "capability"], default="regression")
+    ap.add_argument(
+        "--suite", choices=["regression", "capability", "product"], default="regression"
+    )
     ap.add_argument("--provider", default=None, help="provider override (e.g. fake)")
     ap.add_argument("--trials", type=int, default=None, help="override per-task trial count")
     ap.add_argument("--solver", default="auto", help="module:Class, or auto (by task grader)")
@@ -220,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--max-usd", type=float, default=None, help="stop starting tasks once spend reaches this"
     )
+    ap.add_argument(
+        "--task", action="append", default=None, help="run only this task id (repeatable)"
+    )
     args = ap.parse_args(argv)
 
     report = run_suite(
@@ -230,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         config=args.config,
         parallel=max(1, args.parallel),
         max_usd=args.max_usd,
+        only=args.task,
     )
     json_path, md_path = report.write(args.out)
     sys.stdout.write(report.to_markdown())

@@ -130,15 +130,19 @@ def test_node_ts_commands() -> None:
     assert rt.install_argv[:2] == ("npm", "install") and rt.index_allowlist == (
         "registry.npmjs.org",
     )
-    assert [c.name for c in tc.quality_checks()] == ["typecheck", "build", "audit"]
+    assert [c.name for c in tc.quality_checks()] == ["coverage", "typecheck", "build", "audit"]
+    coverage, typecheck, _, audit = tc.quality_checks()
     assert (
-        tc.quality_checks()[0].outcome(
-            1, "Error: Cannot find module 'node_modules/typescript/bin/tsc'"
-        )
+        typecheck.outcome(1, "Error: Cannot find module 'node_modules/typescript/bin/tsc'")
         == "skipped"
     )
-    assert tc.quality_checks()[0].outcome(2, "src/a.ts(3,5): error TS2322") == "failed"
-    assert tc.quality_checks()[2].outcome(127, "") == "skipped"
+    assert typecheck.outcome(2, "src/a.ts(3,5): error TS2322") == "failed"
+    assert audit.outcome(127, "") == "skipped"
+    # M11: coverage is built into Node, so it is never "tool absent"; the floor is a setting
+    argv = coverage.command({"coverage_floor": 75})
+    assert "--test-coverage-lines=75" in argv and "--test-coverage-exclude=tests/**" in argv
+    below = "# Error: 61.54% line coverage does not meet threshold of 90%."
+    assert coverage.outcome(1, below) == "failed" and coverage.outcome(0, "") == "passed"
 
 
 def test_python_profile_keeps_its_skeleton_and_runtime_shape() -> None:

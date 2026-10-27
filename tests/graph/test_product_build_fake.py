@@ -20,7 +20,8 @@ from scio.graph.run_context import RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
-from scio.harness.github.client import GitHubClient
+from scio.harness.failures import FatalError
+from scio.harness.github.client import GitHubClient, GitHubError
 from scio.harness.providers.fake import FakeProvider
 from scio.harness.retry import RetryPolicy
 from scio.harness.types import CompletionRequest
@@ -219,9 +220,20 @@ def test_two_milestone_product_builds_through_the_task_graph(tmp_path: Path) -> 
         assert [f.status for f in progress.features] == ["done", "done", "todo"]
         assert progress.feature("P2") and progress.feature("P2").commit == p2.commit_sha
 
+        # the last merge leads to the release gate (M11): the bar is green on main, a human
+        # approves, the changelog is cut, the tag and the artifact exist
         out = resume_build(ctx, "merged")
-        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+        assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
         assert out.state.milestones_done == ["M1", "M2"]
+        rel = out.state.release
+        assert rel is not None and rel.ok and rel.tag == "v0.1.0"
+        assert out.interrupt and out.interrupt["tag"] == "v0.1.0"
+        assert "[secrets] clean" in out.interrupt["report"]
+        out = resume_build(ctx, "release")
+        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+        rel = out.state.release
+        assert rel is not None and rel.commit and rel.url is None
+        assert rel.artifacts == [".scio/sandbox/release/v0.1.0/todo_cli-0.1.0.tar.gz"]
     finally:
         ctx.close()
 
@@ -234,6 +246,12 @@ def test_two_milestone_product_builds_through_the_task_graph(tmp_path: Path) -> 
         sum("[scio:merge:" in x for x in main) == 2
         and sum("[scio:progress:" in x for x in main) == 2
     )
+    assert main[0] == "chore(release): v0.1.0 [scio:release:v0.1.0]"
+    assert (
+        _git(repo, "rev-parse", "v0.1.0^{commit}") == rel.commit == _git(repo, "rev-parse", "HEAD")
+    )
+    assert "## [0.1.0] - " in (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert (repo / rel.artifacts[0]).stat().st_size > 0
     assert _git(repo, "status", "--porcelain") == ""
     notes = (repo / "NOTES.md").read_text(encoding="utf-8")
     assert "M1 Milestone 1 merged" in notes and "M2 Milestone 2 merged" in notes
@@ -356,6 +374,35 @@ def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> No
         assert progress.milestones[0].pr_number == s.pr.number
         assert progress.feature("P1") and progress.feature("P1").issue == s.issues["P1"]
         assert _git(repo, "merge-base", "--is-ancestor", "milestone/1", "main") == ""
+
+        # M11: M2 merges on GitHub, the release gate approves, the tag is pushed, and the
+        # Release create fails once; the resume publishes it once and pushes nothing twice
+        m2 = out.state.pr
+        assert m2 is not None and m2.number is not None
+        subprocess.run(
+            ["git", "update-ref", "refs/heads/main", "refs/heads/milestone/2"],
+            cwd=origin,
+            check=True,
+        )
+        fake.merged.add(int(m2.number))
+        out = resume_build(ctx, "merged")
+        assert out.paused and out.state.phase == "release_decision", out.state.ledger[-3:]
+        assert "publish a GitHub Release" in str(out.interrupt["question"])
+        fake.fail_next_release = True
+        with pytest.raises(GitHubError, match="502"):
+            resume_build(ctx, "release")
+        assert _git(origin, "rev-parse", "v0.1.0^{commit}") == _git(
+            repo, "rev-parse", "v0.1.0^{commit}"
+        )
+        out = resume_build(ctx, None)
+        assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
+        rel = out.state.release
+        assert rel is not None and rel.url == "https://github.com/o/r/releases/tag/v0.1.0"
+        assert creates(["release", "create"]) == 2  # the failed one and the one that stuck
+        assert list(fake.releases) == ["v0.1.0"]
+        assets = fake.releases["v0.1.0"]["assets"]
+        assert isinstance(assets, list) and str(assets[0]).endswith("todo_cli-0.1.0.tar.gz")
+        assert "### Added" in str(fake.releases["v0.1.0"]["notes"])
     finally:
         ctx.close()
 
@@ -667,6 +714,12 @@ def test_same_spec_builds_in_both_stacks(tmp_path: Path, stack: str) -> None:
         ]
         assert s.integration and "[acceptance] passed (http http://127.0.0.1:" in s.integration
         assert "[tests] passed" in s.integration and "[lint] clean" in s.integration
+        # M11: the coverage floor and the stack-neutral release checks are real in both stacks
+        assert "[coverage] passed" in s.integration and "[secrets] clean" in s.integration
+        assert "[release files] present: README.md, CHANGELOG.md, LICENSE, Dockerfile" in (
+            s.integration
+        )
+        assert "[readme] passed: 1 run command(s)" in s.integration
         if stack == "node-ts":
             assert "[typecheck] skipped: tool absent" in s.integration
             assert any("product environment not needed yet" in e.text for e in s.ledger)
@@ -680,3 +733,177 @@ def test_same_spec_builds_in_both_stacks(tmp_path: Path, stack: str) -> None:
     tracked = _git(repo, "ls-files").splitlines()
     assert not any(t.startswith("node_modules/") or ".scio/sandbox" in t for t in tracked)
     _ci_green(repo, tc)
+
+
+@requires_node
+def test_install_phase_changes_are_committed_on_the_milestone_branch(tmp_path: Path) -> None:
+    """I-085: ``npm install --save`` rewrites ``package.json`` and writes the lockfile outside
+    any feature commit. They must land as one ``[scio:install]`` commit on the milestone
+    branch, survive the pre-attempt reset, and leave a clean tree after the merge. A ``file:``
+    package stands in for the registry, so the install runs offline."""
+    responder = ScriptedResponder(
+        product="todo_api", milestone_size=2, stack="node-ts", dependencies=["file:vendor/greet"]
+    )
+    harness = _bootstrap(tmp_path, responder)
+    repo = tmp_path / "product"
+    vendor = repo / "vendor" / "greet"
+    vendor.mkdir(parents=True)
+    (vendor / "package.json").write_text(
+        '{"name": "greet", "version": "1.0.0", "main": "index.js"}\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    (vendor / "index.js").write_text(
+        'module.exports = () => "hi";\n', encoding="utf-8", newline="\n"
+    )
+    _git(repo, "add", "vendor")
+    _git(repo, "commit", "-q", "-m", "chore: vendor a local package")
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    try:
+        out = run_build(ctx)
+        last = "\n".join(e.text for e in out.state.ledger[-4:])
+        assert out.paused and out.state.phase == "merge_wait", last
+        assert [r.status for r in out.state.feature_runs] == ["passed", "passed"]
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    assert _git(repo, "status", "--porcelain") == ""
+    tracked = _git(repo, "ls-files").splitlines()
+    assert "package-lock.json" in tracked
+    assert '"greet": "file:vendor/greet"' in _git(repo, "show", "main:package.json")
+    grep = ("--fixed-strings", "--grep=[scio:install:")
+    install = _git(repo, "log", "main", "--format=%s", *grep)
+    assert install.splitlines() == [
+        "chore: install approved dependencies [scio:install:M1:plan_milestone]"
+    ]
+    sha = _git(repo, "log", "main", "-n1", "--format=%H", *grep)
+    changed = _git(repo, "show", "--name-only", "--format=", sha)
+    assert sorted(changed.splitlines()) == ["package-lock.json", "package.json"]
+
+
+def test_a_feature_below_the_coverage_floor_is_fixed_inside_its_own_run(tmp_path: Path) -> None:
+    """I-091: verify runs the profile's coverage check in a product feature run, so a feature
+    that misses the floor fails its own verify (``quality``), triage sends it to the debugger,
+    and the debugger's tests lift it; ``integrate`` never sees the miss. P2 covers 93% of the
+    product as first written; the floor here is 95."""
+    harness = _bootstrap(tmp_path, ScriptedResponder(product="todo_api", milestone_size=2))
+    ctx = _ctx(tmp_path, harness, build_thread_id("todo_api"))
+    ctx.settings = ctx.settings.model_copy(update={"coverage_floor": 95})
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        s = out.state
+        assert [(r.feature_id, r.status) for r in s.feature_runs] == [
+            ("P1", "passed"),
+            ("P2", "passed"),
+        ]
+        p2 = s.latest_run("P2")
+        assert p2 is not None and p2.iterations == 2
+        p2_ledger = [e.text for e in _feature_state(ctx, p2.thread_id).task_ledger]
+        assert any("verify: quality" in t and "triage -> debug" in t for t in p2_ledger)
+        assert s.integration and "[coverage] passed" in s.integration
+    finally:
+        ctx.close()
+    assert (tmp_path / "product" / "tests" / "test_todos_errors.py").is_file()
+
+
+def test_a_provider_failure_inside_a_feature_ends_the_build_gracefully(tmp_path: Path) -> None:
+    """I-100 (live p002 re-run): a fatal provider error in P1's PR-body call crashed the whole
+    product build as a traceback. It ends that attempt, recorded with its spend, and the
+    build with ``feature_failed``; the next build starts attempt 2 and finishes."""
+    inner = ScriptedResponder()
+    armed = {"on": True}
+
+    def responder(req: CompletionRequest) -> Any:
+        props = (req.output_schema or {}).get("properties", {})
+        if armed["on"] and "plan_vs_done" in props and "Walking skeleton" in str(req.messages):
+            armed["on"] = False
+            raise FatalError("claude -p failed: Reached maximum number of turns (3)")
+        return inner(req)
+
+    harness = _bootstrap(tmp_path, responder)
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert not out.paused and out.state.exit_reason == "feature_failed", out.state.ledger[-2:]
+        (run,) = out.state.feature_runs
+        assert (run.feature_id, run.status, run.exit_reason, run.attempt) == (
+            "P1",
+            "failed",
+            "error",
+            1,
+        )
+        assert run.usd > 0 and "FatalError" in out.state.ledger[-1].text
+    finally:
+        ctx.close()
+    ctx = _ctx(tmp_path, harness, f"{build_thread_id(PRODUCT)}-again")
+    try:
+        out = run_build(ctx)  # a later build: P1's attempt 2 runs and the milestone completes
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        assert [(r.feature_id, r.attempt, r.status) for r in out.state.feature_runs] == [
+            ("P1", 1, "passed"),
+            ("P2", 1, "passed"),
+        ]
+    finally:
+        ctx.close()
+
+
+def test_the_release_gate_can_be_declined_reentered_and_is_idempotent(tmp_path: Path) -> None:
+    """M11: 'stop' at the release gate ends the build with nothing tagged; a later build of
+    the finished product goes straight to the gate and releases; a build after that finds
+    the tag and ends with nothing to do. No duplicate tag or changelog cut."""
+    harness = _bootstrap(tmp_path, ScriptedResponder(milestone_size=4))  # one milestone
+    repo = tmp_path / "product"
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        out = resume_build(ctx, "merge")
+        assert out.paused and out.state.phase == "release_decision"
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.phase == "done" and out.state.exit_reason is None
+    finally:
+        ctx.close()
+    assert _git(repo, "tag", "--list") == ""
+
+    for thread in (build_thread_id(PRODUCT, 2), "build-todo_cli-again"):
+        ctx = _ctx(tmp_path, harness, thread)
+        try:
+            out = run_build(ctx)
+            if thread.endswith("-m2"):  # every feature done: plan -> the release gate
+                assert out.paused and out.state.phase == "release_decision", out.state.ledger
+                out = resume_build(ctx, "release")
+            assert not out.paused and out.state.phase == "done"
+            assert out.state.release and out.state.release.tag == "v0.1.0"
+        finally:
+            ctx.close()
+    assert "v0.1.0 already exists" in out.state.ledger[-1].text
+    assert _git(repo, "tag", "--list") == "v0.1.0"
+    assert sum("[scio:release:v0.1.0]" in s for s in _subjects(repo)) == 1
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_progress_sync_with_product_md_survives_the_first_feature_reset(tmp_path: Path) -> None:
+    """The I-085 sweep: ``load`` re-adds a feature record that ``progress.json`` lacks. The
+    write was uncommitted, so P1's pre-attempt reset reverted it and ``update_progress``
+    wrote the stale file back; it is committed on the milestone branch now."""
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    progress = _progress(repo)
+    last = progress.features[-1].id
+    assert last not in ("P1", "P2")  # outside M1, so no feature run re-creates it
+    progress.features = progress.features[:-1]
+    (repo / PROGRESS_PATH).write_text(progress.to_json(), encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "chore: an older progress file")
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        out = resume_build(ctx, "merge and stop")
+        assert out.state.phase == "done" and out.state.milestones_done == ["M1"]
+    finally:
+        ctx.close()
+    assert _git(repo, "status", "--porcelain") == ""
+    assert last in [f.id for f in _progress(repo).features]
+    assert sum("[scio:sync:M1:plan_milestone]" in x for x in _subjects(repo, "main")) == 1

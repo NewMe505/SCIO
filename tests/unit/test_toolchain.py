@@ -111,6 +111,18 @@ def test_no_stack_specific_command_outside_the_toolchain_package() -> None:
     assert offenders == [], "\n".join(offenders)
 
 
+def test_every_git_grep_for_a_marker_is_a_fixed_string() -> None:
+    """I-090: SCIO's markers (``[scio:bootstrap]``) are regex character classes to git, so a
+    ``--grep=`` without ``--fixed-strings`` matches almost any commit message."""
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}:{i}"
+        for path in (REPO_ROOT / "scio").rglob("*.py")
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "--grep=" in line and "--fixed-strings" not in line
+    ]
+    assert offenders == [], offenders
+
+
 def test_python_profile_declares_the_quality_bar_and_classifies_outcomes() -> None:
     """M9: coverage, build and audit are profile data; an absent tool is a skip, not a pass."""
     tc = python_toolchain()
@@ -124,3 +136,7 @@ def test_python_profile_declares_the_quality_bar_and_classifies_outcomes() -> No
     assert build.outcome(1, "error: invalid pyproject") == "failed"
     assert audit.outcome(1, "/usr/bin/python: No module named pip_audit") == "skipped"
     assert all(str(a).startswith(".scio/sandbox") for a in build.argv if "/" in str(a))
+    # M11: the floor is `Settings.coverage_floor`, filled in when integrate runs the check
+    assert "--cov-fail-under={coverage_floor}" in coverage.argv
+    assert "--cov-fail-under=65" in coverage.command({"coverage_floor": 65})
+    assert coverage.command({}) == list(coverage.argv)  # nothing to fill, nothing changes

@@ -29,6 +29,17 @@ class QualityCheck:
     skip_patterns: tuple[str, ...] = ()
     """Output fragments that mean the tool is absent (``No module named ...``)."""
     timeout_s: int = 600
+    verify: bool = False
+    """Also run by ``verify`` in a product feature run once the suite and lint pass (M11,
+    I-091), so a feature sees the bar it will be judged by; else only ``integrate`` runs it."""
+
+    def command(self, values: Mapping[str, object]) -> list[str]:
+        """The argv with ``{name}`` placeholders filled from ``values`` (``coverage_floor``,
+        M11); other braces are left alone."""
+        argv = list(self.argv)
+        for name, value in values.items():
+            argv = [a.replace(f"{{{name}}}", str(value)) for a in argv]
+        return argv
 
     def outcome(self, exit_code: int, output: str) -> CheckOutcome:
         if exit_code in self.pass_exit_codes:
@@ -119,6 +130,12 @@ class Toolchain(Protocol):
         ...
 
     @property
+    def release_image(self) -> str:
+        """The Dockerfile lines that install the product and its runtime dependencies (M11);
+        the scaffold appends the stack-neutral ``ENV`` / ``CMD`` from the app's command."""
+        ...
+
+    @property
     def command_words(self) -> tuple[str, ...]:
         """Commands a walking-skeleton criterion may name (``python``, ``node``); any other
         backticked command is rewritten by the spec normaliser (ADR 0013 decision 8)."""
@@ -155,6 +172,10 @@ class Toolchain(Protocol):
     # --- commands ---
     def test_argv(self, *, filter: str | None, path: str | None) -> list[str]: ...
     def test_outcome(self, exit_code: int, stdout: str) -> TestOutcome: ...
+    def skipped_only(self, stdout: str) -> bool:
+        """A passing run in which every selected test was skipped: proves nothing (I-097)."""
+        ...
+
     def failures_only(self, output: str) -> str: ...
     def is_path_selector(self, selector: str) -> bool: ...
     def lint_argv(self, target: str) -> list[str]: ...

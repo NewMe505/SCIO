@@ -130,6 +130,33 @@ def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None
     assert resp.latency_ms == 1200
 
 
+def test_provider_re_asks_a_schema_answer_capped_by_claude_codes_check_once() -> None:
+    """I-100 (live p002 re-run): the documenter's PR body missed the schema within the three
+    turns and the call was fatal; it is re-asked once with the length limits spelled out."""
+    capped = _result(
+        subtype="error_max_turns", is_error=True, result="Reached maximum number of turns (3)"
+    )
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string", "maxLength": 1200}, "plan": {"type": "array"}},
+        "required": ["summary", "plan"],
+    }
+    req = CompletionRequest(model=HAIKU, messages=[Message.user("write the PR body")])
+    fake = FakeClaude([capped, _result(structured_output={"summary": "s", "plan": []})])
+    resp = ClaudeCodeProvider(runner=fake).structured(req, schema)
+    assert json.loads(resp.text) == {"summary": "s", "plan": []} and len(fake.calls) == 2
+    again = fake.calls[1][2] or ""
+    assert again.startswith("write the PR body") and "summary at most 1200 characters" in again
+    assert "(summary, plan)" in again
+    twice = FakeClaude([capped, capped])
+    with pytest.raises(FatalError, match="error_max_turns"):
+        ClaudeCodeProvider(runner=twice).structured(req, schema)
+    plain = FakeClaude([capped])  # a plain completion is not re-asked: one turn by design
+    with pytest.raises(FatalError):
+        ClaudeCodeProvider(runner=plain).complete(req)
+    assert len(plain.calls) == 1
+
+
 def test_provider_complete_renders_a_repair_conversation_and_rejects_tools() -> None:
     fake = FakeClaude([_result(result="plain text")])
     provider = ClaudeCodeProvider(runner=fake)
@@ -417,14 +444,19 @@ def test_worker_without_a_result_line_fails_loudly(tmp_path: Path) -> None:
 def test_tier_budgets_scale_on_the_claude_code_backend() -> None:
     """I-069: a T0 task that costs $0.11 on the API reads as about $0.57 through Claude Code,
     so the API-price caps in budgets.yaml are scaled for this backend."""
-    from scio.harness.budget import BudgetsConfig, budget_factor
+    from scio.harness.budget import BudgetsConfig, budget_factor, token_factor
 
     aci = Settings(provider_override="fake")
     cc = Settings(provider_override="fake", worker_backend="claude_code")
     assert budget_factor(aci) == 1.0 and budget_factor(cc) == 4.0
+    assert token_factor(aci) == 1.0 and token_factor(cc) == 10.0
     base = BudgetsConfig.load(aci.budgets_path).tiers["T0"]
     scaled = BudgetsConfig.for_settings(cc).tiers["T0"]
-    assert scaled.usd_max == base.usd_max * 4 and scaled.tokens_max == base.tokens_max * 4
+    assert scaled.usd_max == base.usd_max * 4 and scaled.tokens_max == base.tokens_max * 10
+    # I-099: at the measured ~380,000 billable tokens per estimated dollar on this backend,
+    # no tier's token cap binds before about 80% of its dollar cap
+    for tier in BudgetsConfig.for_settings(cc).tiers.values():
+        assert tier.tokens_max >= 0.8 * tier.usd_max * 380_000, tier
     assert scaled.max_iters == base.max_iters and scaled.advisor_calls_max == base.advisor_calls_max
     assert BudgetsConfig.for_settings(aci).tiers["T0"] == base
     custom = Settings(

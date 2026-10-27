@@ -1,0 +1,14 @@
+id: p001_cli_todo
+suite: product
+title: "p001: a CLI todo app with tags and JSON export, built from PRODUCT.md to a release"
+spec_file: PRODUCT.md
+trials: 1
+grader: product
+hidden_tests: hidden
+# A whole product: bootstrap, every milestone, the release gate. The per-feature tier caps are
+# the runaway guards; this budget is the trial's ceiling across all of them.
+budget:
+  tokens: 20000000
+  usd: 40.0
+scenario:
+  product: todo_cli

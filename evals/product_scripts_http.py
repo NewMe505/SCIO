@@ -96,6 +96,7 @@ CLI_P2 = f'''"""Command line entry point: an HTTP todo server."""
 
 import argparse
 import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from {PKG} import __version__, store
@@ -123,12 +124,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        # read the body first: a reply that leaves request bytes unread aborts the
+        # connection on Windows (WinError 10053) instead of delivering the status (I-096)
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
         if self.path != TODOS_PATH:
             self.send_response(404)
             self.end_headers()
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length) or b"{{}}")
+        payload = json.loads(body or b"{{}}")
         title = str(payload.get("title", "")).strip()
         if not title:
             self._send_json(400, {{"error": "title must not be empty"}})
@@ -139,9 +143,10 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def serve(port):
-    server = HTTPServer(("127.0.0.1", port), Handler)
-    print(f"serving on http://127.0.0.1:{{port}}", flush=True)
+def serve(port):  # pragma: no cover  (process lifecycle: the acceptance tests run it)
+    host = os.environ.get("HOST", "127.0.0.1")
+    server = HTTPServer((host, port), Handler)
+    print(f"serving on http://{{host}}:{{port}}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -161,7 +166,7 @@ def main(argv=None):
     if args.version:
         print(__version__)
         return 0
-    if args.cmd == "serve":
+    if args.cmd == "serve":  # pragma: no cover
         return serve(args.port)
     parser.print_usage()
     return 2
@@ -200,6 +205,43 @@ def test_create_then_list_todos(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
 """
+
+TODOS_ERROR_TESTS = f"""import json
+import threading
+import urllib.error
+import urllib.request
+from http.server import HTTPServer
+
+import pytest
+
+from {PKG}.cli import Handler
+
+
+@pytest.fixture
+def base(tmp_path, monkeypatch):
+    monkeypatch.setenv("TODO_FILE", str(tmp_path / "todos.yaml"))
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{{server.server_address[1]}}"
+    server.shutdown()
+    server.server_close()
+
+
+def _status(req):
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def test_todos_reject_an_empty_title_and_unknown_paths(base):
+    empty = json.dumps({{"title": " "}}).encode()
+    assert _status(urllib.request.Request(base + "/todos", data=empty)) == 400
+    assert _status(urllib.request.Request(base + "/other", data=b"{{}}")) == 404
+"""
+"""The tests the scripted debugger adds when verify reports the coverage floor (M11, I-091):
+P2's own tests leave the two error paths of ``do_POST`` uncovered (93% of the product)."""
 
 TODOS_ACCEPTANCE = """import json
 import urllib.request
@@ -258,6 +300,7 @@ HTTP_PRODUCT_SCRIPTS: list[TaskScript] = [
                     Edit("tests/acceptance/test_todos_http.py", "", TODOS_ACCEPTANCE),
                 ],
                 test_filter="todos",
+                debug_edits=[Edit("tests/test_todos_errors.py", "", TODOS_ERROR_TESTS)],
             )
         ],
         docs=[_changelog("`POST /todos` and `GET /todos` with a YAML store (P2).")],

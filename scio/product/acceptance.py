@@ -129,6 +129,16 @@ def wait_healthy(app: RunningApp, health_path: str, timeout_s: int = HEALTH_TIME
     return False
 
 
+def app_argv(spec: ProductSpec, tc: Toolchain, port: int | None = None) -> list[str]:
+    """The command that starts the product the way a user does: the profile's ``app_argv``
+    and target, then the ``## Runtime`` arguments with ``{port}`` filled in (none for a CLI,
+    whose arguments are the test's to choose)."""
+    target = [*tc.runtime().app_argv, tc.app_target(spec.name, spec.app.module)]
+    if port is None:
+        return target
+    return [*target, *[a.replace("{port}", str(port)) for a in spec.app.args]]
+
+
 def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
     sb, tc = ctx.sandbox, ctx.toolchain
     acc_dir = f"{sb.root}/{tc.acceptance_dir}"
@@ -140,11 +150,7 @@ def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
     if spec.app.kind == "http":
         port = free_port()
         url = f"http://127.0.0.1:{port}"
-        argv = [
-            *tc.runtime().app_argv,
-            tc.app_target(spec.name, spec.app.module),
-            *[a.replace("{port}", str(port)) for a in spec.app.args],
-        ]
+        argv = app_argv(spec, tc, port)
         app = start_app(sb, argv, url, tc)
         if not wait_healthy(app, spec.app.health_path):
             output = app.stop()
@@ -159,7 +165,9 @@ def run_acceptance(ctx: RunContext, spec: ProductSpec) -> tuple[str, bool]:
         r = sb.exec(tc.test_argv(filter=None, path=acc_dir), timeout_s=sb.limits.timeout_s, env=env)
     finally:
         app_output = app.stop() if app is not None else ""
-    outcome = tc.test_outcome(r.exit_code, r.stdout)
+    outcome: str = tc.test_outcome(r.exit_code, r.stdout)
+    if outcome == "passed" and tc.skipped_only(r.stdout):
+        outcome = "skipped only"  # every acceptance test skipped proves nothing (I-097)
     ok = outcome == "passed"
     tail = r.output.strip().splitlines()[-1][:200] if r.output.strip() else ""
     text = f"[acceptance] {outcome} ({label}): {tail}"

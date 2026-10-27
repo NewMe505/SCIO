@@ -76,6 +76,10 @@ class ProfileToolchain:
     """How a directory path becomes a target (``{path}/**/*.test.ts``); None: positional."""
     no_tests_patterns: tuple[str, ...] = ()
     """Output fragments that mean no tests ran when the exit code says passed."""
+    skipped_only_all: tuple[str, ...] = ()
+    skipped_only_none: tuple[str, ...] = ()
+    """Regexes over a passing run's output: all of the first and none of the second mean
+    every selected test was skipped (I-097)."""
     lint_absent_patterns: tuple[str, ...] = ()
     """Output fragments that mean the linter is not installed (clean, like exit 127)."""
     syntax_check_base_argv: tuple[str, ...] | None = None
@@ -86,6 +90,7 @@ class ProfileToolchain:
     skeleton_command_template: str = ""
     command_words: tuple[str, ...] = ()
     detect: Detect | None = None
+    release_image: str = ""
 
     def quality_checks(self) -> tuple[QualityCheck, ...]:
         return self.checks
@@ -152,6 +157,13 @@ class ProfileToolchain:
             return "broken"
         return "failed"
 
+    def skipped_only(self, stdout: str) -> bool:
+        if not self.skipped_only_all:
+            return False
+        return all(re.search(p, stdout) for p in self.skipped_only_all) and not any(
+            re.search(p, stdout) for p in self.skipped_only_none
+        )
+
     def failures_only(self, output: str) -> str:
         return self.parsers.failures_only(output)
 
@@ -213,6 +225,8 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         exit_no_tests=frozenset(test["exit_codes"]["no_tests"]),
         exit_broken=frozenset(test["exit_codes"]["broken"]),
         no_tests_patterns=tuple(test.get("no_tests_patterns", [])),
+        skipped_only_all=tuple(test.get("skipped_only", {}).get("all", [])),
+        skipped_only_none=tuple(test.get("skipped_only", {}).get("none", [])),
         selector_help=test["selector_help"],
         filter_help=test["filter_help"],
         lint_base_argv=tuple(lint["argv"]),
@@ -230,6 +244,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
                 skip_exit_codes=frozenset(c.get("skip_exit_codes", [])),
                 skip_patterns=tuple(c.get("skip_patterns", [])),
                 timeout_s=int(c.get("timeout_s", 600)),
+                verify=bool(c.get("verify", False)),
             )
             for c in data.get("checks", [])
         ),
@@ -240,6 +255,7 @@ def load_profile(path: Path, parsers: StackParsers) -> ProfileToolchain:
         detect=Detect(tuple(detect["markers"]), bool(detect.get("all_of", False)))
         if detect
         else None,
+        release_image=str(data.get("release_image", "")),
     )
 
 

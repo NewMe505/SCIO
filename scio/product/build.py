@@ -2,7 +2,8 @@
 
     load -> plan_milestone -> issues -> feature (x N: the task graph as a subgraph, one
     checkpoint thread per feature attempt) -> integrate -> milestone_gate -> [gate_decision]
-    -> milestone_pr -> merge_wait -> update_progress -> plan_milestone | done
+    -> milestone_pr -> merge_wait -> update_progress -> plan_milestone | release_check
+    -> [release_decision] -> release -> done          (the release gate, M11)
 
 The orchestrator, not a model, picks the next feature (the first open one in ``PRODUCT.md``
 order); the milestone planner only proposes how many to group and at what tier. Every
@@ -35,7 +36,7 @@ from scio.graph.nodes.common import fact as ledger_fact
 from scio.graph.run import resume_graph, run_graph, thread_started
 from scio.graph.run_context import T0_TOOL_CAP, RunContext, product_sandbox_backend
 from scio.harness.budget import BudgetGuard, BudgetLimits, BudgetsConfig
-from scio.harness.failures import BudgetExceeded
+from scio.harness.failures import BudgetExceeded, HarnessError
 from scio.harness.types import Message
 from scio.loop.exits import LoopLimits
 from scio.product.acceptance import run_acceptance
@@ -48,6 +49,14 @@ from scio.product.progress import (
     normalise_milestone,
     parse_product_md,
 )
+from scio.product.release import (
+    build_artifacts,
+    cut_changelog,
+    read_version,
+    release_notes,
+    tag_exists,
+)
+from scio.product.release_checks import release_report
 from scio.state.models import (
     Budget,
     ExitReason,
@@ -61,6 +70,7 @@ from scio.state.models import (
     ProductBuildState,
     ProductFeature,
     ProductSpec,
+    ReleaseRecord,
     Role,
     SCIOState,
     TaskSpec,
@@ -167,6 +177,60 @@ def product_env(ctx: RunContext, spec: ProductSpec) -> str:
     return summary
 
 
+def _commit_changed(
+    ctx: RunContext,
+    plan: MilestonePlan,
+    node: str,
+    kind: str,
+    subject: str,
+    wanted: Callable[[str], bool],
+) -> str | None:
+    """Commit the changed files ``wanted`` selects on the checked-out milestone branch, once
+    per milestone and node (probe: the marker). Returns the commit, or None if none changed."""
+    sb = ctx.sandbox
+    marker = f"[scio:{kind}:{plan.id}:{node}]"
+
+    def apply() -> str | None:
+        status = git_out(sb, "status", "--porcelain", "--untracked-files=all")
+        paths = [ln.split(maxsplit=1)[1] for ln in status.splitlines() if ln.strip()]
+        files = [p for p in paths if wanted(p)]
+        if not files:
+            return None
+        _git(ctx, "add", "--", *files)
+        _git(ctx, "commit", "-q", "-m", f"chore: {subject} {marker}")
+        return head_sha(sb)
+
+    return run_effect(
+        ctx.effects,
+        thread_id=ctx.thread_id,
+        node=node,
+        intent=f"{kind}-commit:{plan.id}",
+        apply=apply,
+        probe=lambda: find_commit(sb, marker),
+    )
+
+
+def commit_install(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
+    """Commit what the install phase wrote into the product tree (I-085). ``npm install
+    --save`` rewrites ``package.json`` and writes the lockfile outside any feature commit;
+    left alone they ride every checkout, the pre-attempt reset deletes the lockfile, and the
+    merge lands them on ``main`` unreviewed. Only the profile's dependency files are
+    committed; pip writes none."""
+    deps = ctx.toolchain.dependency_files
+    return _commit_changed(
+        ctx, plan, node, "install", "install approved dependencies", lambda p: Path(p).name in deps
+    )
+
+
+def commit_progress_sync(ctx: RunContext, plan: MilestonePlan, node: str) -> str | None:
+    """Commit ``load``'s sync of ``progress.json`` with ``PRODUCT.md`` (features added or
+    removed since the last run). Uncommitted, the first feature's reset reverted it and
+    ``update_progress`` wrote the stale records back (the I-085 sweep)."""
+    return _commit_changed(
+        ctx, plan, node, "sync", "sync progress.json with PRODUCT.md", lambda p: p == PROGRESS_PATH
+    )
+
+
 def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
     """The task graph's context for one feature run: the same sandbox (the product
     repository), effect log and prompts; its own thread, tier-pinned budget, cost ledger and
@@ -204,11 +268,18 @@ def feature_context(ctx: RunContext, thread_id: str, tier: str) -> RunContext:
         github=None,
         escalation=ctx.escalation,
         tool_context=ctx.tool_context,
+        quality_values=quality_values(ctx),
         tier=tier,
         tier_pin=tier,
         toolchain=ctx.toolchain,
         budget_from_tier=False,
     )
+
+
+def quality_values(ctx: RunContext) -> dict[str, object]:
+    """The placeholders of the profile's quality checks (M11): ``integrate`` and every
+    feature's verify fill the same ones, so a feature is judged by the milestone's bar."""
+    return {"coverage_floor": ctx.settings.coverage_floor}
 
 
 def feature_task(
@@ -483,6 +554,19 @@ def plan_milestone(ctx: RunContext) -> Node:
             ),
         )
         entries.append(fact(f"branch {plan.branch} at {sha[:12]}"))
+        # The install phase's manifest and lockfile changes are committed on the new branch
+        # before any feature's reset can delete them (I-085).
+        _git(ctx, "checkout", "-q", plan.branch)
+        try:
+            product_env(ctx, spec)
+        except RuntimeError as exc:
+            return _halt(ctx, "load_failed", f"install phase: {exc}")
+        installed = commit_install(ctx, plan, "plan_milestone")
+        if installed:
+            entries.append(fact(f"install phase changes committed at {installed[:12]}"))
+        synced = commit_progress_sync(ctx, plan, "plan_milestone")
+        if synced:
+            entries.append(fact(f"progress.json sync with PRODUCT.md committed at {synced[:12]}"))
         return {
             "milestone": plan,
             "issues": {},
@@ -499,10 +583,13 @@ def plan_milestone(ctx: RunContext) -> Node:
     return node
 
 
-def after_plan(state: ProductBuildState) -> Literal["issues", "done", "halt"]:
+def after_plan(state: ProductBuildState) -> Literal["issues", "release", "halt"]:
+    """Every feature done already (a build started after the last milestone merged with
+    ``merge and stop``) goes to the release gate, which ends at once if the version is
+    already tagged."""
     if state.exit_reason is not None:
         return "halt"
-    return "done" if state.phase == "done" else "issues"
+    return "release" if state.phase == "done" else "issues"
 
 
 def issues(ctx: RunContext) -> Node:
@@ -623,23 +710,52 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             issue_number=state.issues.get(feat.id),
         )
         entries: list[Any] = []
-        if thread_started(fctx, saver):
-            entries.append(fact(f"{feat.id}: resuming thread {thread} (attempt {attempt})"))
-            outcome = resume_graph(fctx, None, saver=saver)
-        else:
-            entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
-            # A fresh attempt starts from the milestone branch with a clean tree: a previous
-            # attempt that never passed verify leaves its edits uncommitted, and git carries
-            # them across a checkout into the next feature's run (I-067).
-            _git(ctx, "checkout", "-q", plan.branch)
-            _git(ctx, "reset", "-q", "--hard")
-            _git(ctx, "clean", "-fdq")
-            task = feature_task(
-                spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
+        try:
+            if thread_started(fctx, saver):
+                entries.append(fact(f"{feat.id}: resuming thread {thread} (attempt {attempt})"))
+                outcome = resume_graph(fctx, None, saver=saver)
+            else:
+                entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
+                # A fresh attempt starts from the milestone branch with a clean tree: a
+                # previous attempt that never passed verify leaves its edits uncommitted,
+                # and git carries them across a checkout into the next feature's run (I-067).
+                _git(ctx, "checkout", "-q", plan.branch)
+                _git(ctx, "reset", "-q", "--hard")
+                _git(ctx, "clean", "-fdq")
+                task = feature_task(
+                    spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
+                )
+                outcome = run_graph(fctx, task, saver=saver)
+            while outcome.paused and outcome.state.phase == "merge_wait":
+                outcome = resume_graph(
+                    fctx, f"merged into {plan.branch} by scio build", saver=saver
+                )
+        except HarnessError as exc:
+            # A provider or harness failure inside one feature ends this attempt, recorded,
+            # and the build gracefully; it never ends a product build as a traceback (I-100).
+            # No interrupt here: a resumed node would re-run the failing call first (I-065).
+            snap = fctx.harness.budget.snapshot()
+            failed = run.model_copy(
+                update={
+                    "status": "failed",
+                    "exit_reason": "error",
+                    "usd": round(snap.usd_used, 4),
+                    "tokens": snap.tokens_used,
+                }
             )
-            outcome = run_graph(fctx, task, saver=saver)
-        while outcome.paused and outcome.state.phase == "merge_wait":
-            outcome = resume_graph(fctx, f"merged into {plan.branch} by scio build", saver=saver)
+            entries.append(
+                fact(
+                    f"{feat.id} attempt {attempt} failed: {type(exc).__name__}: {str(exc)[:300]}; "
+                    f"the next `scio build` starts attempt {attempt + 1}"
+                )
+            )
+            return {
+                "feature_runs": [*state.feature_runs, failed],
+                "exit_reason": "feature_failed",
+                "phase": "halted",
+                "ledger": entries,
+                **ctx.budget_update(),
+            }
         final = outcome.state
         if not outcome.paused and final.exit_reason is ExitReason.SUCCESS:
             feature_head = final.github.head_sha or head_sha(ctx.sandbox)
@@ -743,9 +859,10 @@ def after_feature(state: ProductBuildState) -> Literal["feature", "integrate", "
 
 
 def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tuple[str, bool]:
-    """The quality bar on the current checkout: lint, the full suite, then the profile's
-    quality checks (coverage, build, audit, ...). A check whose tool is absent is reported
-    as skipped and does not fail the milestone; a failing one does (M9)."""
+    """The quality bar on the current checkout: lint, the full suite, the profile's quality
+    checks (coverage, build, audit, ...), the secret scan and the release files (M11), then
+    the black-box acceptance run. A profile check whose tool is absent is reported as skipped
+    and does not fail the milestone; a failing check does (M9)."""
     sb, tc = ctx.sandbox, ctx.toolchain
     lint = sb.exec(tc.lint_argv("."), timeout_s=120)
     findings = tc.lint_findings(lint.exit_code, lint.stdout, lint.stderr)
@@ -757,8 +874,9 @@ def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tupl
         f"[tests] {outcome}",
         tests.output[-2500:],
     ]
+    values = quality_values(ctx)
     for check in tc.quality_checks():
-        r = sb.exec(list(check.argv), timeout_s=check.timeout_s)
+        r = sb.exec(check.command(values), timeout_s=check.timeout_s)
         result = check.outcome(r.exit_code, r.output)
         tail = r.output.strip().splitlines()[-1][:200] if r.output.strip() else ""
         if result == "skipped":
@@ -768,6 +886,10 @@ def integration_checks(ctx: RunContext, spec: ProductSpec | None = None) -> tupl
         else:
             ok = False
             lines.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-1500:]}")
+    # Stack-neutral, SCIO's own code: they always run, never "tool absent" (M11).
+    release_lines, release_ok = release_report(sb, tc)
+    lines += release_lines
+    ok = ok and release_ok
     if spec is not None:
         acceptance, acc_ok = run_acceptance(ctx, spec)
         lines.append(acceptance)
@@ -779,8 +901,9 @@ def integrate(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         plan = state.milestone
         assert plan is not None and state.spec is not None
-        product_env(ctx, state.spec)
         _git(ctx, "checkout", "-q", plan.branch)
+        product_env(ctx, state.spec)
+        commit_install(ctx, plan, "integrate")  # a resumed install that wrote again (I-085)
         text, ok = integration_checks(ctx, state.spec)
         entries = [
             fact(
@@ -1157,15 +1280,213 @@ def update_progress(ctx: RunContext) -> Node:
             "milestone": None,  # recorded in progress.json; the next plan sets a new one
             "pr": None,
             "merged_commit": None,
-            "phase": "plan" if remaining and not state.stop_after_merge else "done",
+            # the last milestone leads to the release gate; "merge and stop" ends the thread
+            "phase": "done" if state.stop_after_merge else "plan" if remaining else "release_check",
             "ledger": entries,
         }
 
     return node
 
 
-def after_update(state: ProductBuildState) -> Literal["plan", "done"]:
-    return "plan" if state.phase == "plan" else "done"
+def after_update(state: ProductBuildState) -> Literal["plan", "release", "done"]:
+    if state.phase == "plan":
+        return "plan"
+    return "release" if state.phase == "release_check" else "done"
+
+
+# ---------- the release gate (M11) ----------
+
+RELEASE_ANSWERS = ("release", "yes", "approve", "approved", "ok", "ship")
+
+
+def release_check(ctx: RunContext) -> Node:
+    """Once no milestone remains: the product-ready bar on ``main`` (every ``integrate``
+    check, acceptance included) and the version the product reports about itself. A failing
+    check ends the build without a release (ADR 0007: checks override any verdict); a
+    version that is already tagged ends it with nothing to do."""
+
+    def node(state: ProductBuildState) -> dict[str, Any]:
+        spec = state.spec
+        assert spec is not None
+        sb, tc = ctx.sandbox, ctx.toolchain
+        _git(ctx, "checkout", "-q", "main")
+        try:
+            product_env(ctx, spec)
+        except RuntimeError as exc:
+            return _halt(ctx, "release_failed", f"install phase: {exc}")
+        version, out = read_version(sb, tc, spec)
+        if version is None:
+            command = tc.skeleton_command(spec.name)
+            return _halt(ctx, "release_failed", f"`{command}` printed no version: {out}")
+        tag = f"v{version}"
+        if (sha := tag_exists(sb, tag)) is not None:
+            record = state.release or ReleaseRecord(
+                version=version, tag=tag, report="already released", ok=True, commit=sha
+            )
+            return {
+                "release": record,
+                "phase": "done",
+                **_fact(f"{tag} already exists at {sha[:12]}; nothing to release"),
+            }
+        report, ok = integration_checks(ctx, spec)
+        record = ReleaseRecord(version=version, tag=tag, report=report, ok=ok)
+        entry = fact(
+            f"release check on main for {tag}: {'green' if ok else 'FAILED'}", source=Role.TESTER
+        )
+        if not ok:
+            return {
+                "release": record,
+                "exit_reason": "release_failed",
+                "phase": "halted",
+                "ledger": [entry],
+            }
+        return {"release": record, "phase": "release_decision", "ledger": [entry]}
+
+    return node
+
+
+def after_release_check(state: ProductBuildState) -> Literal["decide", "done", "halt"]:
+    if state.exit_reason is not None:
+        return "halt"
+    return "decide" if state.phase == "release_decision" else "done"
+
+
+def release_decision(ctx: RunContext) -> Node:
+    """The human stop before anything is tagged or published. It only asks: a node that
+    interrupts does nothing else, so a resume cannot repeat a side effect (I-065)."""
+
+    def node(state: ProductBuildState) -> dict[str, Any]:
+        spec, rel = state.spec, state.release
+        assert spec is not None and rel is not None
+        where = "and publish a GitHub Release" if ctx.github is not None else "locally"
+        answer = str(
+            interrupt(
+                {
+                    "question": f"{spec.title} {rel.tag}: the product-ready bar is green on "
+                    f"main. Reply 'release' to tag {rel.tag} {where}; 'stop' to end the "
+                    "build without a release.",
+                    "version": rel.version,
+                    "tag": rel.tag,
+                    "report": rel.report[-3000:],
+                    "cost_usd": total_usd(state),
+                    "resume": 'scio build --product <dir> --decision "<release|stop>"',
+                }
+            )
+        )
+        choice = answer.strip().lower()
+        note = [f"{rel.tag} release: {answer.strip()[:120]}"]
+        if choice.startswith(RELEASE_ANSWERS):
+            return {
+                "phase": "release",
+                "human_notes": note,
+                "ledger": [decision(f"human approves the {rel.tag} release", source=Role.HUMAN)],
+            }
+        if choice.startswith(STOP_ANSWERS):
+            return {
+                "phase": "done",
+                "human_notes": note,
+                "ledger": [decision(f"{rel.tag} not released", source=Role.HUMAN)],
+            }
+        return {
+            "phase": "release_decision",
+            "human_notes": note,
+            "ledger": [fact(f"unrecognised release answer {answer.strip()[:60]!r}; asking again")],
+        }
+
+    return node
+
+
+def after_release_decision(
+    state: ProductBuildState,
+) -> Literal["release", "release_decision", "done"]:
+    if state.phase in ("release", "release_decision"):
+        return state.phase
+    return "done"
+
+
+def release(ctx: RunContext) -> Node:
+    """Cut the changelog on ``main``, tag, keep the artifacts; with GitHub, push the tag and
+    publish the Release with the artifacts attached. Each step is an effect with a world
+    probe, so a resumed release neither tags nor publishes twice (ADR 0003). ``main`` itself
+    is not pushed: like the progress commits, the cut reaches GitHub with the tag."""
+
+    def node(state: ProductBuildState) -> dict[str, Any]:
+        spec, rel = state.spec, state.release
+        assert spec is not None and rel is not None
+        sb = ctx.sandbox
+        marker = f"[scio:release:{rel.tag}]"
+        changelog = f"{sb.root}/CHANGELOG.md"
+
+        def cut() -> str:
+            _git(ctx, "checkout", "-q", "main")
+            text = sb.read_text(changelog) if sb.exists(changelog) else "# Changelog\n"
+            sb.write_text(changelog, cut_changelog(text, rel.version))
+            _git(ctx, "add", "CHANGELOG.md")
+            if git_out(sb, "status", "--porcelain", "CHANGELOG.md"):
+                _git(ctx, "commit", "-q", "-m", f"chore(release): {rel.tag} {marker}")
+            return head_sha(sb)
+
+        commit = run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"cut:{rel.tag}",
+            apply=cut,
+            probe=lambda: find_commit(sb, marker),
+        )
+
+        def tag() -> str:
+            _git(ctx, "tag", "-a", rel.tag, "-m", f"{spec.title} {rel.tag}", commit)
+            return commit
+
+        run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"tag:{rel.tag}",
+            apply=tag,
+            probe=lambda: tag_exists(sb, rel.tag),
+        )
+        artifacts = run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node="release",
+            intent=f"artifacts:{rel.tag}",
+            apply=lambda: build_artifacts(sb, spec, rel.version, rel.tag),
+        )
+        url: str | None = None
+        gh = ctx.github
+        if gh is not None:
+            run_effect(
+                ctx.effects,
+                thread_id=ctx.thread_id,
+                node="release",
+                intent=f"push-tag:{rel.tag}",
+                apply=lambda: _git(ctx, "push", "origin", f"refs/tags/{rel.tag}"),
+            )
+            notes = release_notes(sb.read_text(changelog), rel.version)
+            url = run_effect(
+                ctx.effects,
+                thread_id=ctx.thread_id,
+                node="release",
+                intent=f"gh-release:{rel.tag}",
+                apply=lambda: gh.ensure_release(
+                    tag=rel.tag,
+                    title=f"{spec.title} {rel.tag}",
+                    notes=notes,
+                    assets=[f"{sb.root}/{a}" for a in artifacts],
+                ),
+                probe=lambda: gh.find_release(rel.tag),
+            )
+        shipped = rel.model_copy(update={"commit": commit, "artifacts": artifacts, "url": url})
+        where = url or f"locally ({', '.join(artifacts)})"
+        return {
+            "release": shipped,
+            "phase": "done",
+            **_fact(f"released {rel.tag} at {commit[:12]}: {where}"),
+        }
+
+    return node
 
 
 def done(_ctx: RunContext) -> Node:
@@ -1203,11 +1524,16 @@ def build_product_build_graph(
     n("milestone_pr", milestone_pr)
     n("merge_wait", merge_wait)
     n("update_progress", update_progress)
+    n("release_check", release_check)
+    n("release_decision", release_decision)
+    n("release", release)
     n("done", done)
     g.add_edge(START, "load")
     g.add_conditional_edges("load", after_load, {"plan": "plan_milestone", "halt": "done"})
     g.add_conditional_edges(
-        "plan_milestone", after_plan, {"issues": "issues", "done": "done", "halt": "done"}
+        "plan_milestone",
+        after_plan,
+        {"issues": "issues", "release": "release_check", "halt": "done"},
     )
     g.add_edge("issues", "feature")
     g.add_conditional_edges(
@@ -1231,8 +1557,21 @@ def build_product_build_graph(
         {"update": "update_progress", "merge_wait": "merge_wait", "halt": "done"},
     )
     g.add_conditional_edges(
-        "update_progress", after_update, {"plan": "plan_milestone", "done": "done"}
+        "update_progress",
+        after_update,
+        {"plan": "plan_milestone", "release": "release_check", "done": "done"},
     )
+    g.add_conditional_edges(
+        "release_check",
+        after_release_check,
+        {"decide": "release_decision", "done": "done", "halt": "done"},
+    )
+    g.add_conditional_edges(
+        "release_decision",
+        after_release_decision,
+        {"release": "release", "release_decision": "release_decision", "done": "done"},
+    )
+    g.add_edge("release", "done")
     g.add_edge("done", END)
     return g
 

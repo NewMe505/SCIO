@@ -194,8 +194,10 @@ class ProgressLedger(BaseModel):
     tool_calls: int = 0
     """T0 cap = 10."""
     last_fingerprint: str | None = None
-    last_failure_kind: Literal["none", "tests", "lint_only", "no_changes"] = "none"
-    """What the last verify failed on; ``lint_only`` is on the never-escalate list."""
+    last_failure_kind: Literal["none", "tests", "lint_only", "quality", "no_changes"] = "none"
+    """What the last verify failed on; ``lint_only`` and ``quality`` (a product check such as
+    the coverage floor failed while tests and lint passed, M11) are on the never-escalate
+    list."""
     gate_replans: int = 0
     """Times the gate sent a planned run back to ``plan``; capped at one per run (I-043)."""
 
@@ -516,6 +518,22 @@ class MilestonePR(BaseModel):
     """Offline: where the PR body was written instead."""
 
 
+class ReleaseRecord(BaseModel):
+    """The release gate's outcome (M11): what was checked on ``main`` and what was shipped."""
+
+    version: str
+    tag: str
+    report: str
+    """The product-ready bar on ``main``, as ``integrate`` reports it."""
+    ok: bool
+    commit: str | None = None
+    """The changelog-cut commit the tag points at, once tagged."""
+    artifacts: list[str] = Field(default_factory=list)
+    """Repository-relative paths under ``.scio/sandbox/release/`` (git-ignored)."""
+    url: str | None = None
+    """The GitHub Release, when the build runs with ``--gh``."""
+
+
 ProductBuildPhase = Literal[
     "load",
     "plan",
@@ -526,6 +544,9 @@ ProductBuildPhase = Literal[
     "pr",
     "merge_wait",
     "update",
+    "release_check",
+    "release_decision",
+    "release",
     "done",
     "halted",
 ]
@@ -555,9 +576,12 @@ class ProductBuildState(BaseModel):
     """The human answered ``merge and stop``: record the milestone, then end the thread instead
     of planning the next milestone (``scio build`` starts a new thread for it)."""
     milestones_done: list[str] = Field(default_factory=list)
+    release: ReleaseRecord | None = None
+    """Set by the release gate once no milestone remains (M11)."""
     exit_reason: str | None = None
     """None while running or on success; ``feature_failed``, ``integration_failed``,
-    ``gate_escalated``, ``stopped``, ``budget`` or ``load_failed`` otherwise."""
+    ``gate_escalated``, ``stopped``, ``budget``, ``load_failed`` or ``release_failed``
+    otherwise."""
     human_notes: Annotated[list[str], operator.add] = Field(default_factory=list)
     ledger: Annotated[list[LedgerEntry], operator.add] = Field(default_factory=list)
     budgets: Budget

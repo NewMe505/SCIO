@@ -76,3 +76,17 @@ def test_a_milestone_already_released_is_not_pending_again() -> None:
     assert cd.unreleased_done_milestones(changelog, PM_STATUS) == []
     done_m11 = PM_STATUS.replace("M11 next", "M11 Product-ready + evals done")
     assert cd.unreleased_done_milestones(changelog, done_m11) == ["M11"]
+
+
+def test_an_entry_merged_into_a_released_section_is_caught() -> None:
+    """I-089: merging main across the 0.6.0 cut put a branch's unreleased Fixed entries
+    under [0.6.0], which no longer matched the tag."""
+    cd = _load()
+    released = "## [0.6.0] - 2026-10-26\n### Fixed\n"
+    tagged = f"## [Unreleased]\n\n{released}- old fix\n"
+    moved = f"## [Unreleased]\n\n{released}- new fix\n- old fix\n"
+    kept = f"## [Unreleased]\n### Fixed\n- new fix\n\n{released}- old fix\n"
+    assert cd.released_section_changed(moved, tagged, "0.6.0")
+    assert not cd.released_section_changed(kept, tagged, "0.6.0")
+    assert not cd.released_section_changed(kept, "## [Unreleased]\n", "0.6.0")  # no tag yet
+    assert cd.check_released_section_frozen() == []

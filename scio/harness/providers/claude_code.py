@@ -145,6 +145,24 @@ def parse_result(res: ClaudeRunResult) -> dict[str, Any]:
     return data
 
 
+def schema_hint(schema: dict[str, Any]) -> str:
+    """The re-ask after a ``--json-schema`` answer missed within the turn cap: the required
+    keys and every string field's length limit, which the model most often overruns."""
+    props = schema.get("properties", {}) if isinstance(schema.get("properties"), dict) else {}
+    limits = [
+        f"{name} at most {spec['maxLength']} characters"
+        for name, spec in props.items()
+        if isinstance(spec, dict) and "maxLength" in spec
+    ]
+    required = ", ".join(str(k) for k in schema.get("required", []))
+    return (
+        "\n\nYour previous answer never matched the required schema within the turn limit. "
+        f"Answer with the structured output once, with every required key ({required})"
+        + (f" and {'; '.join(limits)}" if limits else "")
+        + "."
+    )
+
+
 def render_messages(request: CompletionRequest) -> str:
     """The conversation as one prompt: ``claude -p`` takes a single input, so earlier turns
     (the repair loop's assistant reply and the re-ask) are rendered with their roles."""
@@ -225,11 +243,22 @@ class ClaudeCodeProvider:
                 argv += ["--effort", request.effort]
             if schema is not None:
                 argv += ["--json-schema", json.dumps(schema)]
+            prompt = render_messages(request)
             self.calls.append(list(argv))
-            res = self._run(
-                argv, cwd=None, stdin=render_messages(request), timeout_s=self.timeout_s
-            )
-        data = parse_result(res)
+            res = self._run(argv, cwd=None, stdin=prompt, timeout_s=self.timeout_s)
+            try:
+                data = parse_result(res)
+            except FatalError as exc:
+                if schema is None or "error_max_turns" not in str(exc):
+                    raise
+                # Claude Code's schema check refused every answer within the turn cap (an
+                # over-long string, a missing key): ask once more with the limits spelled
+                # out, as the worker's summary does (I-077, I-100).
+                self.calls.append(list(argv))
+                res = self._run(
+                    argv, cwd=None, stdin=prompt + schema_hint(schema), timeout_s=self.timeout_s
+                )
+                data = parse_result(res)
         if schema is not None and data.get("structured_output") is not None:
             text = json.dumps(data["structured_output"])
         else:

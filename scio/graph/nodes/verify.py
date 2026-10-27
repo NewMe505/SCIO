@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-from scio.aci.tools import RunTestsInput, ToolError, run_tests
+from scio.aci.tools import SKIPPED_ONLY, RunTestsInput, ToolError, run_tests
 from scio.graph.nodes.common import diff_stat, fact
 from scio.graph.run_context import RunContext
 from scio.loop.escalation import decide, exit_for, review_decision
@@ -24,6 +24,30 @@ def lint(ctx: RunContext) -> str:
     r = ctx.sandbox.exec(tc.lint_argv("."), timeout_s=120)
     findings = tc.lint_findings(r.exit_code, r.stdout, "")
     return (findings or "")[:3000]
+
+
+QUALITY_HINT = (
+    "These checks are the product's quality bar; the milestone is held to the same bar. "
+    "Coverage counts the product's own code run inside the test process: test logic by "
+    "importing it (a test that starts the app as a child process does not count), and mark "
+    "code only a started process runs (the serve loop) with the coverage tool's ignore comment."
+)
+
+
+def quality(ctx: RunContext) -> str:
+    """Product feature runs: the profile's ``verify: true`` checks (the coverage floor, the
+    type check), so a feature meets the bar ``integrate`` holds the milestone to (M11, I-091).
+    '' when they pass or are skipped (tool absent), and always in task mode."""
+    if ctx.quality_values is None:
+        return ""
+    failed: list[str] = []
+    for check in ctx.toolchain.quality_checks():
+        if not check.verify:
+            continue
+        r = ctx.sandbox.exec(check.command(ctx.quality_values), timeout_s=check.timeout_s)
+        if check.outcome(r.exit_code, r.output) == "failed":
+            failed.append(f"[{check.name}] FAILED (exit {r.exit_code})\n{r.output[-2000:]}")
+    return "\n\n".join([*failed, QUALITY_HINT]) if failed else ""
 
 
 SELECTOR_SEP = " ; "
@@ -51,12 +75,20 @@ def split_selectors(test_filter: str) -> list[str]:
     return [s for s in (x.strip() for x in test_filter.split(SELECTOR_SEP)) if s]
 
 
+SKIP_HINT = (
+    " (a skipped test proves nothing: black-box acceptance tests run only at integrate, "
+    "against the started app; prove the feature with tests that run here, in-process; "
+    "existing tests count)"
+)
+
+
 def _run(ctx: RunContext, flt: str | None) -> tuple[str, bool]:
+    """The whole suite (the regression check): nothing may fail; skips are not failures."""
     try:
         out = run_tests(ctx.sandbox, RunTestsInput(filter=flt), toolchain=ctx.toolchain)
     except ToolError as exc:
         return str(exc), False
-    return out, out.startswith("all tests passed")
+    return out, out.startswith(("all tests passed", SKIPPED_ONLY))
 
 
 def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
@@ -73,6 +105,9 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
         if out.startswith("no tests collected"):
             ok = False
             out += f" (selector matched nothing: use {ctx.toolchain.selector_help})"
+        if out.startswith(SKIPPED_ONLY):  # a feature's proof must run (I-097)
+            ok = False
+            out += SKIP_HINT
         label = f"path={inp.path!r}" if inp.path else f"filter={inp.filter!r}"
         chunks.append(f"[run_tests {label}]\n{out}")
         ok_all &= ok
@@ -80,7 +115,8 @@ def _run_selectors(ctx: RunContext, test_filter: str) -> tuple[str, bool]:
 
 
 def verify(ctx: RunContext) -> Node:
-    """Ground truth, in order: changes exist; feature tests exist and pass; suite passes; lint."""
+    """Ground truth, in order: changes exist; feature tests exist and pass; suite passes; lint;
+    in a product feature run, the profile's verify-time quality checks (M11)."""
 
     def node(state: SCIOState) -> dict[str, Any]:
         outputs: list[str] = []
@@ -114,7 +150,8 @@ def verify(ctx: RunContext) -> Node:
         per_filter_ok: dict[str | None, bool] = {}
         for flt in sorted({f.test_filter for f in in_scope if f.test_filter}):
             out, ok = _run_selectors(ctx, flt)
-            if not ok and fallback and fallback != flt and "matched nothing" in out:
+            unproven = "matched nothing" in out or SKIPPED_ONLY in out
+            if not ok and fallback and fallback != flt and unproven:
                 # The plan guessed test names before the tests existed (I-037). The tests the
                 # worker actually reports are the ground truth; adopt them if they pass.
                 out2, ok2 = _run_selectors(ctx, fallback)
@@ -146,7 +183,11 @@ def verify(ctx: RunContext) -> Node:
         lint_out = lint(ctx)
         if lint_out:
             outputs.append(f"[lint]\n{lint_out}")
-        all_ok = tests_ok and not lint_out
+        # 4. Product feature runs: the quality checks the milestone will be held to (M11).
+        quality_out = quality(ctx) if tests_ok and not lint_out else ""
+        if quality_out:
+            outputs.append(quality_out)
+        all_ok = tests_ok and not lint_out and not quality_out
         text = "\n\n".join(outputs)
         ref = ctx.artifacts.put("test_output", text, produced_by=Role.TESTER)
 
@@ -177,6 +218,8 @@ def verify(ctx: RunContext) -> Node:
             else "no_changes"
             if no_changes
             else "lint_only"
+            if tests_ok and lint_out
+            else "quality"
             if tests_ok
             else "tests"
         )

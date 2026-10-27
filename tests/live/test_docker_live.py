@@ -165,3 +165,87 @@ def test_git_works_on_the_mount(tmp_path: Path, sandbox: DockerSandbox) -> None:
     r = sandbox.exec(["sh", "-c", "git add -A && git commit -q -m init && git log --format=%an -1"])
     assert r.ok and r.stdout.strip() == "SCIO CI", r.output
     assert (tmp_path / ".git").is_dir()
+
+
+def _scaffold(root: Path, stack: str, kind: str) -> None:
+    from scio.product.scaffold import scaffold_for
+    from scio.state.models import AppSpec, ProductFeature, ProductSpec
+
+    spec = ProductSpec(
+        name="shop_api",
+        title="Shop API",
+        vision="v",
+        users=["u"],
+        features=[ProductFeature(id="P1", description="skeleton", acceptance=["starts"])],
+        quality_bar=["q"],
+        stack=stack,
+        app=(
+            AppSpec(
+                kind="http",
+                module="shop_api" if stack == "python" else None,
+                args=["serve", "--port", "{port}"],
+            )
+            if kind == "http"
+            else AppSpec()
+        ),
+    )
+    for rel, text in scaffold_for(spec).items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8", newline="\n")
+
+
+@pytest.mark.parametrize("stack", ["python", "node-ts"])
+@pytest.mark.parametrize("kind", ["cli", "http"])
+def test_the_scaffold_dockerfile_builds_and_runs(tmp_path: Path, stack: str, kind: str) -> None:
+    """M11: the release image every scaffold ships builds and runs; an http product answers
+    its health path through a published port (``HOST=0.0.0.0`` inside the container). Written
+    without a local daemon (I-016): the first docker-live run is the experiment."""
+    import json
+    import socket
+    import time
+    import urllib.request
+
+    _scaffold(tmp_path, stack, kind)
+    tag = f"scio-scaffold-{stack}-{kind}:ci"
+    built = subprocess.run(
+        ["docker", "build", "-q", "-t", tag, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    try:
+        if kind == "cli":
+            r = subprocess.run(
+                ["docker", "run", "--rm", tag], capture_output=True, text=True, timeout=120
+            )
+            assert r.returncode == 0 and r.stdout.strip() == "0.1.0", r.stdout + r.stderr
+            return
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = int(s.getsockname()[1])
+        run = subprocess.run(
+            ["docker", "run", "-d", "-p", f"127.0.0.1:{port}:8000", tag],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert run.returncode == 0, run.stderr
+        cid = run.stdout.strip()
+        try:
+            body: dict[str, str] = {}
+            health = f"http://127.0.0.1:{port}/health"
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and not body:
+                try:
+                    with urllib.request.urlopen(health, timeout=2) as res:
+                        body = json.load(res)
+                except OSError:
+                    time.sleep(0.5)
+            logs = subprocess.run(["docker", "logs", cid], capture_output=True, text=True)
+            assert body == {"status": "ok", "version": "0.1.0"}, logs.stdout + logs.stderr
+        finally:
+            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
+    finally:
+        subprocess.run(["docker", "image", "rm", "-f", tag], capture_output=True, timeout=120)

@@ -313,6 +313,37 @@ class GitHubClient:
         self._gh("pr", "edit", str(number), "-R", self.repo, "--body-file", "-", stdin=body)
         self._record("update_pr_body", f"#{number}", noop=False)
 
+    def find_release(self, tag: str) -> str | None:
+        """The URL of the GitHub Release for ``tag``, or None (the release gate's probe)."""
+        r = self._run(["release", "view", tag, "-R", self.repo, "--json", "url"])
+        if r.code != 0:
+            return None
+        return str(json.loads(r.stdout)["url"]) if r.stdout.strip() else None
+
+    def ensure_release(self, *, tag: str, title: str, notes: str, assets: Sequence[str]) -> str:
+        """Create the GitHub Release for an already pushed ``tag`` with ``assets`` attached,
+        unless one exists. Returns its URL (M11)."""
+        found = self.find_release(tag)
+        if found is not None:
+            self._record("release", tag, noop=True)
+            return found
+        out = self._gh(
+            "release",
+            "create",
+            tag,
+            "-R",
+            self.repo,
+            "--title",
+            title,
+            "--notes-file",
+            "-",
+            "--verify-tag",
+            *assets,
+            stdin=notes,
+        )
+        self._record("release", tag, noop=False, detail=f"{len(assets)} asset(s)")
+        return out.strip().splitlines()[-1] if out.strip() else ""
+
     def mark_ready(self, number: int) -> bool:
         """Flip a draft PR to ready. Returns False if it was already ready."""
         d = self._json("pr", "view", str(number), "-R", self.repo, "--json", "isDraft")

@@ -1,0 +1,12 @@
+id: p003_web_todo
+suite: product
+title: "p003: a todo web app with a page and a form, built from PRODUCT.md to a release, graded in a browser"
+spec_file: PRODUCT.md
+trials: 1
+grader: product
+hidden_tests: hidden
+budget:
+  tokens: 20000000
+  usd: 40.0
+scenario:
+  product: todo_web

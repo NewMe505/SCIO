@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +63,10 @@ class Settings(BaseSettings):
     """The backend ``scio build`` uses (M9): ``auto`` is Docker when a daemon answers and the
     worker backend is ``aci``, else ``local`` with the reason in the ledger; ``local`` and
     ``docker`` force one. Task mode and ``scio new`` keep ``sandbox_backend``."""
+    coverage_floor: int = Field(default=80, ge=0, le=100)
+    """Line-coverage floor of the product quality bar (M11), in percent of the product's own
+    code (tests excluded): ``integrate`` fills it into ``{coverage_floor}`` in a profile
+    check's argv."""
     sandbox_docker_image: str = "python:3.12-slim"
     """Needs ``git`` for product builds: ``docker/sandbox.Dockerfile`` adds it to this image."""
     sandbox_e2b_template: str | None = None
@@ -81,8 +86,12 @@ class Settings(BaseSettings):
     claude_code_bin: str = "claude"
     """The unmodified Claude Code binary (on PATH, or an absolute path)."""
     claude_code_budget_factor: float = 4.0
-    """Scale for the tier caps in ``budgets.yaml`` on the ``claude_code`` backend: Claude
-    Code's cost estimate for the same work is about four times the API figure (I-069)."""
+    """Scale for the tier dollar caps in ``budgets.yaml`` on the ``claude_code`` backend:
+    Claude Code's cost estimate for the same work is about four times the API figure (I-069)."""
+    claude_code_token_factor: float = 10.0
+    """Scale for the tier token caps on the ``claude_code`` backend: its tokens are mostly
+    cheap cache traffic (about 380,000 billable tokens per estimated dollar in the live product
+    evals), so tokens need a larger factor than dollars for both caps to bind together (I-099)."""
 
 
 def get_settings() -> Settings:

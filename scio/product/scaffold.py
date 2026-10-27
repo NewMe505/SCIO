@@ -16,6 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from scio.product.progress import ProgressFile
+from scio.product.release_checks import RUN_END, RUN_START
 from scio.state.models import ProductSpec
 from scio.toolchain import Toolchain, get_toolchain
 
@@ -65,9 +66,9 @@ def _common_files(
     return {
         "README.md": (
             f"# {spec.title}\n\n{spec.vision}\n\n"
-            "## Run\n\n```\n"
-            f"{run_cmd}\n"
-            "```\n\n## Develop\n\n```\n" + "\n".join(develop_cmds) + "\n```\n\n"
+            # the run block: `scio build` runs these commands and so does the product's CI (M11)
+            f"## Run\n\n{RUN_START}\n```\n{run_cmd}\n```\n{RUN_END}\n\n"
+            "## Develop\n\n```\n" + "\n".join(develop_cmds) + "\n```\n\n"
             "Product specification: [PRODUCT.md](PRODUCT.md). "
             "Progress: `.scio/product/progress.json`.\n"
         ),
@@ -76,6 +77,7 @@ def _common_files(
             "CI (SCIO bootstrap).\n"
         ),
         "LICENSE": MIT.format(year=datetime.now(UTC).year, owner=owner),
+        ".dockerignore": ".git\n.scio\n" + "".join(f"{p}\n" for p in tc.cache_excludes),
         ".gitignore": gitignore + ".scio/sandbox/\n.scio/ledger/\n.scio/artifacts/\n",
         "NOTES.md": (
             "# Notes\n\nWorking notes SCIO and humans leave for the next session. "
@@ -84,6 +86,38 @@ def _common_files(
             "walking skeleton, CI, smoke test.\n"
         ),
     }
+
+
+README_RUN_STEP = (
+    "      - name: README run commands\n"
+    "        run: |\n"
+    f"          awk '/{RUN_END[5:-4]}/{{f=0}} f && !/^```/; /{RUN_START[5:]}/{{f=1}}' "
+    "README.md > readme-run.sh\n"
+    "          bash -e readme-run.sh\n"
+)
+"""The product CI step that runs the README's run block, the one ``integrate`` runs (M11)."""
+
+DOCKER_PORT = 8000
+
+
+def dockerfile(spec: ProductSpec, tc: Toolchain) -> str:
+    """The release artifact every scaffold ships (M11, PRODUCT_MODE component 5): the
+    profile's ``release_image`` lines, then the same command the acceptance runner starts
+    (``app_argv`` and target). An http product listens on 0.0.0.0 inside the container."""
+    target = [*tc.runtime().app_argv, tc.app_target(spec.name, spec.app.module)]
+    image = spec.name.replace("_", "-")
+    head = (
+        f"# The release image: docker build -t {image} . && docker run --rm {image}\n"
+        + tc.release_image
+    )
+    if spec.app.kind == "http":
+        args = [a.replace("{port}", str(DOCKER_PORT)) for a in spec.app.args]
+        return (
+            head
+            + f"ENV HOST=0.0.0.0\nEXPOSE {DOCKER_PORT}\n"
+            + f"CMD {json.dumps([*target, *args])}\n"
+        )
+    return head + f"ENTRYPOINT {json.dumps(target)}\nCMD {json.dumps(['--version'])}\n"
 
 
 # ---------- python ----------
@@ -102,7 +136,10 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             f'description = "{spec.title}"\n'
             'requires-python = ">=3.12"\n'
             "dependencies = [" + ", ".join(f'"{d}"' for d in spec.dependencies) + "]\n\n"
-            '[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = ["E", "F", "I"]\n'
+            '[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = ["E", "F", "I"]\n\n'
+            # the coverage floor measures the product's own code, not its tests, and not the
+            # two-line `python -m` entry that only a subprocess runs (M11)
+            f'[tool.coverage.run]\nsource = ["{pkg}"]\nomit = ["*/__main__.py"]\n'
         ),
         f"{pkg}/__init__.py": f'"""{spec.title}."""\n\n__version__ = "0.1.0"\n',
         f"{pkg}/__main__.py": (f"from {pkg}.cli import main\n\nraise SystemExit(main())\n"),
@@ -127,19 +164,12 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             if spec.app.kind == "http"
             else _cli_acceptance(pkg)
         ),
+        "Dockerfile": dockerfile(spec, tc),
         "tests/conftest.py": (
             "import pathlib\nimport sys\n\n"
             "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))\n"
         ),
-        "tests/test_smoke.py": (
-            f"from {pkg} import __version__\n"
-            f"from {pkg}.cli import main\n\n\n"
-            "def test_version_flag_prints_the_version(capsys):\n"
-            '    assert main(["--version"]) == 0\n'
-            "    assert capsys.readouterr().out.strip() == __version__\n\n\n"
-            "def test_no_arguments_prints_usage():\n"
-            "    assert main([]) == 2\n"
-        ),
+        "tests/test_smoke.py": _python_smoke_tests(pkg, http=spec.app.kind == "http"),
         ".github/workflows/ci.yml": (
             "name: ci\n"
             "on: [push, pull_request]\n"
@@ -153,8 +183,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             '          python-version: "3.12"\n'
             "      - run: pip install ruff pytest\n"
             f"      - run: {lint_cmd}\n"
-            f"      - run: {test_cmd}\n"
-            f"      - run: {tc.skeleton_command(pkg)}\n"
+            f"      - run: {test_cmd}\n" + README_RUN_STEP
         ),
     }
     files.update(
@@ -168,6 +197,47 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
         )
     )
     return files
+
+
+def _python_smoke_tests(pkg: str, *, http: bool) -> str:
+    """The skeleton's own tests, in-process: the coverage floor counts only code that runs in
+    the test process (M11); the acceptance tests drive the real command line."""
+    text = (
+        f"from {pkg} import __version__\n"
+        f"from {pkg}.cli import main\n\n\n"
+        "def test_version_flag_prints_the_version(capsys):\n"
+        '    assert main(["--version"]) == 0\n'
+        "    assert capsys.readouterr().out.strip() == __version__\n\n\n"
+        "def test_no_arguments_prints_usage():\n"
+        "    assert main([]) == 2\n"
+    )
+    if not http:
+        return text
+    return (
+        "import json\n"
+        "import threading\n"
+        "import urllib.error\n"
+        "import urllib.request\n"
+        "from http.server import HTTPServer\n\n"
+        "import pytest\n\n"
+        + text.replace(
+            f"from {pkg}.cli import main\n", f"from {pkg}.cli import HEALTH_PATH, Handler, main\n"
+        )
+        + "\n\n"
+        "def test_the_app_answers_its_health_path_and_404s_elsewhere():\n"
+        '    server = HTTPServer(("127.0.0.1", 0), Handler)\n'
+        "    threading.Thread(target=server.serve_forever, daemon=True).start()\n"
+        "    try:\n"
+        '        base = f"http://127.0.0.1:{server.server_port}"\n'
+        "        with urllib.request.urlopen(base + HEALTH_PATH) as res:\n"
+        '            assert json.load(res) == {"status": "ok", "version": __version__}\n'
+        "        with pytest.raises(urllib.error.HTTPError) as missing:\n"
+        '            urllib.request.urlopen(base + "/missing")\n'
+        "        assert missing.value.code == 404\n"
+        "    finally:\n"
+        "        server.shutdown()\n"
+        "        server.server_close()\n"
+    )
 
 
 def _cli(pkg: str) -> str:
@@ -193,6 +263,7 @@ def _http_cli(pkg: str) -> str:
         '"""Command line entry point: the walking skeleton with a health endpoint."""\n\n'
         "import argparse\n"
         "import json\n"
+        "import os\n"
         "from http.server import BaseHTTPRequestHandler, HTTPServer\n\n"
         f"from {pkg} import __version__\n\n"
         'HEALTH_PATH = "/health"\n\n\n'
@@ -209,9 +280,12 @@ def _http_cli(pkg: str) -> str:
         "        self.end_headers()\n\n"
         "    def log_message(self, format, *args):\n"
         "        return\n\n\n"
-        "def serve(port):\n"
-        '    server = HTTPServer(("127.0.0.1", port), Handler)\n'
-        '    print(f"serving on http://127.0.0.1:{port}", flush=True)\n'
+        "# Process lifecycle: the black-box acceptance tests run it against the started app;\n"
+        "# the coverage floor counts in-process code only (M11).\n"
+        "def serve(port):  # pragma: no cover\n"
+        '    host = os.environ.get("HOST", "127.0.0.1")  # the Dockerfile sets 0.0.0.0\n'
+        "    server = HTTPServer((host, port), Handler)\n"
+        '    print(f"serving on http://{host}:{port}", flush=True)\n'
         "    try:\n"
         "        server.serve_forever()\n"
         "    except KeyboardInterrupt:\n"
@@ -229,7 +303,7 @@ def _http_cli(pkg: str) -> str:
         "    if args.version:\n"
         "        print(__version__)\n"
         "        return 0\n"
-        '    if args.cmd == "serve":\n'
+        '    if args.cmd == "serve":  # pragma: no cover\n'
         "        return serve(args.port)\n"
         "    parser.print_usage()\n"
         "    return 2\n"
@@ -280,9 +354,13 @@ NODE_DEV_DEPENDENCIES = {
 """The product's own quality tools; its CI installs them, SCIO's sandbox never does."""
 
 
-def _npm_dependency(spec: str) -> tuple[str, str]:
-    """``zod@^3`` -> (``zod``, ``^3``); ``@scope/x`` -> (``@scope/x``, ``*``)."""
+def _npm_dependency(spec: str) -> tuple[str, str] | None:
+    """``zod@^3`` -> (``zod``, ``^3``); ``@scope/x`` -> (``@scope/x``, ``*``). A non-registry
+    spec (``file:vendor/x``, ``github:o/r``, a URL or a path) -> None: its package name lives
+    in the target's own manifest, so the install phase writes it (I-088)."""
     s = spec.strip()
+    if ":" in s or s.startswith((".", "/")) or ("/" in s and not s.startswith("@")):
+        return None
     body = s[1:] if s.startswith("@") else s
     name, sep, rng = body.partition("@")
     name = ("@" if s.startswith("@") else "") + name
@@ -312,7 +390,9 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             "typecheck": "tsc --noEmit",
             "build": "tsc -p tsconfig.build.json",
         },
-        "dependencies": dict(_npm_dependency(d) for d in spec.dependencies),
+        "dependencies": dict(
+            dep for d in spec.dependencies if (dep := _npm_dependency(d)) is not None
+        ),
         "devDependencies": NODE_DEV_DEPENDENCIES,
     }
     files = {
@@ -350,6 +430,7 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             indent=2,
         )
         + "\n",
+        "Dockerfile": dockerfile(spec, tc),
         "eslint.config.js": (
             'import js from "@eslint/js";\n'
             'import tseslint from "typescript-eslint";\n\n'
@@ -364,23 +445,7 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
         "src/main.ts": (
             'import { main } from "./cli.ts";\n\nprocess.exitCode = main(process.argv.slice(2));\n'
         ),
-        "tests/smoke.test.ts": (
-            'import { test } from "node:test";\n'
-            'import assert from "node:assert/strict";\n'
-            'import { spawnSync } from "node:child_process";\n\n'
-            'import { main } from "../src/cli.ts";\n'
-            'import { VERSION } from "../src/version.ts";\n\n'
-            'test("the entry file prints the version", () => {\n'
-            '  const out = spawnSync(process.execPath, ["src/main.ts", "--version"], {\n'
-            '    encoding: "utf8",\n'
-            "  });\n"
-            "  assert.equal(out.status, 0);\n"
-            "  assert.equal(out.stdout.trim(), VERSION);\n"
-            "});\n\n"
-            'test("no arguments is a usage error", () => {\n'
-            "  assert.equal(main([]), 2);\n"
-            "});\n"
-        ),
+        "tests/smoke.test.ts": _node_smoke_tests(spec.app.health_path if http else None),
         f"{tc.acceptance_dir}/acceptance.test.ts": (
             _node_http_acceptance(spec.app.health_path) if http else _node_cli_acceptance()
         ),
@@ -398,8 +463,7 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
             "      - run: npm install\n"
             "      - run: npm run lint\n"
             "      - run: npm run typecheck\n"
-            "      - run: npm test\n"
-            f"      - run: {tc.skeleton_command(pkg)}\n"
+            "      - run: npm test\n" + README_RUN_STEP
         ),
     }
     files.update(
@@ -413,6 +477,59 @@ def node_ts_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[st
         )
     )
     return files
+
+
+def _node_smoke_tests(health_path: str | None) -> str:
+    """The skeleton's own tests. The coverage floor counts only code that runs in the test
+    process (M11), so ``main`` and the app are exercised in-process; the spawned entry file
+    proves the real command line on top."""
+    head = (
+        'import { test } from "node:test";\n'
+        'import assert from "node:assert/strict";\n'
+        'import { spawnSync } from "node:child_process";\n'
+        + ('import type { AddressInfo } from "node:net";\n' if health_path else "")
+        + "\n"
+        + (
+            'import { createApp, HEALTH_PATH, main } from "../src/cli.ts";\n'
+            if health_path
+            else 'import { main } from "../src/cli.ts";\n'
+        )
+        + 'import { VERSION } from "../src/version.ts";\n\n'
+    )
+    body = (
+        'test("the entry file prints the version", () => {\n'
+        '  const out = spawnSync(process.execPath, ["src/main.ts", "--version"], {\n'
+        '    encoding: "utf8",\n'
+        "  });\n"
+        "  assert.equal(out.status, 0);\n"
+        "  assert.equal(out.stdout.trim(), VERSION);\n"
+        "});\n\n"
+        'test("--version returns 0", () => {\n'
+        '  assert.equal(main(["--version"]), 0);\n'
+        "});\n\n"
+        'test("no arguments is a usage error", () => {\n'
+        "  assert.equal(main([]), 2);\n"
+        "});\n"
+    )
+    if health_path is None:
+        return head + body
+    app = (
+        "\n"
+        'test("the app answers its health path and 404s elsewhere", async () => {\n'
+        "  const server = createApp();\n"
+        '  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));\n'
+        "  try {\n"
+        "    const { port } = server.address() as AddressInfo;\n"
+        "    const ok = await fetch(`http://127.0.0.1:${port}${HEALTH_PATH}`);\n"
+        "    assert.equal(ok.status, 200);\n"
+        '    assert.deepEqual(await ok.json(), { status: "ok", version: VERSION });\n'
+        "    assert.equal((await fetch(`http://127.0.0.1:${port}/missing`)).status, 404);\n"
+        "  } finally {\n"
+        "    server.close();\n"
+        "  }\n"
+        "});\n"
+    )
+    return head + body + app
 
 
 def _node_cli(pkg: str) -> str:
@@ -434,11 +551,13 @@ def _node_http_cli(pkg: str, health_path: str) -> str:
     """A walking skeleton that serves: ``serve --port N`` answers the health path."""
     return (
         "/** Command line entry point: the walking skeleton with a health endpoint. */\n"
-        'import { createServer } from "node:http";\n\n'
+        'import { createServer, type Server } from "node:http";\n\n'
         'import { VERSION } from "./version.ts";\n\n'
         f'export const HEALTH_PATH = "{health_path}";\n\n'
-        "export function serve(port: number): number {\n"
-        "  const server = createServer((req, res) => {\n"
+        "/** The app, not yet listening: tests listen on port 0 in-process (coverage counts\n"
+        " * only in-process code), `serve` listens for real. */\n"
+        "export function createApp(): Server {\n"
+        "  return createServer((req, res) => {\n"
         '    if (req.method === "GET" && req.url === HEALTH_PATH) {\n'
         '      res.writeHead(200, { "Content-Type": "application/json" });\n'
         '      res.end(JSON.stringify({ status: "ok", version: VERSION }));\n'
@@ -447,22 +566,31 @@ def _node_http_cli(pkg: str, health_path: str) -> str:
         "    res.writeHead(404);\n"
         "    res.end();\n"
         "  });\n"
-        '  server.listen(port, "127.0.0.1", () => {\n'
-        "    console.log(`serving on http://127.0.0.1:${port}`);\n"
+        "}\n\n"
+        "/* node:coverage disable */\n"
+        "// Process lifecycle: the black-box acceptance tests run it against the started app.\n"
+        "export function serve(port: number): number {\n"
+        "  const server = createApp();\n"
+        '  const host = process.env.HOST ?? "127.0.0.1"; // the Dockerfile sets 0.0.0.0\n'
+        "  server.listen(port, host, () => {\n"
+        "    console.log(`serving on http://${host}:${port}`);\n"
         "  });\n"
         '  process.on("SIGTERM", () => server.close());\n'
         "  return 0;\n"
-        "}\n\n"
+        "}\n"
+        "/* node:coverage enable */\n\n"
         "export function main(argv: readonly string[]): number {\n"
         '  if (argv[0] === "--version") {\n'
         "    console.log(VERSION);\n"
         "    return 0;\n"
         "  }\n"
+        "  /* node:coverage disable */\n"
         '  if (argv[0] === "serve") {\n'
         '    const at = argv.indexOf("--port");\n'
         "    const port = at >= 0 ? Number(argv[at + 1]) : 8000;\n"
         "    return serve(port);\n"
         "  }\n"
+        "  /* node:coverage enable */\n"
         '  console.error("usage: node src/main.ts --version | serve --port N");\n'
         "  return 2;\n"
         "}\n"

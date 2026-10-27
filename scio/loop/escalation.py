@@ -100,6 +100,8 @@ def decide(state: SCIOState, cfg: EscalationConfig, *, root: str | None = None) 
         return TriageDecision(route="halt", reason=f"exit: {state.exit_reason.value}")
     if state.progress.last_failure_kind == "lint_only":
         return TriageDecision(route="debug", reason="never escalate: lint/format only")
+    if state.progress.last_failure_kind == "quality":
+        return TriageDecision(route="debug", reason="never escalate: product quality check only")
     triggers = detect(state, cfg, root=root)
     if not triggers:
         return TriageDecision(route="debug", reason="no escalation signal; clear failure path")

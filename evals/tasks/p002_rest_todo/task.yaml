@@ -1,0 +1,12 @@
+id: p002_rest_todo
+suite: product
+title: "p002: a REST todo API with a YAML store, built from PRODUCT.md to a release"
+spec_file: PRODUCT.md
+trials: 1
+grader: product
+hidden_tests: hidden
+budget:
+  tokens: 20000000
+  usd: 40.0
+scenario:
+  product: todo_api

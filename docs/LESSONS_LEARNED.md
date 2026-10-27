@@ -505,3 +505,56 @@ Lessons:
 - `scio/toolchain/profile.py` (`ProfileToolchain`, `StackParsers`, `load_profile`), `node_ts.py`, `configs/profiles/node-ts.yaml`, the registry with `available_toolchains` and `detect_toolchain`; `Runtime` generalised; `resolve_command`; `ensure_product_env` on `env_marker`; the stack-neutral normaliser, acceptance runner, `run_app`, tool descriptions, allow-rules, planner prompt v2; `node_ts_scaffold` and the `scaffold_for` registry; `resolve_toolchain`, `adopt_toolchain` and the four call sites; `evals/product_scripts_node.py` and `ScriptedResponder(stack=)`; `LocalSandbox` without `RLIMIT_AS` (I-084); `check_readme_status` (the landing page current at every push).
 - Tests: `test_toolchain_node_ts.py`, `test_scaffold_node_ts.py`, the node cases in `test_runtime.py` and `test_sandbox.py`, the normaliser test in both stacks, `test_same_spec_builds_in_both_stacks`, `tests/node_support.py`; CI `setup-node`.
 - ADR 0014; PRODUCT_MODE status; README status, table and roadmap; CHANGELOG; ledger I-081 to I-085.
+
+## M11: Product-ready + evals (2026-10-26 to 2026-10-27, issue #54, ADR 0015, PR #56)
+
+### Lessons applied
+- Inventory first (M6 to M10): a read-only sweep listed the quality-bar gaps, the loop's end, the install path and the eval runner before any code; it became the issue body and the nine slices.
+- Measure before designing (pre-flight 8): npm's save and lockfile behaviour, Node 22's coverage flags and its coverage-ignore comments, the scaffold's real coverage (78.57% and 33.33% once tests stopped counting) and a headless Chromium launch were each probed before the code that depends on them.
+- A node that interrupts does nothing else (I-065): `release_decision` only asks; the tag and the Release are effects in `release`.
+- The failure must be visible to the worker (t008, t009): coverage and node's `typecheck` run in each feature's verify, not only in `integrate` (I-091).
+- Green here, red there (I-074, I-080, I-084): the Docker image tests were written for CI's daemon and passed there first time; the browser tests run in CI's `checks` job, which installs Chromium.
+- A hint is not a pin (I-050): each product eval pins its stack and interface in a fixed `PRODUCT.md`.
+- One live trial before scaling (M5), adjusted by the owner on 2026-10-27: on the Claude Code backend nothing is billed, so the live evals ran without a stop between them.
+
+### What succeeded
+- The release gate caught two real defects that every per-feature check had passed: a flaky scripted server (I-096) on the Fake, and nothing on live p001, whose release was clean. Running the whole bar once more on `main` is cheap and earned its place on its first day.
+- The honest coverage floor plus the verify-time check works as designed on the Fake: P2 at 93% against a floor of 95 failed its own verify (`quality`), went to the debugger, gained the error-path tests and passed in its second iteration; without the verify step the milestone halts at `integrate`.
+- On the final commit all three product evals pass live, in parallel: a CLI todo app with tags and JSON export (p001, 3 features), a REST todo API (p002, 2 features) and a todo web app graded in a real browser (p003, 2 features), each from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass, with no intervention beyond the designed merge and release stops: $11.63 estimated in all, 21 to 31 minutes each, nothing billed.
+- Writing guards before trusting green found more than the guards themselves: the offline I-085 test found I-088, the I-090 sweep found the bootstrap probe's regex bug, the I-085 sweep found the uncommitted progress sync.
+
+### The live product evals (2026-10-27, Claude Code backend, the owner's Max login, nothing billed)
+Every attempt, one trial each; dollars are Claude Code's API-price estimates. First attempts passed 1 of 3, and each failure was a defect in SCIO, not in the model's work. On the final commit all three pass.
+
+| task | commit | result | features (tier, iterations, cost) | release | hidden | estimate | time | stops / interventions | found |
+|---|---|---|---|---|---|---:|---:|---|---|
+| p001 CLI todo | `6f7474a` | pass | P1 T0 2 $0.88; P2 T1 3 $1.47; P3 T1 2 $1.44 (1 advisor escalation, resolved) | v0.1.0 | 5 passed | $3.96 | 24.5 min | 3 / 0 | P1 used 353,267 tokens of a 400,000 T0 cap (I-099 waiting to happen) |
+| p002 REST API | `6f7474a` | fail | P1 T0 1, `escalate_human` | none | not run | $0.80 | 6.8 min | 1 / 1 | I-097 |
+| p002 REST API | `5eeac8d` | pass | P1 T0 2 $0.82; P2 T1 3 $1.56 | v0.1.0 | 5 passed | $2.43 | 18.7 min | 2 / 0 | P1's first verify refused the all-skipped proof with the new hint, the next turn passed: I-097 confirmed live |
+| p003 web app | `5eeac8d` | crash | P1 passed; P2 ran out at its PR body | none | not run | not recorded | 22.9 min | 0 / 0 | I-098, I-099 |
+| p003 web app | `94b8849` | pass | P1 T1 3 $1.75; P2 T1 2 $1.71 (1 escalation) | v0.1.0 | 4 passed in Chromium | $3.51 | 24.4 min | 2 / 0 | both features planned at T1, so this run did not exercise I-099 (the measured ratio and its unit test are the evidence) |
+| p001 CLI todo | `94b8849` | pass | P1 T0 1 $0.56; P2 T1 3 $1.72; P3 T1 2 $1.44 | v0.1.0 | 5 passed | $3.84 | 25.6 min | 3 / 0 | none |
+| p002 REST API | `94b8849` | crash | P1's PR body: Claude Code's schema check refused every answer within three turns | none | not run | not recorded | 5.6 min | 0 / 0 | I-100 |
+| p001 CLI todo | `dda626f` | pass | P1 T0 $0.82; P2 T1 $1.26; P3 T1 $2.19 (one milestone) | v0.1.0 | 5 passed | $4.41 | 31.0 min | 2 / 0 | none |
+| p002 REST API | `dda626f` | pass | P1 T0 $0.76; P2 T1 $1.90 | v0.1.0 | 5 passed | $2.79 | 21.0 min | 2 / 0 | none |
+| p003 web app | `dda626f` | pass | P1 T1 $2.03; P2 T1 $2.27 | v0.1.0 | 4 passed in Chromium | $4.43 | 30.6 min | 2 / 0 | none |
+
+On the final commit `dda626f` all three pass, one trial each, run in parallel: $11.63 estimated in all, nothing billed, no intervention beyond the designed merge and release stops. Across the day: 7 passes in 10 attempts; each of the other 3 (one failure, two crashes) found SCIO defects (I-097; I-098 with I-099; I-100), fixed with a guard before the next attempt.
+
+### What failed
+- Live p002's first run halted at its first feature (I-097): the coder rightly found the health endpoint already built and "proved" it with black-box tests that skip outside `integrate`; verify accepted an all-skipped run, and only the model gate's `replan` noticed. The M3 lesson covered "no tests collected" but not "all skipped". A pass that ran nothing is not a pass, in every reader of a test run.
+- Release cadence slipped for two weeks (I-086) and I acted on a reported merge without checking GitHub (I-087); both are now checks or rules, not intentions.
+- Three of my own mistakes reached a check before a test did: stack data in product code (I-093, caught by the M6 boundary test), a CI timeout nobody had measured (I-094, cancelled a green run), the trial spend that missed every feature's child harness (I-095, caught on the first Fake run before any live run).
+- Git's auto-merge silently moved branch entries into a released changelog section (I-089); a text merge does not know which section a line belongs to.
+- Live p003's first run ended in a traceback (I-098): one model call in the documenter (the PR body) and the router's call were outside any `BudgetExceeded` guard. Every other node had one; a convention nobody checks is a convention that drifts, so the AST scan now checks it.
+- Behind it, a runaway guard calibrated on the wrong quantity (I-099): I-069 measured the dollar ratio of the Claude Code backend and scaled token caps by the same number, but that backend's tokens are mostly cheap cache traffic. Two live product runs gave the same ratio (about 380,000 billable tokens per estimated dollar), which is what the token factor is now set from. A guard needs its own measurement for each quantity it caps.
+
+### Actions
+- `commit_install`, `commit_progress_sync` (I-085); `_npm_dependency` and `normalise_package` for non-registry specs (I-088); `check_release_cadence` (I-086), `check_released_section_frozen` (I-089); `find_commit` in the bootstrap probe and the fixed-string scan test (I-090).
+- `Settings.coverage_floor`, `QualityCheck.command` and `verify`, `RunContext.quality_values`, the `quality` failure kind; both scaffolds test in-process and mark the serve lifecycle; `test_scaffold_coverage.py`; the coverage-floor failure-path test (I-091).
+- `scio/product/release_checks.py` (secret scan, release files, README run block; I-092), `release_image` in both profiles (I-093), Dockerfiles in both scaffolds, the four `docker-live` image tests; CI `checks` budget 25 minutes with `--durations` (I-094).
+- The release gate (`release_check`, `release_decision`, `release`, `ReleaseRecord`, `GitHubClient.find_release` / `ensure_release`) and its Fake tests.
+- `scio new --spec`; the product suite (`grader: product`, `evals/product_solver.py`, p001 to p003, `--task`), `TrialOutcome.usd_elsewhere` (I-095); Playwright and the CI browser step; `test_product_evals_fake.py`.
+- `Toolchain.skipped_only`, the `no tests ran` result, verify's refusal and hint, the acceptance and grader checks (I-097); `test_skipped_only.py`.
+- The PR-body and router budget guards and `tests/unit/test_budget_guards.py` (I-098); `Settings.claude_code_token_factor`, `token_factor()`, `BudgetsConfig.scaled(tokens=)` and the cap-ratio assertion (I-099).
+- ADR 0015; CONTRIBUTING steps 5 and 6; ledger I-085 to I-099; EVAL_HISTORY rows for the live product runs.

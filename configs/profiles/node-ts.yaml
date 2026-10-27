@@ -28,6 +28,8 @@ test:
   filter_flag: "--test-name-pattern"
   exit_codes: { passed: [0], no_tests: [], broken: [9] }   # 9: bad option
   no_tests_patterns: ["# tests 0"]          # no matching files exits 0 with an empty plan
+  # exit 0 with every selected test skipped proves nothing (I-097): TAP's counters say so
+  skipped_only: { all: ['(?m)^# pass 0$', '(?m)^# skipped [1-9]'], none: [] }
   selector_help: "test file paths like tests/x.test.ts, or --test-name-pattern regexes"
   filter_help: "node --test-name-pattern filter"
 lint:
@@ -49,15 +51,33 @@ health_probe_argv:
   - -e
   - "fetch('{url}').then(r => process.exit(r.status < 400 ? 0 : 1), () => process.exit(1))"
 acceptance_dir: tests/acceptance
+# The release image (M11): Node 22 runs the TypeScript sources directly (type stripping), so
+# the image needs the runtime dependencies only; the scaffold appends ENV / EXPOSE / CMD.
+release_image: |
+  FROM node:22-slim
+  WORKDIR /app
+  COPY package*.json ./
+  RUN npm install --omit=dev --no-audit --no-fund
+  COPY . .
 skeleton_command: "node src/main.ts --version"
 command_words: [node, npm, npx]
+# Coverage is built into Node 22 (M11): below the floor it exits 1 with "line coverage does
+# not meet threshold"; tests are excluded so the floor measures the product's own code.
 checks:
+  - name: coverage
+    argv: [node, --test, --test-reporter=tap, --experimental-test-coverage, "--test-coverage-exclude=tests/**", "--test-coverage-lines={coverage_floor}", "tests/**/*.test.ts"]
+    pass_exit_codes: [0]
+    skip_exit_codes: []
+    skip_patterns: []
+    timeout_s: 600
+    verify: true                # every product feature run meets the floor (M11, I-091)
   - name: typecheck
     argv: [node, node_modules/typescript/bin/tsc, --noEmit]
     pass_exit_codes: [0]
     skip_exit_codes: []
     skip_patterns: ["Cannot find module"]
     timeout_s: 600
+    verify: true                # Node strips types, so only tsc sees a type error (I-091)
   - name: build
     argv: [node, node_modules/typescript/bin/tsc, -p, tsconfig.build.json, --outDir, .scio/sandbox/dist]
     pass_exit_codes: [0]

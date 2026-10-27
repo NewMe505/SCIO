@@ -581,11 +581,13 @@ def script_for(title: str, stack: str = "python") -> TaskScript:
     from evals.product_scripts import PRODUCT_SCRIPTS  # product features first: "json" collides
     from evals.product_scripts_http import HTTP_PRODUCT_SCRIPTS
     from evals.product_scripts_node import NODE_PRODUCT_SCRIPTS
+    from evals.product_scripts_web import WEB_PRODUCT_SCRIPTS
 
     low = title.lower()
     # The same feature titles exist in two stacks (M10): the task's stack picks the script.
     product_scripts = NODE_PRODUCT_SCRIPTS if stack == "node-ts" else []
-    for s in [*product_scripts, *PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS, *SCRIPTS]:
+    scripts = [*product_scripts, *WEB_PRODUCT_SCRIPTS, *PRODUCT_SCRIPTS, *HTTP_PRODUCT_SCRIPTS]
+    for s in [*scripts, *SCRIPTS]:
         if s.key in low:
             return s
     raise KeyError(f"no fake script for task title {title!r}")
@@ -658,6 +660,7 @@ class ScriptedResponder:
         milestone_size: int = 2,
         product: str = "todo_cli",
         stack: str = "python",
+        dependencies: list[str] | None = None,
     ) -> None:
         self.product = product
         """Which scripted product the planner drafts: ``todo_cli`` (a CLI, standard library
@@ -665,6 +668,9 @@ class ScriptedResponder:
         self.stack = stack
         """The stack the scripted planner names and the scripted features are written in
         (``python`` or ``node-ts``, M10): the same ``todo_api`` spec builds in both."""
+        self.dependencies = dependencies
+        """Overrides the ``todo_api`` approved list, e.g. a ``file:`` package so the node
+        install phase writes a lockfile with no registry (I-085)."""
         self.gate_verdict = gate_verdict
         self.gate_verdicts = list(gate_verdicts or [])
         """Per-call gate verdicts in order; ``gate_verdict`` applies once they run out."""
@@ -743,7 +749,13 @@ class ScriptedResponder:
                     "stack": self.stack,
                     # the Python product borrows pyyaml from SCIO's environment; the Node one
                     # has no host environment to borrow from and stores JSON with node:fs
-                    "dependencies": [DEPENDENCY] if self.stack == "python" else [],
+                    "dependencies": (
+                        self.dependencies
+                        if self.dependencies is not None
+                        else [DEPENDENCY]
+                        if self.stack == "python"
+                        else []
+                    ),
                     "app": {
                         "kind": "http",
                         "module": "todo_api" if self.stack == "python" else None,
