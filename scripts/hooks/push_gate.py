@@ -7,6 +7,10 @@
    at: ``SCIO_ACK_CI=<run id> git push ...``.
 2. A bare ``git stash`` (``git stash``, ``git stash push``, ``git stash save``, ``git stash -m``)
    is denied: parallel sessions share one stash stack (owner correction).
+3. ``git commit`` waits for lint (I-106: a line over the limit reached a commit). In a repository
+   whose ``pyproject.toml`` configures ruff, every changed Python file (staged, modified or
+   untracked, since ``git add ... && git commit`` stages in the same line) must pass
+   ``ruff check`` and ``ruff format --check``.
 
 Reads the hook JSON (``tool_input.command``, ``cwd``) from stdin and prints a deny decision as
 JSON; anything else is allowed silently. A failure of the gate itself (no ``gh``, offline, not a
@@ -22,6 +26,7 @@ import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Callable
 from typing import Any
 
 GREEN = {"success", "skipped", "neutral"}
@@ -121,6 +126,50 @@ def _run(argv: list[str], cwd: str) -> str:
     return r.stdout.strip()
 
 
+def changed_python_files(porcelain: str, root: str) -> list[str]:
+    """The ``.py`` files ``git status --porcelain`` lists as added, modified or untracked."""
+    files: list[str] = []
+    for line in porcelain.splitlines():
+        if len(line) < 4 or "D" in line[:2]:
+            continue
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path.endswith(".py") and os.path.isfile(os.path.join(root, path)):
+            files.append(path)
+    return files
+
+
+def lint_reason(files: list[str], run: Callable[[list[str]], tuple[int, str]]) -> str | None:
+    """Why the commit must wait for lint, or None. ``run(argv)`` gives (exit code, output)."""
+    if not files:
+        return None
+    for tool in (["check"], ["format", "--check"]):
+        argv = ["uv", "run", "--no-sync", "ruff", *tool, "--force-exclude", "--quiet", *files]
+        code, output = run(argv)
+        if code != 0:
+            return (
+                f"`ruff {' '.join(tool)}` fails on the changed Python files; fix them before "
+                f"committing (I-106):\n{output.strip()[-800:]}"
+            )
+    return None
+
+
+def commit_reason(cwd: str) -> str | None:
+    root = _run(["git", "rev-parse", "--show-toplevel"], cwd)
+    pyproject = os.path.join(root, "pyproject.toml")
+    if not os.path.isfile(pyproject):
+        return None
+    with open(pyproject, encoding="utf-8") as f:
+        if "[tool.ruff" not in f.read():
+            return None
+    porcelain = _run(["git", "status", "--porcelain", "--untracked-files=all"], root)
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        r = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=25)
+        return r.returncode, r.stdout + r.stderr
+
+    return lint_reason(changed_python_files(porcelain, root), run)
+
+
 def latest_run(branch: str, cwd: str) -> dict[str, Any] | None:
     out = _run(
         [
@@ -151,6 +200,13 @@ def evaluate(command: str, cwd: str) -> tuple[str | None, str | None]:
                 "Copy the files aside or make a temporary commit instead.",
                 None,
             )
+        if sub == "commit":
+            try:
+                reason = commit_reason(repo)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+                return None, f"commit gate could not run ruff, commit allowed: {e}"
+            if reason:
+                return reason, None
         if sub == "push":
             try:
                 branch = pushed_branch(args) or _run(

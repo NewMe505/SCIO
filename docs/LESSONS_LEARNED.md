@@ -16,6 +16,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 8. **Always** confirm on GitHub that a PR is merged (`gh pr view N --json mergedAt` non-null) before any post-merge step (I-087). Guard: `manual:` a reported merge arrives in conversation, which no check can see; CONTRIBUTING step 5 carries the command
 9. **Never** run a bare `git stash`; other sessions share the stash stack (owner correction). Guard: `hook:push_gate`
 10. **Always** end a status update with an ETA in minutes and its basis (owner correction). Guard: `manual:` a property of chat replies, not of the repository; kept in the session memory
+11. **Never** commit a Python file that fails `ruff check` or `ruff format --check`; lint runs before the commit, not first at the pre-push chain (I-106). Guard: `hook:push_gate`, `test:test_the_commit_gate_lints_every_changed_python_file`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 

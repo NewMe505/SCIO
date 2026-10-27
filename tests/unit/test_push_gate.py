@@ -103,7 +103,7 @@ def test_evaluate_finds_git_inside_a_compound_line(monkeypatch: pytest.MonkeyPat
 
 def test_a_heredoc_that_mentions_git_is_text_not_a_command() -> None:
     pg = _load()
-    line = "git commit -q -F - <<'EOF'\nfix: blocks a bare\ngit stash\nand git push\nEOF\ngit log -1"
+    line = "git log -F - <<'EOF'\nfix: blocks a bare\ngit stash\nand git push\nEOF\ngit log -1"
     assert pg.evaluate(line, ".") == (None, None)
 
 
@@ -144,3 +144,59 @@ def test_the_hook_is_wired_in_the_project_settings() -> None:
     ]
     assert any("scripts/hooks/push_gate.py" in c for c in commands), commands
     assert Path(SCRIPT).is_file()
+
+
+def test_the_commit_gate_lints_every_changed_python_file(tmp_path: Path) -> None:
+    """I-106: ``git add ... && git commit`` stages in the same line, so staged, modified and
+    untracked files all count; deleted files and non-Python files do not."""
+    pg = _load()
+    for rel in ("a.py", "b.py", "new.py", "notes.md", "moved.py"):
+        (tmp_path / rel).write_text("x = 1\n", encoding="utf-8")
+    porcelain = "M  a.py\n M b.py\n?? new.py\n?? notes.md\n D gone.py\nR  old.py -> moved.py\n"
+    assert pg.changed_python_files(porcelain, str(tmp_path)) == [
+        "a.py",
+        "b.py",
+        "new.py",
+        "moved.py",
+    ]
+    calls: list[list[str]] = []
+
+    def clean(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, ""
+
+    assert pg.lint_reason(["a.py"], clean) is None
+    assert [c[4] for c in calls] == ["check", "format"] and all(
+        "--force-exclude" in c for c in calls
+    )
+    assert pg.lint_reason([], clean) is None  # nothing changed: nothing to lint
+
+    def too_long(argv: list[str]) -> tuple[int, str]:
+        return (1, "E501 Line too long (101 > 100)") if argv[4] == "check" else (0, "")
+
+    reason = pg.lint_reason(["a.py"], too_long)
+    assert reason and "ruff check" in reason and "E501" in reason and "I-106" in reason
+
+    def unformatted(argv: list[str]) -> tuple[int, str]:
+        return (1, "Would reformat: a.py") if argv[4] == "format" else (0, "")
+
+    reason = pg.lint_reason(["a.py"], unformatted)
+    assert reason and "ruff format --check" in reason
+
+
+def test_the_commit_gate_only_runs_where_ruff_is_configured(tmp_path: Path) -> None:
+    pg = _load()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "bad.py").write_text("x=1;y=2\n", encoding="utf-8")
+    assert pg.commit_reason(str(tmp_path)) is None  # no pyproject: not our repository's rules
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    assert pg.commit_reason(str(tmp_path)) is None  # a pyproject without ruff settings
+
+
+def test_evaluate_holds_a_commit_for_lint(monkeypatch: pytest.MonkeyPatch) -> None:
+    pg = _load()
+    monkeypatch.setattr(pg, "commit_reason", lambda cwd: "ruff check fails (I-106)")
+    reason, _ = pg.evaluate("git add -A && git commit -q -m 'x'", ".")
+    assert reason == "ruff check fails (I-106)"
+    monkeypatch.setattr(pg, "commit_reason", lambda cwd: None)
+    assert pg.evaluate("git add -A && git commit -q -m 'x'", ".") == (None, None)
