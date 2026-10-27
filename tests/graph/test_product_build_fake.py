@@ -20,6 +20,7 @@ from scio.graph.run_context import RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
+from scio.harness.failures import FatalError
 from scio.harness.github.client import GitHubClient, GitHubError
 from scio.harness.providers.fake import FakeProvider
 from scio.harness.retry import RetryPolicy
@@ -805,6 +806,47 @@ def test_a_feature_below_the_coverage_floor_is_fixed_inside_its_own_run(tmp_path
     finally:
         ctx.close()
     assert (tmp_path / "product" / "tests" / "test_todos_errors.py").is_file()
+
+
+def test_a_provider_failure_inside_a_feature_ends_the_build_gracefully(tmp_path: Path) -> None:
+    """I-100 (live p002 re-run): a fatal provider error in P1's PR-body call crashed the whole
+    product build as a traceback. It ends that attempt, recorded with its spend, and the
+    build with ``feature_failed``; the next build starts attempt 2 and finishes."""
+    inner = ScriptedResponder()
+    armed = {"on": True}
+
+    def responder(req: CompletionRequest) -> Any:
+        props = (req.output_schema or {}).get("properties", {})
+        if armed["on"] and "plan_vs_done" in props and "Walking skeleton" in str(req.messages):
+            armed["on"] = False
+            raise FatalError("claude -p failed: Reached maximum number of turns (3)")
+        return inner(req)
+
+    harness = _bootstrap(tmp_path, responder)
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert not out.paused and out.state.exit_reason == "feature_failed", out.state.ledger[-2:]
+        (run,) = out.state.feature_runs
+        assert (run.feature_id, run.status, run.exit_reason, run.attempt) == (
+            "P1",
+            "failed",
+            "error",
+            1,
+        )
+        assert run.usd > 0 and "FatalError" in out.state.ledger[-1].text
+    finally:
+        ctx.close()
+    ctx = _ctx(tmp_path, harness, f"{build_thread_id(PRODUCT)}-again")
+    try:
+        out = run_build(ctx)  # a later build: P1's attempt 2 runs and the milestone completes
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        assert [(r.feature_id, r.attempt, r.status) for r in out.state.feature_runs] == [
+            ("P1", 1, "passed"),
+            ("P2", 1, "passed"),
+        ]
+    finally:
+        ctx.close()
 
 
 def test_the_release_gate_can_be_declined_reentered_and_is_idempotent(tmp_path: Path) -> None:

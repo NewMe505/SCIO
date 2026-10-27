@@ -130,6 +130,33 @@ def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None
     assert resp.latency_ms == 1200
 
 
+def test_provider_re_asks_a_schema_answer_capped_by_claude_codes_check_once() -> None:
+    """I-100 (live p002 re-run): the documenter's PR body missed the schema within the three
+    turns and the call was fatal; it is re-asked once with the length limits spelled out."""
+    capped = _result(
+        subtype="error_max_turns", is_error=True, result="Reached maximum number of turns (3)"
+    )
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string", "maxLength": 1200}, "plan": {"type": "array"}},
+        "required": ["summary", "plan"],
+    }
+    req = CompletionRequest(model=HAIKU, messages=[Message.user("write the PR body")])
+    fake = FakeClaude([capped, _result(structured_output={"summary": "s", "plan": []})])
+    resp = ClaudeCodeProvider(runner=fake).structured(req, schema)
+    assert json.loads(resp.text) == {"summary": "s", "plan": []} and len(fake.calls) == 2
+    again = fake.calls[1][2] or ""
+    assert again.startswith("write the PR body") and "summary at most 1200 characters" in again
+    assert "(summary, plan)" in again
+    twice = FakeClaude([capped, capped])
+    with pytest.raises(FatalError, match="error_max_turns"):
+        ClaudeCodeProvider(runner=twice).structured(req, schema)
+    plain = FakeClaude([capped])  # a plain completion is not re-asked: one turn by design
+    with pytest.raises(FatalError):
+        ClaudeCodeProvider(runner=plain).complete(req)
+    assert len(plain.calls) == 1
+
+
 def test_provider_complete_renders_a_repair_conversation_and_rejects_tools() -> None:
     fake = FakeClaude([_result(result="plain text")])
     provider = ClaudeCodeProvider(runner=fake)

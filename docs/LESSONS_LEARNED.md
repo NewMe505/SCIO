@@ -523,11 +523,27 @@ Lessons:
 - Live p001 (a CLI todo app with tags and JSON export) went from a fixed `PRODUCT.md` to a released v0.1.0 with 3 of 3 features over 2 milestones, the 5 hidden black-box tests green, no intervention beyond the designed merge and release stops: $3.96 estimated, 24.5 minutes, nothing billed.
 - Writing guards before trusting green found more than the guards themselves: the offline I-085 test found I-088, the I-090 sweep found the bootstrap probe's regex bug, the I-085 sweep found the uncommitted progress sync.
 
+### The live product evals (2026-10-27, Claude Code backend, the owner's Max login, nothing billed)
+Every attempt, one trial each; dollars are Claude Code's API-price estimates. First attempts passed 1 of 3, and each failure was a defect in SCIO, not in the model's work.
+
+| task | commit | result | features (tier, iterations, cost) | release | hidden | estimate | time | stops / interventions | found |
+|---|---|---|---|---|---|---:|---:|---|---|
+| p001 CLI todo | `6f7474a` | pass | P1 T0 2 $0.88; P2 T1 3 $1.47; P3 T1 2 $1.44 (1 advisor escalation, resolved) | v0.1.0 | 5 passed | $3.96 | 24.5 min | 3 / 0 | P1 used 353,267 tokens of a 400,000 T0 cap (I-099 waiting to happen) |
+| p002 REST API | `6f7474a` | fail | P1 T0 1, `escalate_human` | none | not run | $0.80 | 6.8 min | 1 / 1 | I-097 |
+| p002 REST API | `5eeac8d` | pass | P1 T0 2 $0.82; P2 T1 3 $1.56 | v0.1.0 | 5 passed | $2.43 | 18.7 min | 2 / 0 | P1's first verify refused the all-skipped proof with the new hint, the next turn passed: I-097 confirmed live |
+| p003 web app | `5eeac8d` | crash | P1 passed; P2 ran out at its PR body | none | not run | not recorded | 22.9 min | 0 / 0 | I-098, I-099 |
+| p003 web app | `94b8849` | pass | P1 T1 3 $1.75; P2 T1 2 $1.71 (1 escalation) | v0.1.0 | 4 passed in Chromium | $3.51 | 24.4 min | 2 / 0 | both features planned at T1, so this run did not exercise I-099 (the measured ratio and its unit test are the evidence) |
+| p001 CLI todo | `94b8849` | pass | P1 T0 1 $0.56; P2 T1 3 $1.72; P3 T1 2 $1.44 | v0.1.0 | 5 passed | $3.84 | 25.6 min | 3 / 0 | none |
+| p002 REST API | `94b8849` | crash | P1's PR body: Claude Code's schema check refused every answer within three turns | none | not run | not recorded | 5.6 min | 0 / 0 | I-100 |
+| p001, p002, p003 | final | PENDING | | | | | | | |
+
 ### What failed
 - Live p002's first run halted at its first feature (I-097): the coder rightly found the health endpoint already built and "proved" it with black-box tests that skip outside `integrate`; verify accepted an all-skipped run, and only the model gate's `replan` noticed. The M3 lesson covered "no tests collected" but not "all skipped". A pass that ran nothing is not a pass, in every reader of a test run.
 - Release cadence slipped for two weeks (I-086) and I acted on a reported merge without checking GitHub (I-087); both are now checks or rules, not intentions.
 - Three of my own mistakes reached a check before a test did: stack data in product code (I-093, caught by the M6 boundary test), a CI timeout nobody had measured (I-094, cancelled a green run), the trial spend that missed every feature's child harness (I-095, caught on the first Fake run before any live run).
 - Git's auto-merge silently moved branch entries into a released changelog section (I-089); a text merge does not know which section a line belongs to.
+- Live p003's first run ended in a traceback (I-098): one model call in the documenter (the PR body) and the router's call were outside any `BudgetExceeded` guard. Every other node had one; a convention nobody checks is a convention that drifts, so the AST scan now checks it.
+- Behind it, a runaway guard calibrated on the wrong quantity (I-099): I-069 measured the dollar ratio of the Claude Code backend and scaled token caps by the same number, but that backend's tokens are mostly cheap cache traffic. Two live product runs gave the same ratio (about 380,000 billable tokens per estimated dollar), which is what the token factor is now set from. A guard needs its own measurement for each quantity it caps.
 
 ### Actions
 - `commit_install`, `commit_progress_sync` (I-085); `_npm_dependency` and `normalise_package` for non-registry specs (I-088); `check_release_cadence` (I-086), `check_released_section_frozen` (I-089); `find_commit` in the bootstrap probe and the fixed-string scan test (I-090).
@@ -536,4 +552,5 @@ Lessons:
 - The release gate (`release_check`, `release_decision`, `release`, `ReleaseRecord`, `GitHubClient.find_release` / `ensure_release`) and its Fake tests.
 - `scio new --spec`; the product suite (`grader: product`, `evals/product_solver.py`, p001 to p003, `--task`), `TrialOutcome.usd_elsewhere` (I-095); Playwright and the CI browser step; `test_product_evals_fake.py`.
 - `Toolchain.skipped_only`, the `no tests ran` result, verify's refusal and hint, the acceptance and grader checks (I-097); `test_skipped_only.py`.
-- ADR 0015; CONTRIBUTING steps 5 and 6; ledger I-085 to I-097; EVAL_HISTORY rows for the live product runs.
+- The PR-body and router budget guards and `tests/unit/test_budget_guards.py` (I-098); `Settings.claude_code_token_factor`, `token_factor()`, `BudgetsConfig.scaled(tokens=)` and the cap-ratio assertion (I-099).
+- ADR 0015; CONTRIBUTING steps 5 and 6; ledger I-085 to I-099; EVAL_HISTORY rows for the live product runs.

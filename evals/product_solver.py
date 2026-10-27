@@ -121,7 +121,10 @@ class ProductSolver:
             f"milestones={','.join(state.milestones_done)} "
             f"features={sum(r.status == 'passed' for r in runs)}/{len(runs)} "
             f"release={state.release.tag if state.release else None} "
-            f"stops={len(answers)} interventions={len(interventions)} hidden={graded[1]}"
+            f"stops={len(answers)} interventions={len(interventions)} "
+            # cost per feature (PRODUCT_MODE verification): the latest attempt of each
+            f"cost={','.join(f'{r.feature_id}:${r.usd:.2f}' for r in runs)} "
+            f"hidden={graded[1]}"
         )
         escalations = sum(r.escalations for r in runs)
         resolved = sum(r.escalations_resolved for r in runs)

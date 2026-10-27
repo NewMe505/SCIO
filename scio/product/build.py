@@ -36,7 +36,7 @@ from scio.graph.nodes.common import fact as ledger_fact
 from scio.graph.run import resume_graph, run_graph, thread_started
 from scio.graph.run_context import T0_TOOL_CAP, RunContext, product_sandbox_backend
 from scio.harness.budget import BudgetGuard, BudgetLimits, BudgetsConfig
-from scio.harness.failures import BudgetExceeded
+from scio.harness.failures import BudgetExceeded, HarnessError
 from scio.harness.types import Message
 from scio.loop.exits import LoopLimits
 from scio.product.acceptance import run_acceptance
@@ -710,23 +710,52 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             issue_number=state.issues.get(feat.id),
         )
         entries: list[Any] = []
-        if thread_started(fctx, saver):
-            entries.append(fact(f"{feat.id}: resuming thread {thread} (attempt {attempt})"))
-            outcome = resume_graph(fctx, None, saver=saver)
-        else:
-            entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
-            # A fresh attempt starts from the milestone branch with a clean tree: a previous
-            # attempt that never passed verify leaves its edits uncommitted, and git carries
-            # them across a checkout into the next feature's run (I-067).
-            _git(ctx, "checkout", "-q", plan.branch)
-            _git(ctx, "reset", "-q", "--hard")
-            _git(ctx, "clean", "-fdq")
-            task = feature_task(
-                spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
+        try:
+            if thread_started(fctx, saver):
+                entries.append(fact(f"{feat.id}: resuming thread {thread} (attempt {attempt})"))
+                outcome = resume_graph(fctx, None, saver=saver)
+            else:
+                entries.append(fact(f"{feat.id}: starting thread {thread} at {tier}"))
+                # A fresh attempt starts from the milestone branch with a clean tree: a
+                # previous attempt that never passed verify leaves its edits uncommitted,
+                # and git carries them across a checkout into the next feature's run (I-067).
+                _git(ctx, "checkout", "-q", plan.branch)
+                _git(ctx, "reset", "-q", "--hard")
+                _git(ctx, "clean", "-fdq")
+                task = feature_task(
+                    spec, plan, feat, state.issues.get(feat.id), repo_dir=state.product_dir
+                )
+                outcome = run_graph(fctx, task, saver=saver)
+            while outcome.paused and outcome.state.phase == "merge_wait":
+                outcome = resume_graph(
+                    fctx, f"merged into {plan.branch} by scio build", saver=saver
+                )
+        except HarnessError as exc:
+            # A provider or harness failure inside one feature ends this attempt, recorded,
+            # and the build gracefully; it never ends a product build as a traceback (I-100).
+            # No interrupt here: a resumed node would re-run the failing call first (I-065).
+            snap = fctx.harness.budget.snapshot()
+            failed = run.model_copy(
+                update={
+                    "status": "failed",
+                    "exit_reason": "error",
+                    "usd": round(snap.usd_used, 4),
+                    "tokens": snap.tokens_used,
+                }
             )
-            outcome = run_graph(fctx, task, saver=saver)
-        while outcome.paused and outcome.state.phase == "merge_wait":
-            outcome = resume_graph(fctx, f"merged into {plan.branch} by scio build", saver=saver)
+            entries.append(
+                fact(
+                    f"{feat.id} attempt {attempt} failed: {type(exc).__name__}: {str(exc)[:300]}; "
+                    f"the next `scio build` starts attempt {attempt + 1}"
+                )
+            )
+            return {
+                "feature_runs": [*state.feature_runs, failed],
+                "exit_reason": "feature_failed",
+                "phase": "halted",
+                "ledger": entries,
+                **ctx.budget_update(),
+            }
         final = outcome.state
         if not outcome.paused and final.exit_reason is ExitReason.SUCCESS:
             feature_head = final.github.head_sha or head_sha(ctx.sandbox)
