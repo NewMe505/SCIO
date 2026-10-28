@@ -55,8 +55,11 @@ from scio.product.report import build_bootstrap_report, build_product_report
 from scio.state.models import ArtifactRef, LedgerEntry, ProductBuildState, ProductState, SCIOState
 
 INTERRUPT = "__interrupt__"
+RESUME = "__resume__"
 ERROR = "__error__"
 BRANCH_TO = "branch:to:"
+TASKS = "__pregel_tasks"
+"""The channel that holds pending ``Send`` packets (``.node``): T2's parallel explorers."""
 CRASH_CHARS = 2_000
 ERROR_CHARS = 500
 VERIFY_LINES = 60
@@ -248,13 +251,26 @@ def _attempt_status(t: _Thread) -> str:
     return status if status in STOPPED else "running"
 
 
-def _spent(t: _Thread) -> float:
-    """A task thread's spend so far; 0 when its checkpoint could not be read."""
+def _spent(t: _Thread, entries: list[CostEntry]) -> float:
+    """An attempt's spend so far: its ledger's sum, which grows with every model call. The
+    checkpoint's ``budgets.usd_used`` is written only when a node returns, so it lags a long
+    worker turn; it is the fallback without ledger entries (0 when the checkpoint could not be
+    read)."""
+    if entries:
+        return sum(e.usd for e in entries)
     return t.state.budgets.usd_used if isinstance(t.state, SCIOState) else 0.0
 
 
 def _next_nodes(channels: dict[str, Any]) -> list[str]:
-    return sorted(k.removeprefix(BRANCH_TO) for k in channels if k.startswith(BRANCH_TO))
+    """The ``branch:to:<node>`` channels and the nodes of the pending ``Send`` packets: while
+    ``Send`` tasks run, the branch channels alone are empty."""
+    nodes = {k.removeprefix(BRANCH_TO) for k in channels if k.startswith(BRANCH_TO)}
+    packets = channels.get(TASKS)
+    for packet in packets if isinstance(packets, list | tuple) else []:
+        node = getattr(packet, "node", None)
+        if isinstance(node, str):
+            nodes.add(node)
+    return sorted(nodes)
 
 
 def _plain(value: Any) -> Any:
@@ -270,7 +286,12 @@ def _plain(value: Any) -> Any:
 
 
 def _stop(pending: list[tuple[str, str, Any]], next_nodes: list[str]) -> StopInfo | None:
-    """The first pending ``__interrupt__`` write: a list of ``Interrupt`` (``.value``, ``.id``)."""
+    """The first pending ``__interrupt__`` write: a list of ``Interrupt`` (``.value``, ``.id``).
+    None once the stop was answered: LangGraph keeps the ``__interrupt__`` row on a resume and
+    adds a ``__resume__`` write; a new checkpoint appears only when the resumed node returns.
+    Exact because every SCIO node interrupts at most once."""
+    if any(channel == RESUME for _task, channel, _value in pending):
+        return None
     for _task, channel, value in pending:
         if channel != INTERRUPT:
             continue
@@ -471,23 +492,27 @@ def _build_detail(
     """``summary.usd`` stays the figure ``scio report`` prints (finished runs); the attempts in
     progress add to ``cost_by_role``, ``cost_by_feature`` and ``running_usd`` only."""
     own = _entries(ws, summary.thread_id)
-    features = [
-        tid
+    finished = [
+        e
         for tid in dict.fromkeys(r.thread_id for r in state.feature_runs)
         if tid in listed and tid != summary.thread_id
+        for e in _entries(ws, tid)
     ]
-    features += [r.thread.thread_id for r in running]
+    attempts = [(a, _entries(ws, a.thread.thread_id)) for a in running]
     by_feature: dict[str, float] = defaultdict(float)
     for r in state.feature_runs:
         by_feature[r.feature_id] += r.usd
-    for a in running:
-        by_feature[a.feature_id] += _spent(a.thread)
+    running_usd = 0.0
+    for a, entries in attempts:
+        usd = _spent(a.thread, entries)
+        by_feature[a.feature_id] += usd
+        running_usd += usd
     milestone = state.milestone
     return ThreadDetail(
         summary=summary,
         build=build_product_report(state, own),
         timeline=_timeline(state.ledger),
-        cost_by_role=_by_role(own + [e for tid in features for e in _entries(ws, tid)]),
+        cost_by_role=_by_role(own + finished + [e for _a, entries in attempts for e in entries]),
         progress=_progress(ws, state.product_dir),
         milestone_title=milestone.title if milestone else None,
         milestone_features=milestone.feature_ids() if milestone else [],
@@ -514,7 +539,7 @@ def _build_detail(
             ),
         ],
         cost_by_feature={fid: round(usd, 4) for fid, usd in by_feature.items()},
-        running_usd=round(sum(_spent(a.thread) for a in running), 4),
+        running_usd=round(running_usd, 4),
         integration=(state.integration or "").splitlines(),
         integration_ok=state.integration_ok,
         pr_number=state.pr.number if state.pr else None,

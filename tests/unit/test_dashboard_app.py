@@ -1,11 +1,13 @@
 """The dashboard's server (issue #68, ADR 0017) over the fixture source: every endpoint serves
-the contract's JSON, ``/ws`` says hello and then pushes only real changes, every route is a
-read, and a foreign ``Host`` or ``Origin`` is refused."""
+the contract's JSON, one unreadable root hides no other, ``/ws`` says hello and then pushes
+only real changes, every route is a read, a foreign ``Host`` or ``Origin`` is refused, and no
+site can frame the page."""
 
 from __future__ import annotations
 
 import logging
 import mimetypes
+import sqlite3
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -24,8 +26,8 @@ from starlette.routing import Mount
 from starlette.testclient import WebSocketDenialResponse, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from scio.dashboard.app import create_app, is_local_origin
-from scio.dashboard.contract import ChangeEvent, ThreadSummary, ThreadVersion
+from scio.dashboard.app import FRAME_HEADERS, create_app, is_same_origin
+from scio.dashboard.contract import ChangeEvent, ThreadDetail, ThreadSummary, ThreadVersion
 from tests.dashboard_support import DETAIL_FILES, FixtureDataSource, load_fixture
 
 BASE = "http://127.0.0.1"
@@ -65,6 +67,29 @@ def refs(event: ChangeEvent, field: str) -> list[tuple[str, str]]:
 def a_thread(kind: str) -> tuple[str, str]:
     row = next(t for t in load_fixture("threads.json") if t["kind"] == kind)
     return row["root"], row["thread_id"]
+
+
+def assert_unframeable(resp: Any) -> None:
+    assert resp.headers["content-security-policy"] == "frame-ancestors 'none'", resp.url
+    assert resp.headers["x-frame-options"] == "DENY", resp.url
+    # the header names no script or style directive, so the page's meta CSP stays in force
+    assert set(FRAME_HEADERS["Content-Security-Policy"].split()) == {"frame-ancestors", "'none'"}
+
+
+class UnreadableRootSource(FixtureDataSource):
+    """The SCIO root's checkpoint DB is not a database: every read of it raises."""
+
+    bad = "SCIO"
+
+    def list_threads(self, root: str) -> list[ThreadSummary]:
+        if root == self.bad:
+            raise sqlite3.DatabaseError("file is not a database")
+        return super().list_threads(root)
+
+    def thread(self, root: str, thread_id: str) -> ThreadDetail:
+        if root == self.bad:
+            raise sqlite3.DatabaseError("file is not a database")
+        return super().thread(root, thread_id)
 
 
 # ---- HTTP ----
@@ -108,6 +133,30 @@ def test_a_thread_without_an_update_time_lists_last() -> None:
     with TestClient(create_app(UndatedSource()), base_url=BASE) as c:
         ids = [t["thread_id"] for t in c.get("/api/threads").json()]
     assert ids == [t["thread_id"] for t in load_fixture("threads.json")] + ["run-undated"]
+
+
+def test_an_unreadable_root_hides_no_other_root(caplog: pytest.LogCaptureFixture) -> None:
+    """The page lists every root with one call; a root whose DB is not a database is skipped
+    and logged once per streak, and asked for by name it answers 503 with the reason."""
+    caplog.set_level(logging.WARNING, logger="scio.dashboard.app")
+    good = [t for t in load_fixture("threads.json") if t["root"] != UnreadableRootSource.bad]
+    with TestClient(create_app(UnreadableRootSource()), base_url=BASE) as c:
+        for _ in range(3):
+            resp = c.get("/api/threads")
+            assert resp.status_code == 200
+            assert resp.json() == good
+        alone = c.get("/api/threads", params={"root": "SCIO"})
+        detail = c.get("/api/threads/SCIO/run-5f0c2a1b")
+        other = c.get("/api/threads", params={"root": "graphcalc-run"})
+    for resp in (alone, detail):
+        assert resp.status_code == 503
+        assert "SCIO" in resp.json()["detail"]
+        assert "file is not a database" in resp.json()["detail"]
+    assert other.status_code == 200 and other.json() == good
+    listing = [r for r in caplog.records if "listing" in r.getMessage()]
+    assert len(listing) == 1, [r.getMessage() for r in listing]  # one per failure streak
+    assert "SCIO" in listing[0].getMessage()
+    assert "file is not a database" in listing[0].getMessage()
 
 
 def test_unknown_root_is_404(client: TestClient) -> None:
@@ -169,6 +218,16 @@ def test_the_page_and_its_static_files(source: FixtureDataSource, tmp_path: Path
     assert style.status_code == 200
     assert style.headers["content-type"].startswith("text/css")
     assert missing.status_code == 404
+    for resp in (page, script, style, missing):
+        assert_unframeable(resp)
+
+
+def test_no_site_can_frame_the_page_or_the_api(client: TestClient) -> None:
+    """A meta CSP cannot set frame-ancestors, so every HTTP response carries the header,
+    errors included."""
+    for url in ("/api/roots", "/api/threads", "/api/threads/SCIO/run-missing", "/api/graphs"):
+        assert_unframeable(client.get(url))
+    assert_unframeable(client.post("/api/roots"))  # a 405
 
 
 def test_a_missing_static_dir_does_not_stop_the_app(
@@ -216,8 +275,10 @@ def test_every_route_is_a_read(source: FixtureDataSource, tmp_path: Path) -> Non
 def test_a_foreign_host_is_refused(source: FixtureDataSource) -> None:
     """DNS rebinding: a page at evil.example resolved to 127.0.0.1 sends Host evil.example."""
     with TestClient(create_app(source), base_url="http://evil.example") as c:
-        assert c.get("/api/roots").status_code == 400
-        assert c.get("/").status_code == 400
+        for url in ("/api/roots", "/"):
+            resp = c.get(url)
+            assert resp.status_code == 400
+            assert_unframeable(resp)  # the frame headers wrap the Host check too
         with (
             pytest.raises(WebSocketDenialResponse) as denied,
             c.websocket_connect("ws://evil.example/ws"),
@@ -227,44 +288,71 @@ def test_a_foreign_host_is_refused(source: FixtureDataSource) -> None:
 
 
 @pytest.mark.parametrize(
-    "origin",
-    ["http://127.0.0.1", "http://127.0.0.1:8765", "https://localhost:8765", "http://localhost"],
+    ("origin", "host"),
+    [
+        ("http://127.0.0.1:8765", "127.0.0.1:8765"),
+        ("https://localhost:8765", "localhost:8765"),
+        ("http://127.0.0.1", "127.0.0.1"),
+        ("http://LOCALHOST:8765", "localhost:8765"),
+        ("http://127.0.0.1", "127.0.0.1:80"),  # the default port, spelled or not
+        ("https://localhost:443", "localhost"),
+    ],
 )
-def test_a_local_origin_is_local(origin: str) -> None:
-    assert is_local_origin(origin)
+def test_the_page_this_server_served_is_same_origin(origin: str, host: str) -> None:
+    assert is_same_origin(origin, host)
 
 
 @pytest.mark.parametrize(
     "origin",
     [
+        "http://localhost:3000",  # another local page: a dev server on another port
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1",  # the same host on the default port is another origin
+        "http://localhost:8765",  # the same port under the other loopback name
         "http://evil.example",
+        "http://evil.example:8765",
         "null",
         "",
-        "http://127.0.0.1.evil.example",
-        "http://localhost.evil.example:8765",
-        "http://evil.example/?http://127.0.0.1",
-        "http://user@127.0.0.1",
+        "http://127.0.0.1.evil.example:8765",
+        "http://evil.example/?http://127.0.0.1:8765",
+        "http://user@127.0.0.1:8765",
         "http://127.0.0.1:8765/",
         "ws://127.0.0.1:8765",
         "file://",
     ],
 )
-def test_a_foreign_origin_is_not_local(origin: str) -> None:
-    assert not is_local_origin(origin)
+def test_any_other_origin_is_foreign(origin: str) -> None:
+    assert not is_same_origin(origin, "127.0.0.1:8765")
 
 
-def test_ws_refuses_a_foreign_origin(client: TestClient) -> None:
-    foreign = {"Origin": "http://evil.example"}
+def test_a_missing_host_is_never_same_origin() -> None:
+    assert not is_same_origin("http://127.0.0.1:8765", None)
+
+
+@pytest.mark.parametrize(
+    "origin", ["http://evil.example", "http://localhost:3000", "http://127.0.0.1:3000"]
+)
+def test_ws_refuses_a_foreign_origin(client: TestClient, origin: str) -> None:
     with (
         pytest.raises(WebSocketDisconnect) as refused,
-        client.websocket_connect(WS_URL, headers=foreign),
+        client.websocket_connect(WS_URL, headers={"Origin": origin}),
     ):
         pass
     assert refused.value.code == 1008
 
 
-def test_ws_accepts_a_local_origin(client: TestClient, pool: ThreadPoolExecutor) -> None:
-    with client.websocket_connect(WS_URL, headers={"Origin": "http://localhost:8765"}) as ws:
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        (WS_URL, "http://127.0.0.1"),  # TestClient sends Host 127.0.0.1 for this URL (I-128)
+        ("ws://127.0.0.1:8765/ws", "http://127.0.0.1:8765"),
+        ("ws://localhost:8765/ws", "http://localhost:8765"),
+    ],
+)
+def test_ws_accepts_the_page_this_server_served(
+    client: TestClient, pool: ThreadPoolExecutor, url: str, origin: str
+) -> None:
+    with client.websocket_connect(url, headers={"Origin": origin}) as ws:
         hello = receive(ws, pool)
     assert hello.changed == [] and hello.removed == []
 

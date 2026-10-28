@@ -1079,3 +1079,56 @@ Template:
 - Sweep: every place SCIO starts a server (`grep -rn "uvicorn\.\|serve_forever\|HTTPServer(" scio evals tests --include=*.py`): the CLI (fixed); the page test's tiny server (agent C's, already waits for its handlers and stops in bounded time); the products' own HTTP servers are the products' code, started and killed by `scio/aci/apps.py`, not stopped gracefully
 - Guard: `test_the_dashboard_binds_loopback_only_and_lists_its_roots` asserts the bound is passed; `test_the_real_app_serves_the_page_live_and_stops_cleanly` hung in the full run before the fix and passes three runs out of three after it; guardrail 28
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-133 · A resumed crashed thread reads "crashed" until the resumed node returns
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_resume.py`) · a crash leaves a pending `__error__` write; `invoke(None)` re-runs the node and writes nothing to the DB before it returns
+- Symptom: a build that crashed in `feature` and was resumed with `scio build` reads `crashed`, with the old exception, for as long as the resumed feature attempt runs, which can be an hour. Its version also does not change, so no event is pushed until a model call grows the ledger.
+- Root cause: unlike a stop's answer, resuming after a crash leaves no record in the checkpoint DB: no `__resume__` write, no new checkpoint, until the node returns
+- Fix: none possible from the DB alone. The contract (`ThreadStatus`), ADR 0017 decision 7 and `docs/OBSERVABILITY.md` now say that a resume clears `crashed` only when the resumed node returns, instead of "a resume clears it". A resumed run's ledger still grows with each model call, so the costs on the page move.
+- Sweep: every other status that depends on a pending write (`waiting`, I-134): fixed there, because an answer does leave a write
+- Resolved: 2026-10-27 · Status: wontfix (the DB carries no signal; documented)
+
+### I-134 · An answered stop kept reading "waiting for you" until its node returned
+- Found: 2026-10-27 · issue #68, wave 3 (the fresh-context review, `review/probe_resume.py`) · `scio/dashboard/data.py` read any pending `__interrupt__` write as a pending stop
+- Symptom: after `invoke(Command(resume="approved"))`, while the resumed node was still running, the thread read `status=waiting`, still asking 'Ship it?'. The owner could answer the same stop twice; the build's feature decision re-runs a whole prelude before its node returns.
+- Root cause: LangGraph never removes the `__interrupt__` row on resume. `Command(resume=v)` adds a `__resume__` pending write (the null task's, then the resumed task's own), and a new checkpoint appears only when the node returns. The data layer looked for the interrupt and not for its answer.
+- Fix: a pending `__interrupt__` with a `__resume__` write on the same checkpoint is an answered stop (`in_progress`, no `StopInfo`), for threads and for a build's linked attempts. Exact because both asks of a node that interrupted twice would share one interrupt id, and no SCIO node interrupts twice.
+- Sweep: every reader of `__interrupt__` writes (`grep -rn "__interrupt__\|INTERRUPT" scio`): the dashboard's `_stop` (fixed) and the graph runners' `raw.pop("__interrupt__")` on `invoke`'s own return value, which LangGraph computes after the resume and so is current
+- Guard: `test_an_answered_stop_reads_in_progress_while_its_node_runs` (a real `Command(resume=...)` while the node blocks: mid-run the pending writes are the `__interrupt__` and the `__resume__`, the checkpoint id is unchanged, and the thread reads `in_progress`); `test_every_node_interrupts_at_most_once` (an AST scan of `scio/`: no function calls `interrupt()` twice), which keeps the rule exact; guardrail 29
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-135 · One unreadable root made the threads list fail for every root
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_roots.py` case a) · `scio/dashboard/app.py`, `GET /api/threads`
+- Symptom: with one good root and one whose `checkpoints.sqlite` is not a database, `GET /api/threads` answered 500 (`sqlite3.DatabaseError: file is not a database`). The page always calls it without `?root=`, so it listed nothing from any root.
+- Root cause: the WebSocket's poll isolated a failing root, but the list endpoint aggregated the roots with no guard; the data layer swallows only "no such table"
+- Fix: the aggregate skips a root whose read fails and logs it once per streak (`FailureStreaks`, shared with the WebSocket); `?root=` for that root, and its thread details, answer 503 with the root and the reason
+- Sweep: every endpoint that calls a reading `DataSource` method (agent B): the list (fixed) and the thread detail (fixed, same 503); `roots()` and `graphs()` read no DB
+- Guard: `test_an_unreadable_root_hides_no_other_root`; guardrail 30
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-136 · The current step was empty while T2's parallel explorers ran
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_send.py`) · `scio/dashboard/data.py` read `next_nodes` from `branch:to:*` channels only
+- Symptom: while explorers ran, the dashboard gave `next_nodes=[]` where LangGraph gives `next=('explore', 'explore')`, so the page said the thread had ended or not started and lit nothing
+- Root cause: a `Send` fan-out schedules its tasks as packets in the `__pregel_tasks` channel, not as `branch:to:` channels
+- Fix: `next_nodes` is the sorted set of both
+- Sweep: the other readers of the next node (`grep -rn "branch:to:" scio tests`): the dashboard only
+- Guard: `test_next_nodes_include_pending_send_packets`, and `test_next_nodes_light_nodes_of_the_threads_own_graph` now asserts a non-empty list where one is expected (it passed on an empty one); guardrail 31
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-137 · An attempt in progress showed the spend of its last checkpoint, not its live spend
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/test_probe_running_usd.py`) · `running_usd` and `cost_by_feature` used the child checkpoint's `budgets.usd_used`
+- Symptom: with $0.10 in the checkpoint and $0.50 in the ledger, `running_usd` was 0.1 while `cost_by_role` grew by 0.5; during a long worker turn the headline plus the running spend never matched the by-role total
+- Root cause: a checkpoint is written only when a node returns, and a worker turn is one node; the ledger is appended on every model call. The test hid it by setting both figures equal.
+- Fix: the running spend is the attempt's ledger sum, and the checkpoint's figure only when the ledger has no entries
+- Sweep: every figure on the page read from a checkpoint while a node may be running (summary `usd`, `cost_by_feature` for finished runs, `running_usd`): only `running_usd` and its share of `cost_by_feature` describe a running node; the others are finished runs or `scio report`'s own figure
+- Guard: `test_a_feature_attempt_in_progress_is_linked_and_counted` (checkpoint and ledger now differ in the test); guardrail 32
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-138 · Any local page could watch the dashboard's WebSocket, and any site could frame the page
+- Found: 2026-10-27 · issue #68, wave 3 (the review) · `scio/dashboard/app.py`: `is_local_origin` accepted any loopback origin and port; the page's meta CSP cannot set `frame-ancestors`
+- Symptom: a page on `localhost:3000` (a dev server) could open `/ws` and read root names and thread ids; HTTP reads were already blocked by the browser's same-origin rule. Any site could frame the page (view-only, so nothing to click-jack).
+- Root cause: "local" was taken to mean "same origin"; framing was never decided
+- Fix: `/ws` accepts an `Origin` only when its host and port equal the request's `Host` (`is_same_origin`); every HTTP response carries `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (`FrameDenyMiddleware`)
+- Sweep: every place the server trusts a request header (`grep -n "headers" scio/dashboard/app.py`): the Origin check (fixed) and the Host check (`TrustedHostMiddleware`, already exact)
+- Guard: `test_ws_refuses_a_foreign_origin`, `test_any_other_origin_is_foreign`, `test_no_site_can_frame_the_page_or_the_api`; guardrail 33
+- Resolved: 2026-10-27 · Status: resolved

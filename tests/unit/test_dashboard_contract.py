@@ -3,6 +3,9 @@ these payloads, so a contract change that the fixtures do not follow fails here 
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from scio.dashboard.contract import (
     ChangeEvent,
     DataSource,
@@ -37,6 +40,36 @@ def test_every_fixture_validates_against_its_contract_model() -> None:
         graph = next(g for g in graphs if g.name == t.graph)
         assert set(t.next_nodes) <= set(graph.nodes), (t.thread_id, t.next_nodes)
     assert {(r.root, r.thread_id) for r in event.changed} <= listed
+
+
+def _interrupt_calls(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+    """``interrupt(...)`` calls in ``fn``'s own body, not in the functions it defines."""
+    count, todo = 0, list(fn.body)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            count += node.func.id == "interrupt"
+        todo.extend(ast.iter_child_nodes(node))
+    return count
+
+
+def test_every_node_interrupts_at_most_once() -> None:
+    """The dashboard reads a stop as answered when a ``__resume__`` write sits beside its
+    ``__interrupt__`` (I-134). That is exact only while no node asks twice in one run: both
+    asks would share one interrupt id. I-065 already says a node that interrupts does
+    nothing else."""
+    root = Path(__file__).resolve().parents[2] / "scio"
+    twice = [
+        f"{path.relative_to(root.parent).as_posix()}:{fn.lineno} {fn.name}"
+        for path in root.rglob("*.py")
+        for fn in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef) and _interrupt_calls(fn) > 1
+    ]
+    assert twice == []
+    probe = ast.parse("def node(s):\n    a = interrupt(1)\n    b = interrupt(2)\n")
+    assert _interrupt_calls(probe.body[0]) == 2  # type: ignore[arg-type]
 
 
 def test_the_fixture_source_is_a_data_source() -> None:

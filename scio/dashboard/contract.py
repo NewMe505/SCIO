@@ -42,7 +42,10 @@ ThreadStatus = Literal["in_progress", "waiting", "crashed", "done", "halted", "e
 """Derived once, by the data layer, so the API and the page never re-derive it, in this order:
 ``error`` when the checkpoint could not be read with its kind's model; ``crashed`` when the
 latest checkpoint has a pending ``__error__`` write (the process died in a node; a resume
-clears it); ``waiting`` when a stop is pending (an ``__interrupt__`` write); ``halted`` when
+clears it only when the resumed node returns, since the DB records nothing of a resume
+before that, I-133); ``waiting`` when a stop is pending: an ``__interrupt__`` write and no
+``__resume__`` write on the same checkpoint (an answered stop whose node is running again
+reads ``in_progress``; exact because every SCIO node interrupts at most once); ``halted`` when
 ``exit_reason`` is set and is not ``success``, or the phase is ``halted``; ``done`` when the
 phase is ``done``; otherwise ``in_progress``. A process killed without an exception also
 reads ``in_progress``: ``updated_at`` says how long it has been quiet."""
@@ -89,8 +92,10 @@ class ThreadSummary(BaseModel):
     phase: str
     exit_reason: str | None = None
     next_nodes: list[str] = Field(default_factory=list)
-    """Nodes the graph runs next (the checkpoint's ``branch:to:<node>`` channels): the
-    current step, the node that asked when paused, empty once the thread ended."""
+    """Nodes the graph runs next, sorted and without repeats: the checkpoint's
+    ``branch:to:<node>`` channels and the nodes of its pending ``Send`` packets
+    (``__pregel_tasks``: T2's parallel explorers). The current step, the node that asked when
+    paused, empty once the thread ended."""
     checkpoint_id: str
     updated_at: datetime | None = None
     """The latest checkpoint's ``ts``."""
@@ -167,11 +172,14 @@ class ThreadDetail(BaseModel):
     run only when the attempt ends, so without these the feature running now would read
     "not run"."""
     cost_by_feature: dict[str, float] = Field(default_factory=dict)
-    """Feature id -> usd over every attempt, the attempt in progress included (its
-    checkpoint's ``budgets.usd_used`` so far)."""
+    """Feature id -> usd over every attempt, the attempt in progress included: its cost
+    ledger's sum so far, which grows with every model call (its checkpoint's
+    ``budgets.usd_used`` when it has no ledger entries; a checkpoint is written only when a
+    node returns, so it lags a long worker turn)."""
     running_usd: float = 0.0
-    """The spend of the attempts in progress: in ``cost_by_feature`` and ``cost_by_role``, not
-    in ``summary.usd`` (the figure ``scio report`` prints, which counts finished runs)."""
+    """The spend of the attempts in progress, counted as in ``cost_by_feature``: in it and in
+    ``cost_by_role``, not in ``summary.usd`` (the figure ``scio report`` prints, which counts
+    finished runs)."""
     integration: list[str] = Field(default_factory=list)
     """The integration checks' output lines; empty before they ran."""
     integration_ok: bool | None = None
@@ -246,7 +254,9 @@ class DataSource(Protocol):
     def roots(self) -> list[Workspace]: ...
 
     def list_threads(self, root: str) -> list[ThreadSummary]:
-        """Every thread of ``root``, newest update first. Raises :class:`UnknownRoot`."""
+        """Every thread of ``root``, newest update first. Raises :class:`UnknownRoot`, and
+        whatever reading an unreadable DB raises (a file that is not a database, a foreign
+        schema): the API keeps one such root from hiding the others."""
         ...
 
     def thread(self, root: str, thread_id: str) -> ThreadDetail:

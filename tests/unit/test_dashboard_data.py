@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import shutil
 import sqlite3
+import threading
+import time
 from collections import defaultdict
 from contextlib import closing, suppress
 from dataclasses import dataclass
@@ -18,7 +20,7 @@ import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.types import Command, Send, interrupt
 
 from scio.dashboard import data
 from scio.dashboard.contract import DataSource, ThreadSummary, UnknownRoot, UnknownThread
@@ -75,6 +77,13 @@ def _channels(db: Path, thread_id: str) -> dict[str, Any]:
     return dict(tup.checkpoint["channel_values"])
 
 
+def _pending(db: Path, thread_id: str) -> list[tuple[str, str, Any]]:
+    with data._reader(db) as (_conn, saver):
+        tup = saver.get_tuple({"configurable": {"thread_id": thread_id}})
+    assert tup is not None
+    return list(tup.pending_writes or [])
+
+
 def _rows(built: Built) -> dict[str, ThreadSummary]:
     return {s.thread_id: s for s in built.source.list_threads(ROOT)}
 
@@ -107,25 +116,36 @@ def _finish(_state: SCIOState) -> dict[str, Any]:
     return {"phase": "done"}
 
 
-def _run_tiny(db: Path, thread_id: str, second: Any, *, usd: float = 0.125) -> None:
-    """``route`` then ``second`` over :class:`SCIOState` on a writable saver. The state must be
-    a real task state: anything else reads as ``error``, which outranks every other status."""
+def _task_state(thread_id: str, usd: float = 0.125) -> SCIOState:
+    """A real task state: anything else reads as ``error``, which outranks every other status."""
+    return SCIOState(
+        thread_id=thread_id,
+        task=TaskSpec(title="Tiny task", description="d", acceptance=["a"], repo_url="r"),
+        budgets=Budget(tokens_max=1_000, usd_max=1.0, advisor_calls_max=0, usd_used=usd),
+        github=GitHubRefs(owner="o", repo="r"),
+    )
+
+
+def _tiny_app(conn: sqlite3.Connection, second: Any) -> Any:
+    """``route`` then ``second`` over :class:`SCIOState`, on a writable saver."""
     g: Any = StateGraph(SCIOState)
     g.add_node("route", _route)
     g.add_node("implement", second)
     g.add_edge(START, "route")
     g.add_edge("route", "implement")
     g.add_edge("implement", END)
-    state = SCIOState(
-        thread_id=thread_id,
-        task=TaskSpec(title="Tiny task", description="d", acceptance=["a"], repo_url="r"),
-        budgets=Budget(tokens_max=1_000, usd_max=1.0, advisor_calls_max=0, usd_used=usd),
-        github=GitHubRefs(owner="o", repo="r"),
-    )
+    return g.compile(checkpointer=SqliteSaver(conn, serde=serializer()))
+
+
+def _run_tiny(db: Path, thread_id: str, second: Any, *, usd: float = 0.125) -> None:
     with closing(sqlite3.connect(str(db), check_same_thread=False)) as conn:
-        app = g.compile(checkpointer=SqliteSaver(conn, serde=serializer()))
+        app = _tiny_app(conn, second)
         with suppress(Boom):
-            app.invoke(state, {"configurable": {"thread_id": thread_id}}, durability="sync")
+            app.invoke(
+                _task_state(thread_id, usd),
+                {"configurable": {"thread_id": thread_id}},
+                durability="sync",
+            )
 
 
 def _tiny(tmp_path: Path, name: str = "tiny") -> CheckpointDataSource:
@@ -252,8 +272,11 @@ def test_versions_follow_checkpoints_writes_and_ledgers(built: Built) -> None:
 
 def test_next_nodes_light_nodes_of_the_threads_own_graph(built: Built) -> None:
     graphs = {g.name: set(g.nodes) for g in built.source.graphs()}
-    for row in built.source.list_threads(ROOT):
+    rows = built.source.list_threads(ROOT)
+    for row in rows:
         assert set(row.next_nodes) <= graphs[row.graph], (row.thread_id, row.next_nodes)
+    # only the paused build has a next step; every other thread has ended
+    assert {r.thread_id: r.next_nodes for r in rows if r.next_nodes} == {BUILD: ["merge_wait"]}
 
 
 def test_the_data_layer_never_writes(built: Built) -> None:
@@ -296,15 +319,16 @@ def test_unknown_roots_and_threads_raise_and_never_reach_the_filesystem(built: B
 def test_a_feature_attempt_in_progress_is_linked_and_counted(built: Built, tmp_path: Path) -> None:
     """``scio build`` appends a ``FeatureRun`` only when an attempt ends (the live graphcalc
     build ran P4 with no run for it): the attempt in progress is still linked, and its spend is
-    in the build's costs and ``running_usd`` but not in ``summary.usd``."""
+    in the build's costs and ``running_usd`` but not in ``summary.usd``. The spend is the
+    ledger's: the checkpoint's ``usd_used`` lags a long worker turn."""
     db, ledgers = tmp_path / "ckpt.sqlite", tmp_path / "ledger"
     with closing(data._connect(built.db)) as src, closing(sqlite3.connect(db)) as dst:
         src.backup(dst)
     shutil.copytree(built.ledgers, ledgers)
     p3, p4, p5 = f"{BUILD}-p3-a1", f"{BUILD}-p4-a2", f"{BUILD}-p5-a1"
     stray = f"{BUILD}-notes"
-    _run_tiny(db, p3, _ask, usd=0.3125)
-    _run_tiny(db, p5, _ask, usd=0.0625)  # stopped at an interrupt: the link says so
+    _run_tiny(db, p3, _ask, usd=0.1)  # the ledger below says 0.5: calls since the checkpoint
+    _run_tiny(db, p5, _ask, usd=0.0625)  # stopped at an interrupt, no ledger yet
     _run_tiny(db, stray, _finish, usd=0.5)
     with closing(sqlite3.connect(db, check_same_thread=False)) as conn:
         # P3 mid-node: its checkpoint before `implement` with no stop written yet
@@ -314,7 +338,11 @@ def test_a_feature_attempt_in_progress_is_linked_and_counted(built: Built, tmp_p
         checkpoint["channel_values"] = {"thread_id": p4, "task": "not a task"}
         config = {"configurable": {"thread_id": p4, "checkpoint_ns": ""}}
         SqliteSaver(conn, serde=serializer()).put(config, checkpoint, {}, {})  # type: ignore[arg-type]
-    for tid, role, usd in ((p3, "debugger", 0.25), (p3, "coder", 0.0625), (stray, "advisor", 0.5)):
+    for tid, role, usd in (
+        (p3, "debugger", 0.4375),
+        (p3, "coder", 0.0625),
+        (stray, "advisor", 0.5),
+    ):
         ledger = CostLedger()
         ledger.persist_to(ledgers / f"{tid}.jsonl")
         ledger.record(
@@ -340,13 +368,18 @@ def test_a_feature_attempt_in_progress_is_linked_and_counted(built: Built, tmp_p
         ("P4", 2, p4, "running", True),
         ("P5", 1, p5, "waiting", True),
     ]
-    assert detail.cost_by_feature["P3"] == 0.3125 and detail.cost_by_feature["P5"] == 0.0625
-    assert detail.running_usd == 0.375 and detail.cost_by_feature["P4"] == 0.0
+    # P3 follows its ledger (0.5, not the checkpoint's 0.1); P5 has no ledger: its checkpoint's
+    assert detail.cost_by_feature["P3"] == 0.5 and detail.cost_by_feature["P5"] == 0.0625
+    assert detail.running_usd == 0.5625 and detail.cost_by_feature["P4"] == 0.0
     assert {f: detail.cost_by_feature[f] for f in ("P1", "P2")} == before.cost_by_feature
-    assert detail.cost_by_role["debugger"] == 0.25 and "advisor" not in detail.cost_by_role
+    assert detail.cost_by_role["debugger"] == 0.4375 and "advisor" not in detail.cost_by_role
     assert detail.cost_by_role["coder"] == pytest.approx(before.cost_by_role["coder"] + 0.0625)
     assert detail.summary.usd == before.summary.usd and detail.build == before.build
     assert before.running_usd == 0.0
+    # running_usd is in cost_by_role (as far as ledgers record it) and not in summary.usd
+    added = sum(detail.cost_by_role.values()) - sum(before.cost_by_role.values())
+    no_ledger = detail.cost_by_feature["P5"]
+    assert added == pytest.approx(detail.running_usd - no_ledger, abs=1e-3)
     rows = {s.thread_id: s for s in source.list_threads(ROOT)}
     assert rows[stray].parent_thread == BUILD  # the build's child, but not a feature attempt
     assert rows[p3].parent_thread == BUILD and rows[p3].product == PRODUCT
@@ -400,6 +433,82 @@ def test_a_crash_lists_as_crashed_with_the_exception(tmp_path: Path) -> None:
     assert len(row.crash) == data.CRASH_CHARS
     detail = source.thread("tiny", "run-crash")
     assert detail.summary == row and detail.task is not None
+
+
+def test_an_answered_stop_reads_in_progress_while_its_node_runs(tmp_path: Path) -> None:
+    """LangGraph keeps the ``__interrupt__`` row on a resume and adds a ``__resume__`` write;
+    the next checkpoint appears only when the resumed node returns. The answered stop must not
+    read ``waiting`` in between, nor its build link."""
+    db, tid = tmp_path / "ckpt.sqlite", "run-answered"
+    release = threading.Event()
+
+    def ask_then_work(_state: SCIOState) -> dict[str, Any]:
+        interrupt({"question": "Ship it?"})
+        release.wait(10)  # the resumed node's own work, after the answer
+        return {"phase": "done"}
+
+    source = _tiny(tmp_path)
+    config = {"configurable": {"thread_id": tid}}
+    with closing(sqlite3.connect(str(db), check_same_thread=False)) as conn:
+        app = _tiny_app(conn, ask_then_work)
+        app.invoke(_task_state(tid), config, durability="sync")
+        [paused] = source.list_threads("tiny")
+        assert paused.status == "waiting" and paused.waiting is not None
+        writes = source.versions("tiny")[tid].writes
+        worker = threading.Thread(
+            target=app.invoke, args=(Command(resume="yes"), config), kwargs={"durability": "sync"}
+        )
+        worker.start()
+        try:
+            deadline = time.monotonic() + 10
+            while source.versions("tiny")[tid].writes == writes and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert {c for _t, c, _v in _pending(db, tid)} == {"__interrupt__", "__resume__"}
+            [answered] = source.list_threads("tiny")
+            assert answered.checkpoint_id == paused.checkpoint_id  # nothing else recorded yet
+            assert answered.status == "in_progress" and answered.waiting is None
+            assert answered.next_nodes == ["implement"]
+            with data._reader(db) as (_c, saver):
+                attempt = data._load(saver, tid, answered.checkpoint_id)
+            assert data._attempt_status(attempt) == "running"
+        finally:
+            release.set()
+            worker.join(10)
+    [done] = source.list_threads("tiny")
+    assert done.status == "done" and done.next_nodes == []
+
+
+def _scope(_state: SCIOState) -> dict[str, Any]:
+    return {"phase": "explore", "exploration_questions": ["a", "b"]}
+
+
+def _fan_out(state: SCIOState) -> list[Send]:
+    return [Send("explore", {"question": q}) for q in state.exploration_questions]
+
+
+def _explore(_packet: Any) -> dict[str, Any]:
+    raise Boom("an explorer fell over")
+
+
+def test_next_nodes_include_pending_send_packets(tmp_path: Path) -> None:
+    """T2's parallel explorers run as ``Send`` tasks: no ``branch:to:`` channel names them,
+    only the packets in ``__pregel_tasks`` do."""
+    db, tid = tmp_path / "ckpt.sqlite", "run-send"
+    g: Any = StateGraph(SCIOState)
+    g.add_node("scope", _scope)
+    g.add_node("explore", _explore)
+    g.add_node("plan", _finish)
+    g.add_edge(START, "scope")
+    g.add_conditional_edges("scope", _fan_out, ["explore"])
+    g.add_edge("explore", "plan")
+    g.add_edge("plan", END)
+    with closing(sqlite3.connect(str(db), check_same_thread=False)) as conn:
+        app = g.compile(checkpointer=SqliteSaver(conn, serde=serializer()))
+        with suppress(Boom):
+            app.invoke(_task_state(tid), {"configurable": {"thread_id": tid}}, durability="sync")
+    assert not any(k.startswith("branch:to:") for k in _channels(db, tid))
+    [row] = _tiny(tmp_path).list_threads("tiny")
+    assert row.status == "crashed" and row.next_nodes == ["explore"]
 
 
 def test_unreadable_threads_list_as_error_rows(tmp_path: Path) -> None:

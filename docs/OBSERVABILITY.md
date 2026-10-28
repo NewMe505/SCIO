@@ -104,19 +104,19 @@ uv run python -m scio dashboard --root . --root ../graphcalc-run
 
 Open http://127.0.0.1:8765. `--port` changes the port.
 
-A root is a directory SCIO ran in: the directory a `scio run`, `scio new` or `scio build` was started from. It holds `.scio/checkpoints.sqlite` (the checkpoint DB) and `.scio/ledger/` (one cost ledger per thread). Name one `--root` per directory; the example shows SCIO's own threads and the graphcalc run side by side. A root without a checkpoint DB is listed with no threads.
+A root is a directory SCIO ran in: the directory a `scio run`, `scio new` or `scio build` was started from. It holds `.scio/checkpoints.sqlite` (the checkpoint DB) and `.scio/ledger/` (one cost ledger per thread). Name one `--root` per directory; the example shows SCIO's own threads and the graphcalc run side by side. A root without a checkpoint DB is listed with no threads. A root whose DB cannot be read is left out of the threads list and logged, and the other roots still show.
 
 ### What it shows
 
 - **The threads list**, grouped by root and product. Each row has its kind (build, bootstrap or task), phase, exit reason, last update and cost, and a status:
-  - a **waiting** badge, carrying the stop's question, when a thread waits for your decision;
-  - a **crashed** badge when the process died in a node. The latest checkpoint has a pending error, and a resume clears it;
+  - a **waiting** badge, carrying the stop's question, when a thread waits for your decision. Once you answer and the node runs again, the thread reads in progress;
+  - a **crashed** badge when the process died in a node: the latest checkpoint has a pending error. A resume clears it only when the resumed node returns, so a resumed build can read crashed for a whole feature attempt (I-133);
   - no badge for a process killed without an exception: it still reads in progress, and its last update shows how long it has been quiet.
 - **A build thread:** the milestone and its features, with each attempt's tier, status, iterations, escalations, cost and commit, and a link to the feature's own thread. The attempt running now is listed too, as `running`: SCIO records an attempt in the build's state only when it ends. Also the integration check lines and the PR link.
 - **A feature thread** (a task): iterations, escalations, and the last test and verify lines.
 - **A bootstrap thread** (`scio new`): the interview's questions, each revision round's notes, the bootstrap commit and the repository.
 - **The lit graph:** the thread's graph (build, bootstrap, or the task's tier) drawn from the same source as ARCHITECTURE.md's diagrams, with the nodes it runs next lit. Mermaid loads from a CDN; without it the page falls back to text.
-- **Costs** by role and, for a build, by feature over every attempt. A build's total includes its feature threads and is the figure `scio report` prints, built by the same functions. While a feature runs, its spend so far is in the breakdowns and shown on its own as the running spend, but not in the total until the attempt ends.
+- **Costs** by role and, for a build, by feature over every attempt. A build's total includes its feature threads and is the figure `scio report` prints, built by the same functions. While a feature runs, its spend so far (its cost ledger, updated with every model call) is in the breakdowns and shown on its own as the running spend, but not in the total until the attempt ends.
 - **The live timeline:** the thread's ledger of facts, guesses and decisions, oldest first.
 
 The page updates without a reload. While a page is open, the server checks each thread once a second for a new checkpoint, a new pending write (a stop or a crash) and ledger growth, and pushes the threads that changed over a WebSocket. Nothing polls with no page open.
@@ -125,7 +125,7 @@ The page updates without a reload. While a page is open, the server checks each 
 
 The dashboard is read-only. It opens the checkpoint DB read-only, has no write route, and closes each connection after each read, so it never holds up the build's writes. It is safe to run beside a live build. On an idle DB it may leave empty `-wal` and `-shm` files next to it; they are SQLite's index files, and the next writer cleans them up. The DB file itself is not changed.
 
-The dashboard answers only on 127.0.0.1, and refuses a request whose `Host` is not 127.0.0.1 or localhost. It cannot answer a stop: answer it from the CLI (`scio build --product DIR --decision "<text>"`, or `scio new --thread ID --decision "<text>"`).
+The dashboard answers only on 127.0.0.1. It refuses a request whose `Host` is not 127.0.0.1 or localhost, and a live-update connection from any page but its own. No other page can frame it. It cannot answer a stop: answer it from the CLI (`scio build --product DIR --decision "<text>"`, or `scio new --thread ID --decision "<text>"`).
 
 ## 4. The CLI views
 

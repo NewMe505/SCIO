@@ -34,6 +34,11 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 26. **Never** use Playwright's `wait_for_function` with a string predicate on a page whose CSP forbids eval; wait on a selector the page sets, or poll with `page.evaluate` (I-129). Guard: `test:test_the_page_never_writes_html_from_data_or_evaluates_code`
 27. **Always** have a WebSocket handler read the socket as well as write it, so a closed tab ends it and the server can stop (I-130). Guard: `test:test_the_real_app_serves_the_page_live_and_stops_cleanly`
 28. **Always** bound a server's graceful shutdown (`timeout_graceful_shutdown` for uvicorn); on Windows a reset connection can hold `asyncio.Server.wait_closed` open forever (I-132). Guard: `test:test_the_dashboard_binds_loopback_only_and_lists_its_roots`, `test:test_the_real_app_serves_the_page_live_and_stops_cleanly`
+29. **Always** read a stop as answered when a `__resume__` write sits beside its `__interrupt__`, and never let a node interrupt twice in one run, which would make that rule ambiguous (I-134, I-065). Guard: `test:test_an_answered_stop_reads_in_progress_while_its_node_runs`, `test:test_every_node_interrupts_at_most_once`
+30. **Never** let one unreadable source fail an aggregate view; skip it, log it once per streak, and answer its own request with the reason (I-135). Guard: `test:test_an_unreadable_root_hides_no_other_root`
+31. **Always** read a checkpoint's next nodes from its `Send` packets (`__pregel_tasks`) as well as its `branch:to:` channels (I-136). Guard: `test:test_next_nodes_include_pending_send_packets`
+32. **Always** show a running node's spend from its cost ledger, not its checkpoint: a checkpoint is written only when the node returns (I-137). Guard: `test:test_a_feature_attempt_in_progress_is_linked_and_counted`
+33. **Always** accept a WebSocket only from the server's own origin (the Origin's host and port equal the request's Host), and deny framing on every response (I-138). Guard: `test:test_ws_refuses_a_foreign_origin`, `test:test_no_site_can_frame_the_page_or_the_api`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
@@ -641,12 +646,22 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - A shutdown hang appeared only under the full parallel run (I-132): uvicorn's last step waits on `asyncio.Server.wait_closed`, which on Windows can wait forever for a reset connection. Three reproductions and a task dump found it; the fix is one argument.
 - My first live-check script orphaned its server: `terminate()` stopped the `uv run` wrapper, not the Python child holding the pipe. The script for the second check runs the interpreter directly.
 - Agent C ran one read-only `git config` against "never run git", and a shell one-liner with a regex was mangled again (I-131).
+- The fresh-context review found five things every test and both live checks had passed, each confirmed by a probe:
+  - an answered stop still read "waiting" until its node returned (I-134);
+  - a resumed crash still reads "crashed", which the DB cannot tell apart, so it is documented (I-133);
+  - one unreadable root emptied the whole list (I-135);
+  - T2's explorers lit no step (I-136);
+  - a running attempt's spend lagged its ledger (I-137);
+  - any local page could watch the WebSocket (I-138).
+
+  Two of the tests it named passed by construction: an empty `next_nodes` satisfied a subset check, and a test set the checkpoint and ledger spend equal. A reviewer that is handed the code and not my conclusions is worth its 20 minutes.
 
 ### Actions
 - `scio/dashboard/` (contract, data, app, static) and `scio dashboard` with `DASHBOARD_HOST` and `DASHBOARD_SHUTDOWN_S`; the `dashboard` extra.
 - Tests: `test_dashboard_contract.py`, `test_dashboard_data.py`, `test_dashboard_app.py`, `test_dashboard_cli.py`, `tests/live/test_dashboard_page.py`, `tests/live/test_dashboard_server.py`, `test_lf_writes.py`, the torn-line test in `test_m5_observability.py`, `test_report_reads_a_build_that_stopped_before_its_first_feature`.
 - `CostLedger.load_entries` reads complete lines only; `_read_artifact` replaces a broken character (I-127).
-- ADR 0017, `docs/OBSERVABILITY.md`, README, CHANGELOG, PRODUCT_MODE; ledger I-120 to I-132; guardrails 20 to 28.
+- The review's fixes: the answered-stop rule and `test_every_node_interrupts_at_most_once`, `Send` packets in `next_nodes`, the running spend from the ledger, `FailureStreaks` and the 503 for an unreadable root, `is_same_origin`, `FrameDenyMiddleware`.
+- ADR 0017, `docs/OBSERVABILITY.md`, README, CHANGELOG, PRODUCT_MODE, ARCHITECTURE's tree; ledger I-120 to I-138; guardrails 20 to 33.
 
 ### Bottleneck audit
 - Slowest steps: the page agent (35 minutes, most of it Playwright waits and screenshots), diagnosing I-132 (about 15 minutes: three full runs and an instrumented one), and agent D's second round, which waited on the other agents' facts.
