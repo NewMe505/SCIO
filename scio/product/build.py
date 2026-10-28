@@ -165,8 +165,20 @@ def reread_product_md(
 
 
 def _open_features(spec: ProductSpec, progress: ProgressFile) -> list[ProductFeature]:
+    """The open features (a skipped one included: it is deferred, I-116) in PRODUCT.md order."""
     open_ids = set(progress.open_feature_ids())
     return [f for f in spec.features if f.id in open_ids]
+
+
+def _not_done(spec: ProductSpec, progress: ProgressFile) -> list[str]:
+    """``"<id> <status>"`` for every feature of ``spec`` that ``progress.json`` does not
+    record as ``done`` (a feature without a record is ``no record``): what blocks a release."""
+    out: list[str] = []
+    for f in spec.features:
+        rec = progress.feature(f.id)
+        if rec is None or rec.status != "done":
+            out.append(f"{f.id} {rec.status if rec else 'no record'}")
+    return out
 
 
 def _feature(spec: ProductSpec, fid: str) -> ProductFeature:
@@ -430,14 +442,18 @@ def render_milestone_pr_body(state: ProductBuildState, spec: ProductSpec) -> str
             f"| {f.id} {f.description} | {mf.tier.value} | {status} | {commit} | {usd} | {esc} |"
         )
         if (n := state.issues.get(mf.id)) is not None:
-            closes.append(f"Closes #{n}")
+            # A skipped feature is deferred, not delivered: its issue stays open for the
+            # milestone that builds it (I-116).
+            passed = run is not None and run.status == "passed"
+            closes.append(f"Closes #{n}" if passed else f"Refs #{n} ({f.id} deferred, not closed)")
     gate = state.last_gate
     gate_line = (
         f"{gate.verdict}: {gate.reasoning[:400]}" if gate is not None else "(no gate verdict)"
     )
     integration = state.integration or "(integration checks not run)"
-    runs = [r for r in state.feature_runs if r.feature_id in plan.feature_ids()]
-    attempts = sum(1 for _ in runs)
+    # this milestone's runs only: a deferred feature's earlier attempts belong to theirs (I-116)
+    runs = state.milestone_runs()
+    attempts = len(runs)
     text = "\n".join(
         [
             "## Summary",
@@ -600,6 +616,17 @@ def plan_milestone(ctx: RunContext) -> Node:
             )
         ]
         entries += [fact(n) for n in notes]
+        deferred = [
+            fid
+            for fid in plan.feature_ids()
+            if (rec := progress.feature(fid)) is not None and rec.status == "skipped"
+        ]
+        if deferred:
+            entries.append(
+                fact(
+                    f"deferred by a skip, planned again in {plan.id}: {', '.join(deferred)} (I-116)"
+                )
+            )
 
         # The milestone branch from main (probe: it exists).
         def apply() -> str:
@@ -755,7 +782,9 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
     The thread id is deterministic per attempt, so a crash mid-feature resumes the same
     subgraph; its ``merge_wait`` is answered by the orchestrator (the milestone PR is the
     human's stop); any other pause or a failed exit stops here for one human decision:
-    ``retry`` (a new attempt), ``skip``, or anything else to stop the build.
+    ``retry`` (a new attempt), ``skip``, or anything else to stop the build. ``skip`` defers
+    the feature: this milestone goes on without it, it stays open in ``progress.json`` and the
+    next milestone plans it again; only removing it from ``PRODUCT.md`` drops it (I-116).
     """
 
     def node(state: ProductBuildState) -> dict[str, Any]:
@@ -776,6 +805,7 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             attempt=attempt,
             tier=feat.tier,
             issue_number=state.issues.get(feat.id),
+            milestone=plan.id,  # a skip finishes the feature in this milestone only (I-116)
         )
         entries: list[Any] = []
         try:
@@ -878,9 +908,12 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
         answer = str(
             interrupt(
                 {
+                    # I-116: a skip defers, it never drops; the question says so plainly.
                     "question": f"Feature {feat.id} ({reason}, attempt {attempt}) needs a "
-                    "decision: reply 'retry' to run it again, 'skip' to leave it out of the "
-                    "milestone, anything else to stop the build.",
+                    "decision: reply 'retry' to run it again; 'skip' to defer it: this "
+                    "milestone goes on without it, it stays open and the next milestone plans "
+                    "it again (the release waits for it; to drop it for good, remove it from "
+                    "PRODUCT.md); anything else to stop the build.",
                     "feature": feat.id,
                     "thread": thread,
                     "exit_reason": reason,
@@ -908,7 +941,13 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             }
         if choice.startswith("skip"):
             record = feature_run_from_state(run, final, status="skipped")
-            entries.append(decision(f"{feat.id} skipped by human ({reason})", source=Role.HUMAN))
+            entries.append(
+                decision(
+                    f"{feat.id} skipped by human ({reason}): deferred to the next milestone, "
+                    "still open (I-116)",
+                    source=Role.HUMAN,
+                )
+            )
             return {
                 "feature_runs": [*state.feature_runs, record],
                 "human_notes": notes,
@@ -1331,7 +1370,10 @@ def after_merge_wait(state: ProductBuildState) -> Literal["update", "merge_wait"
 
 def update_progress(ctx: RunContext) -> Node:
     """Record the merged milestone in ``progress.json`` and ``NOTES.md`` on ``main`` (one
-    commit, idempotent), then loop to the next milestone or finish."""
+    commit, idempotent), then loop to the next milestone or finish. A feature skipped in this
+    milestone is recorded ``skipped``, which is open, so the loop plans it again rather than
+    reaching the release without it; ``PRODUCT.md`` is re-read before the route is chosen, so
+    a feature added at this merge stop is planned too (I-116)."""
 
     def node(state: ProductBuildState) -> dict[str, Any]:
         spec, plan, pr = state.spec, state.milestone, state.pr
@@ -1343,7 +1385,9 @@ def update_progress(ctx: RunContext) -> Node:
             _git(ctx, "checkout", "-q", "main")
             progress = _read_progress(ctx)
             progress.build_thread = ctx.thread_id
-            runs = [r for r in state.feature_runs if r.feature_id in plan.feature_ids()]
+            # this milestone's runs only: a deferred feature's earlier attempts were recorded
+            # with the milestone they ran in (I-116)
+            runs = state.milestone_runs()
             record = MilestoneRecord(
                 id=plan.id,
                 title=plan.title,
@@ -1362,6 +1406,7 @@ def update_progress(ctx: RunContext) -> Node:
                 if rec is None:
                     rec = FeatureRecord(id=mf.id, description=_feature(spec, mf.id).description)
                     progress.features.append(rec)
+                # skipped is open: deferred to the next milestone, never dropped (I-116)
                 rec.status = "done" if run and run.status == "passed" else "skipped"
                 rec.commit = run.commit_sha if run else None
                 rec.thread = run.thread_id if run else None
@@ -1398,14 +1443,21 @@ def update_progress(ctx: RunContext) -> Node:
             apply=apply,
             probe=lambda: find_commit(sb, marker),
         )
-        remaining = _read_progress(ctx).open_feature_ids()
-        entries = [
+        # PRODUCT.md as it is now, before routing (I-116, I-109): a feature added by hand at
+        # this merge stop gets its record and is planned, rather than the release going out
+        # without it; the sync is committed with the next milestone's bookkeeping.
+        progress = _read_progress(ctx)
+        spec_now, reread = reread_product_md(ctx, spec, progress)
+        remaining = progress.open_feature_ids()
+        entries = [fact(n) for n in reread] + [
             fact(
                 f"progress.json updated for {plan.id} at {sha[:12]}; "
                 f"{len(remaining)} open feature(s) left"
+                + (f": {', '.join(remaining)}" if remaining else "")
             )
         ]
         return {
+            "spec": spec_now,
             "milestones_done": [*state.milestones_done, plan.id],
             "milestone": None,  # recorded in progress.json; the next plan sets a new one
             "pr": None,
@@ -1433,13 +1485,25 @@ def release_check(ctx: RunContext) -> Node:
     """Once no milestone remains: the product-ready bar on ``main`` (every ``integrate``
     check, acceptance included) and the version the product reports about itself. A failing
     check ends the build without a release (ADR 0007: checks override any verdict); a
-    version that is already tagged ends it with nothing to do."""
+    version that is already tagged ends it with nothing to do. A feature of the spec that
+    ``progress.json`` on ``main`` does not record as ``done`` refuses the release (I-116)."""
 
     def node(state: ProductBuildState) -> dict[str, Any]:
         spec = state.spec
         assert spec is not None
         sb, tc = ctx.sandbox, ctx.toolchain
         _git(ctx, "checkout", "-q", "main")
+        # Defence in depth (I-116): a skipped feature stays open, so the loop reaches this
+        # gate only once every feature is done; a stale record must not ship without one.
+        if missing := _not_done(spec, _read_progress(ctx)):
+            return _halt(
+                ctx,
+                "release_failed",
+                "release refused: not every feature in PRODUCT.md is done in progress.json ("
+                + ", ".join(missing)
+                + "); run scio build to finish them, or remove a feature from PRODUCT.md to "
+                "drop it",
+            )
         try:
             product_env(ctx, spec)
         except RuntimeError as exc:

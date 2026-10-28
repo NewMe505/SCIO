@@ -14,6 +14,13 @@ from scio.state import (
     error_signature,
     progress_fingerprint,
 )
+from scio.state.models import (
+    FeatureRun,
+    MilestoneFeatureOutput,
+    MilestonePlan,
+    ProductBuildState,
+    Tier,
+)
 from scio.state.signatures import advance
 
 TB_A = """Traceback (most recent call last):
@@ -100,3 +107,77 @@ def test_state_helpers_and_sweep_field() -> None:
     )  # fmt: skip
     assert out.sweep is not None and out.sweep.pattern == "write_text("
     assert st.github.full_name == "o/r" and Role.DEBUGGER.value == "debugger"
+
+
+def _build_state(milestone: int, runs: list[FeatureRun]) -> ProductBuildState:
+    plan = MilestonePlan(
+        number=milestone,
+        title="t",
+        branch=f"milestone/{milestone}",
+        features=[MilestoneFeatureOutput(id="P1"), MilestoneFeatureOutput(id="P3")],
+    )
+    return ProductBuildState(
+        thread_id="b",
+        product_dir="/p",
+        milestone=plan,
+        feature_runs=runs,
+        budgets=Budget(tokens_max=1, usd_max=1, advisor_calls_max=0),
+    )
+
+
+def _run(
+    fid: str, attempt: int, status: str, milestone: str | None, usd: float = 0.0
+) -> FeatureRun:
+    return FeatureRun(
+        feature_id=fid,
+        thread_id=f"b-{fid.lower()}-a{attempt}",
+        attempt=attempt,
+        tier=Tier.T1,
+        status=status,  # type: ignore[arg-type]
+        milestone=milestone,
+        usd=usd,
+    )
+
+
+def test_a_skip_finishes_a_feature_only_in_the_milestone_it_was_skipped_in() -> None:
+    """I-116: 'skip' defers a feature to the next milestone, and a build thread keeps its runs
+    across milestones. A run skipped in M1 used to finish P1 in M2 as well, so the deferred
+    feature was planned again and passed over; now it runs again with its next attempt."""
+    m1_skip = _run("P1", 1, "skipped", "M1", usd=0.5)
+    m1_pass = _run("P2", 1, "passed", "M1", usd=0.25)
+
+    in_m1 = _build_state(1, [m1_skip, m1_pass])
+    nxt = in_m1.next_feature()
+    assert nxt is not None and nxt.id == "P3"  # skipped in M1, so M1 goes on without P1
+
+    in_m2 = _build_state(2, [m1_skip, m1_pass])
+    nxt = in_m2.next_feature()
+    assert nxt is not None and nxt.id == "P1"  # deferred to M2: it runs again there
+    latest = in_m2.latest_run("P1")
+    assert latest is not None and latest.attempt == 1  # so M2's attempt is a2, a new thread
+    assert in_m2.milestone_runs() == []  # M1's cost and attempts are not M2's
+
+    m2_skip = _run("P1", 2, "skipped", "M2", usd=0.75)
+    again = _build_state(2, [m1_skip, m1_pass, m2_skip])
+    nxt = again.next_feature()
+    assert nxt is not None and nxt.id == "P3"  # skipped in M2 itself: finished for M2
+    assert again.milestone_runs() == [m2_skip]
+
+    done = _build_state(2, [m1_skip, m1_pass, m2_skip, _run("P3", 1, "passed", "M2")])
+    assert done.next_feature() is None
+
+
+def test_runs_recorded_before_the_milestone_field_keep_the_old_rules() -> None:
+    """A checkpoint written before I-116 has runs without a milestone: a skip still finishes
+    the feature, and the milestone's runs are matched by feature id, as before."""
+    legacy = [_run("P1", 1, "skipped", None), _run("P2", 1, "passed", None)]
+    st = _build_state(2, legacy)
+    nxt = st.next_feature()
+    assert nxt is not None and nxt.id == "P3"
+    assert st.milestone_runs() == [legacy[0]]
+    assert (
+        FeatureRun.model_validate(
+            {"feature_id": "P1", "thread_id": "t", "tier": "T1", "status": "passed"}
+        ).milestone
+        is None
+    )

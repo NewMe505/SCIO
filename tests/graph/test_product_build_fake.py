@@ -28,14 +28,17 @@ from scio.harness.types import CompletionRequest
 from scio.product import resume_product, run_product
 from scio.product.build import (
     MILESTONES_DIR,
+    after_release_check,
     build_thread_id,
     integrate,
     integration_checks,
     milestone_gate,
+    release_check,
+    render_milestone_pr_body,
     resume_build,
     run_build,
 )
-from scio.product.progress import PRODUCT_MD, PROGRESS_PATH, ProgressFile
+from scio.product.progress import PRODUCT_MD, PROGRESS_PATH, ProgressFile, parse_product_md
 from scio.settings import Settings
 from scio.state.models import (
     FeatureRun,
@@ -633,8 +636,9 @@ def test_feature_failure_stops_for_one_human_decision(
     tmp_path: Path, mode: str, inner_pause: bool
 ) -> None:
     """A feature that halts (a stall exit, or the task graph's own human interrupt) stops the
-    build once: 'skip' leaves it out, 'retry' starts a new attempt on a new thread, anything
-    else halts the build with feature_failed."""
+    build once: 'skip' defers it (the milestone goes on without it; the next milestone plans
+    it again, I-116), 'retry' starts a new attempt on a new thread, anything else halts the
+    build with feature_failed."""
     harness = _bootstrap(tmp_path, ScriptedResponder(coder_mode=mode))
     ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
     try:
@@ -673,6 +677,136 @@ def test_feature_failure_stops_for_one_human_decision(
         assert any("fix the spec first" in n for n in out.state.human_notes)
     finally:
         ctx.close()
+
+
+def test_a_skipped_feature_is_deferred_to_the_next_milestone_not_dropped(tmp_path: Path) -> None:
+    """I-116 (live): 'skip' recorded the feature ``skipped``, which left the open set, so the
+    loop never planned it again and reached the release without it. Now the skip defers: M1
+    records both skipped features, M2 plans them again first, and the deferred feature runs
+    again on its next attempt's thread: the build thread keeps M1's skipped run, which
+    finishes the feature in M1 only. M2's PR and record count M2's runs, not M1's again."""
+    harness = _bootstrap(tmp_path, ScriptedResponder(coder_mode="idle"))
+    repo = tmp_path / "product"
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P1"
+        question = out.interrupt["question"]
+        assert "'skip' to defer it" in question and "remove it from PRODUCT.md" in question
+        out = resume_build(ctx, "skip")
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P2"
+        out = resume_build(ctx, "skip")
+        # both features skipped: the gate's pass is overridden and the human is asked
+        assert out.paused and out.state.phase == "gate", out.state.ledger[-3:]
+        assert out.state.last_gate and "features not passed: P1, P2" in (
+            out.state.last_gate.reasoning
+        )
+        out = resume_build(ctx, "proceed")
+        assert out.paused and out.state.phase == "merge_wait"
+        assert out.interrupt and out.interrupt["features"] == ["P1: skipped", "P2: skipped"]
+        out = resume_build(ctx, "merge")
+
+        # M1 is recorded with its skipped features, which stay open ...
+        progress = _progress(repo)
+        assert [(m.id, m.features) for m in progress.milestones] == [("M1", ["P1", "P2"])]
+        assert [(f.id, f.status) for f in progress.features] == [
+            ("P1", "skipped"),
+            ("P2", "skipped"),
+            ("P3", "todo"),
+        ]
+        assert progress.open_feature_ids() == ["P1", "P2", "P3"]
+        notes = (repo / "NOTES.md").read_text(encoding="utf-8")
+        assert "M1 Milestone 1 merged by `scio build`: P1 skipped, P2 skipped" in notes
+        # ... so the loop plans M2 rather than the release, with the deferred features first,
+        # and P1 runs again: attempt 2 on a new thread, not M1's skipped run passed over
+        s = out.state
+        assert out.paused and out.interrupt, s.ledger[-3:]
+        assert s.milestones_done == ["M1"] and s.release is None
+        assert s.milestone and s.milestone.id == "M2" and s.milestone.feature_ids() == ["P1", "P2"]
+        assert out.interrupt["feature"] == "P1" and out.interrupt["thread"].endswith("-p1-a2")
+        assert [(r.feature_id, r.attempt, r.status, r.milestone) for r in s.feature_runs] == [
+            ("P1", 1, "skipped", "M1"),
+            ("P2", 1, "skipped", "M1"),
+        ]
+        texts = [e.text for e in s.ledger]
+        assert sum("deferred to the next milestone" in t for t in texts) == 2
+        assert any(t.startswith("M2 Milestone 2: P1@T0, P2@T1") for t in texts)
+        assert any("deferred by a skip, planned again in M2: P1, P2" in t for t in texts)
+
+        # skipped again in M2: M2's PR and record count M2's runs only, not M1's as well
+        out = resume_build(ctx, "skip")
+        assert out.paused and out.interrupt and out.interrupt["thread"].endswith("-p2-a2")
+        out = resume_build(ctx, "skip")
+        assert out.paused and out.state.phase == "gate"
+        out = resume_build(ctx, "proceed")
+        s = out.state
+        assert out.paused and s.phase == "merge_wait" and s.pr and s.pr.body_path
+        m1 = [r for r in s.feature_runs if r.milestone == "M1"]
+        m2 = [r for r in s.feature_runs if r.milestone == "M2"]
+        assert [(r.feature_id, r.attempt) for r in m2] == [("P1", 2), ("P2", 2)]
+        assert s.milestone_runs() == m2 and all(r.usd > 0 for r in m1 + m2)
+        body = (repo / s.pr.body_path).read_text(encoding="utf-8")
+        assert f"Features: ${sum(r.usd for r in m2):.4f} over 2 run(s)" in body
+        out = resume_build(ctx, "merge and stop")
+        assert not out.paused and out.state.phase == "done"
+    finally:
+        ctx.close()
+    progress = _progress(repo)
+    assert [(m.id, m.usd) for m in progress.milestones] == [
+        ("M1", round(sum(r.usd for r in m1), 4)),
+        ("M2", round(sum(r.usd for r in m2), 4)),
+    ]
+    assert [f.status for f in progress.features] == ["skipped", "skipped", "todo"]
+    notes = (repo / "NOTES.md").read_text(encoding="utf-8")
+    assert "M2 Milestone 2 merged by `scio build`: P1 skipped, P2 skipped;" in notes
+
+
+def test_a_milestone_pr_closes_only_the_issues_of_passed_features(tmp_path: Path) -> None:
+    """I-116 sweep: the milestone PR said ``Closes #n`` for a skipped feature too, so with
+    GitHub its merge closed the issue of a feature that was only deferred."""
+    harness = _harness(_settings(tmp_path), ScriptedResponder())
+    ctx = _ctx(tmp_path, harness, "build-closes")
+    try:
+        state = _state_for_gate(ctx, integration_ok=True, statuses=["passed", "skipped"])
+        state = state.model_copy(update={"issues": {"P1": 11, "P2": 12}})
+        assert state.spec is not None
+        body = render_milestone_pr_body(state, state.spec)
+        assert "Closes #11" in body and "Closes #12" not in body
+        assert "Refs #12 (P2 deferred, not closed)" in body
+    finally:
+        ctx.close()
+
+
+def test_the_release_gate_refuses_while_a_feature_is_not_done(tmp_path: Path) -> None:
+    """I-116 defence in depth: with a skip deferring, the loop reaches the release only once
+    every feature is done; a stale ``progress.json`` that still records one as not done stops
+    the release with the features named, before anything is checked or tagged."""
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    progress = _progress(repo)
+    for rec in progress.features:
+        rec.status = "skipped" if rec.id == "P2" else "done"
+    (repo / PROGRESS_PATH).write_text(progress.to_json(), encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "chore: a stale progress record")
+    ctx = _ctx(tmp_path, harness, "build-release-guard")
+    try:
+        spec = parse_product_md((repo / PRODUCT_MD).read_text(encoding="utf-8"))
+        assert [f.id for f in spec.features] == ["P1", "P2", "P3"]
+        state = ProductBuildState(
+            thread_id=ctx.thread_id, product_dir=str(repo), spec=spec, budgets=ctx.budget
+        )
+        patch = release_check(ctx)(state)
+        assert patch.get("exit_reason") == "release_failed", patch.get("phase")
+        assert patch["phase"] == "halted" and "release" not in patch
+        text = patch["ledger"][-1].text
+        assert text.startswith("release refused") and "(P2 skipped)" in text
+        assert "remove a feature from PRODUCT.md" in text
+        assert after_release_check(state.model_copy(update={"exit_reason": "release_failed"})) == (
+            "halt"
+        )
+    finally:
+        ctx.close()
+    assert _git(repo, "tag", "--list") == ""
 
 
 def test_milestone_gate_escalation_asks_the_human(tmp_path: Path) -> None:
@@ -1058,6 +1192,54 @@ def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_p
     assert second in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
     assert sum("[scio:sync:M2:plan_milestone]" in s for s in _subjects(repo, "milestone/2")) == 1
     assert _git(repo, "status", "--porcelain", "--", PRODUCT_MD) == ""  # committed, not dangling
+
+
+def test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_release(
+    tmp_path: Path,
+) -> None:
+    """I-116 with I-109: ``update_progress`` chose the route from ``progress.json`` alone, so
+    a feature added to PRODUCT.md by hand at the last merge stop had no record yet: nothing
+    was open, the build went to the release gate, and the release would ship without it.
+    PRODUCT.md is re-read before the route is chosen now, so the feature gets its record and
+    a milestone of its own."""
+    responder = ScriptedResponder(milestone_size=4)  # one milestone builds P1, P2 and P3
+    harness = _bootstrap(tmp_path, responder)
+    repo = tmp_path / "product"
+    md = repo / PRODUCT_MD
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        assert out.state.milestone and out.state.milestone.feature_ids() == ["P1", "P2", "P3"]
+        bar = "## Quality bar (release gate)\n"
+        text = md.read_text(encoding="utf-8")
+        added = "### P4: Slugify todo titles\n- [ ] `todo slug A` prints a\n\n"
+        md.write_text(text.replace(bar, added + bar, 1), encoding="utf-8", newline="\n")
+        assert [f.id for f in parse_product_md(md.read_text(encoding="utf-8")).features][-1] == "P4"
+        responder.coder_mode = "idle"  # P4 halts at once: this test is about the route
+        out = resume_build(ctx, "merge")
+        s = out.state
+        assert s.milestones_done == ["M1"] and s.release is None, s.ledger[-3:]
+        assert s.milestone and s.milestone.id == "M2" and s.milestone.feature_ids() == ["P4"]
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P4"
+        assert s.spec and [f.id for f in s.spec.features] == ["P1", "P2", "P3", "P4"]
+        texts = [e.text for e in s.ledger]
+        assert any("P4 added from PRODUCT.md" in t for t in texts)
+        assert any("1 open feature(s) left: P4" in t for t in texts)
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.exit_reason == "feature_failed"
+    finally:
+        ctx.close()
+    # the record and the edit are committed with M2's bookkeeping, not left dangling on main
+    recorded = ProgressFile.from_json(_git(repo, "show", f"milestone/2:{PROGRESS_PATH}"))
+    assert [(f.id, f.status) for f in recorded.features] == [
+        ("P1", "done"),
+        ("P2", "done"),
+        ("P3", "done"),
+        ("P4", "todo"),
+    ]
+    assert "### P4: Slugify todo titles" in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
+    assert _git(repo, "tag", "--list") == ""
 
 
 def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(

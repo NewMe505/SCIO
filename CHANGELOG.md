@@ -11,6 +11,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - CLAUDE.md and CONTRIBUTING protocols 4 and 5: Always/Never rules each backed by a guard, and a bottleneck audit after every pass (issue #61).
 
 ### Fixed
+- On the Claude Code worker backend a feature's `python` is the product's environment, with its approved dependencies, not SCIO's own: the worker turn's PATH starts with the product interpreter's directory (I-114).
+- The advisor-cap halt names the cap that fired: the feature's total, or the one call per step (I-115).
+- `skip` at a halted feature defers it to the next milestone instead of dropping it, and the release refuses while a feature in `PRODUCT.md` is not done; removing a feature from `PRODUCT.md` drops it (I-116, the owner's decision).
 - `scio build --gh` no longer fails at its first issue on a repository without the `product-mode` label: the GitHub client creates a missing label before it names it (an existing one is left as it is), and a GitHub refusal stops `scio build` with the error and how to resume instead of a traceback (I-113).
 - A hand edit of `PRODUCT.md` is no longer lost: the milestone's sync commit records it, a fresh feature attempt commits one made while the build waited, SCIO's own checkouts and resets carry it, and the next milestone of the same thread re-reads it (I-109).
 - A quality bar can no longer promise tools the stack's profile does not use: each profile names its fixed tools, the interviewer and the planner see them, and the normaliser replaces a contradicting line with the profile's fact, quoting the original (I-107).

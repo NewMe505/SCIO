@@ -964,3 +964,88 @@ Template:
   - The fake: it now refuses a missing label and a missing milestone, as GitHub does.
 - Guard: with the strict fake, `test_github_mode_survives_squash_merged_milestone_prs` fails on `main` with S4's exact error (`could not add label: 'product-mode' not found`) and passes now. Also `test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone`, `test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback`, and guardrails 18 and 19.
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-114 · On the Claude Code worker backend a feature's `python` is SCIO's own environment, not the product's
+- Found: 2026-10-28 · the graphcalc live run (RUN_LOG S5a), thread `build-graphcalc-m1`, P4 · the coder reported "plain python resolves to SCIO's own venv (SCIO\.venv\Scripts\python.exe), which has pytest but no sympy and no pip"; every other way of invoking the product's interpreter was denied by the allow-rules; 36 tool calls went on it (`tool_cap`), and a stray probe file it made and deleted tripped `plan_drift`
+- Symptom: P4 halted with `advisor_cap` after the escalations; the product's approved dependency (sympy) is in `graphcalc/.scio/sandbox/venv` but unreachable from the worker's own commands
+  - The retry hit the same wall. a1 (03:35 to 04:01, $3.22): 36 tool calls, `advisor cap hit (2/3, step S1a)`, `plan_drift`. a2 (04:19 to 04:32, $1.93): 34 tool calls, `advisor cap hit (1/3, step S1)`, `low_confidence`, "hit a hard environment blocker before writing the diff".
+  - Calling the product venv's `python.exe` by path was denied too: the worker's allow-rule is `Bash(python *)`.
+  - Both attempts failed on the environment, never on the math. In a2 the planner also named a file that does not exist (`graphcalc/evaluator.py`); the advisor replanned, which is the designed path, so it gets no entry of its own.
+- Root cause, confirmed: `claude_runner` starts `claude -p` with `subprocess_env()`, which is SCIO's own environment. Under `uv run` that puts SCIO's `.venv` first on PATH, so the worker turn's Bash `python` was SCIO's interpreter. The product interpreter (`sandbox.python`, set by `ensure_product_env`) was used only where SCIO itself rewrote a literal `python` (`resolve_command`). It went unseen because SCIO depends on pyyaml, the only dependency of the earlier live products; graphcalc's sympy is not in SCIO's environment.
+- Fix:
+  - `with_interpreter_first(env, interpreter)` (`scio/aci/sandbox/local.py`) puts the product interpreter's directory first on PATH. It keeps one PATH key in its own spelling (`Path` on Windows), drops a repeat, and sets `VIRTUAL_ENV` to the environment root. It changes nothing when the stack has no interpreter of its own.
+  - `worker_env` uses it for both of a worker turn's `claude -p` calls (the turn and the summary re-ask), built per turn because `sandbox.python` can be set after the worker exists.
+  - The `Runner` gains an optional `env`.
+  - `BACKEND_NOTE` tells the worker that `python` already runs the product's environment.
+  - The worker part was done by a parallel agent that owned the backend files.
+- Sweep: `grep -rn "subprocess_env()\|subprocess.run(\|Popen(" scio`, run by the agent.
+  - The worker: fixed.
+  - `LocalSandbox.exec` passed SCIO's PATH to every product command, rewriting only a leading `python`. Fixed: it now uses `with_interpreter_first`, so a product command or a child the product spawns that starts `python` by name gets the product's.
+  - The local `start_app` Popen: fixed the same way.
+  - Not affected: the Docker sandbox (product code runs in the container's environment), the GitHub client (`gh`), the tool-less provider calls (`--tools ""`, no cwd), the eval solver (SCIO's interpreter on purpose; its product command already uses `sb.python`), and the scaffold's `sys.executable`.
+  - The graph test's fake runner gained `env`.
+- Guard:
+  - `test_worker_turn_runs_with_the_product_interpreter_first_on_path` and `test_worker_without_a_product_interpreter_runs_with_subprocess_env`.
+  - `test_worker_env_keeps_one_path_variable_in_its_own_spelling`, `test_claude_runner_uses_a_given_env_else_subprocess_env` and `test_worker_system_prompt_says_python_is_the_product_environment`. All five fail on `main`.
+  - `test_every_local_command_runs_with_the_product_interpreter_first_on_path`.
+  - Guardrail 35.
+  - Live: on the next run, the coder's `python -c "import sys; print(sys.executable)"` should point under `.scio/sandbox`. The tests stop at the process boundary.
+- Resolved: 2026-10-28 · Status: resolved
+
+### I-115 · The advisor-cap halt names the feature's total when the per-step cap stopped it
+- Found: 2026-10-28 · the graphcalc live run (RUN_LOG S5b) · halt text `advisor cap hit (2/3, step S1a)`, trigger `plan_drift`; `advisor_allowed` also caps advisor calls at one per step
+- Symptom: "2/3" reads as headroom left, while the cap that stopped the feature was the step's 1/1
+- Root cause: `decide` (`scio/loop/escalation.py`) printed the run's total whichever of `Budget.advisor_allowed`'s two conditions refused: the run's cap, or one advisor call per step.
+- Fix: the halt checks `used >= cap` first and then says `advisor cap hit (3/3 for this run, step S1a)`; the total wins when both caps are spent. Otherwise it says `advisor already consulted on step S1a (one call per step; 2/3 for this run)`. "Run", not "feature": the advisor budget is per run, and product mode gives each feature its own run.
+- Sweep: `grep -rn "advisor cap\|advisor_calls_used\|advisor_calls_max\|advisor_allowed\|advisor_calls_on_step" scio tests docs`.
+  - `review_decision` returns None with no text.
+  - The worker's and the report's `used/max` lines are spend summaries, not cap claims.
+  - `verify.py`'s ledger line and `checkpoint_gate.py`'s interrupt echo the triage reason, so they pick up the fix.
+  - No test, eval or doc asserted the old string.
+  - Done by a parallel agent that owned `escalation.py` and its test file; the old file run on the same state gave the old text.
+- Guard: `test_halt_reason_names_the_per_step_cap_when_the_total_has_headroom` (fails on `main`: `advisor cap hit (2/3, step S1)`), `test_halt_reason_names_the_run_total_when_it_is_spent`, and an exact-text check in `test_cap_per_step_and_per_run_route_to_halt_with_advisor_cap_exit`, plus guardrail 36
+- Resolved: 2026-10-28 · Status: resolved
+
+### I-116 · `skip` at a halted feature drops the feature from the product without a word
+- Found: 2026-10-28 · the graphcalc live run (RUN_LOG S5, note) · `skip` marks the feature skipped, and `open_feature_ids` (`scio/product/progress.py`) never plans it again
+- Symptom (expected): a feature in the approved PRODUCT.md never gets built, and nothing at the release says so
+- Root cause, confirmed: ADR 0011 named `skip` without saying what it means afterwards, and the code made it permanent.
+  - `open_feature_ids` left `skipped` out, so the next milestone never planned the feature.
+  - Behind that was a second gap: `ProductBuildState.next_feature` counted a skipped run as finished across milestones, so even a re-planned feature would have been passed over in the same build thread.
+  - The release never compared PRODUCT.md with progress.
+  - A milestone PR said `Closes #n` for a skipped feature's issue.
+  - `update_progress` routed to the release without re-reading PRODUCT.md, so a feature added at the last merge stop was left out (the I-109 sweep had missed this path).
+- Fix: the owner's decision is that skip defers. ADR 0011 is amended, and the README and ARCHITECTURE say the same.
+  - `open_feature_ids` returns every feature that is not `done`.
+  - `FeatureRun.milestone` is set by the `feature` node. `next_feature` counts a skip as finished only within its own milestone; a run recorded before this change has None and keeps the old rule.
+  - `ProductBuildState.milestone_runs()` scopes the milestone's cost, attempts and NOTES line to that milestone's runs.
+  - The halt question says that skip defers, and that removing the feature from PRODUCT.md drops it.
+  - The skip's ledger line says "deferred".
+  - `plan_milestone` logs which deferred features it plans again.
+  - `release_check` refuses (`release_failed`) while a feature of the spec is not `done`, naming each one.
+  - The PR body closes issues only for passed features (`Refs #n (Pn deferred, not closed)` otherwise).
+  - `update_progress` re-reads PRODUCT.md before it routes.
+  - `scio build` prints the halt's reason.
+  - Done by a parallel agent that owned `progress.py`, `build.py` and `models.py`; its first workaround, which relabelled old skipped runs, was replaced by the milestone field so nothing is counted twice.
+- Known limits, not reachable in any existing thread (graphcalc never answered skip):
+  - A thread that recorded a skip under the old code and is paused at its gate or merge stop would pass the feature over again, because the old run has milestone None.
+  - A re-read at the last stop can leave `progress.json` uncommitted on `main` until the next build's plan commits it, as `load`'s sync does.
+- Sweep: `grep -rn '"skipped"\|skipped\|next_feature\|open_feature_ids\|\.status ==\|\.status !=\|status in (' scio/product scio/cli.py scio/state/models.py evals scio/graph` and `grep -rn "FeatureRun(\|feature_runs\|latest_run\|next_feature" scio evals tests`.
+  - Fixed: every reader that treated `skipped` as finished, the PR body's `Closes`, and the per-milestone cost readers.
+  - Correct as they are: `latest_run` for the attempt number (it counts across milestones on purpose, so a deferred feature gets attempt 2 on a new thread), the whole-thread sums (`total_usd`, the report, the eval solver), and the display-only readers.
+  - The eval solver answers `stop`, never `skip`.
+- Guard:
+  - `test_a_skipped_feature_is_deferred_to_the_next_milestone_not_dropped`, end to end through the Fake. M2 plans P1 and P2 again, P1 runs on `-p1-a2`, and each milestone's cost is its own.
+  - `test_a_skip_finishes_a_feature_only_in_the_milestone_it_was_skipped_in` and `test_a_skipped_feature_stays_open_and_is_planned_first_again`.
+  - `test_the_release_gate_refuses_while_a_feature_is_not_done` and `test_a_milestone_pr_closes_only_the_issues_of_passed_features`.
+  - `test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_release`.
+  - All fail on `main`. Plus guardrail 37.
+- Resolved: 2026-10-28 · Status: resolved
+
+### I-117 · A parallel agent made one edit through a shell-embedded script with `\n` escapes (I-112's rule again)
+- Found: 2026-10-28 · issue #69, the I-116 agent's own report · one edit (removing its first test and its imports) went through a shell-embedded Python script holding `\n` escapes, which CLAUDE.md forbids; the brief repeated the rule
+- Symptom: none. The agent checked the file afterwards (LF only, content correct), and the full check passes
+- Root cause: the rule is `manual` (guardrail 17), and a subagent briefed with it still reached for the shell when one edit spanned several places
+- Fix: the file was verified, nothing to undo
+- Sweep: the other two agents' reports name no shell-script edits; the orchestrator's script edits this session asserted their anchors. Guard: guardrail 17 now cites I-117, and the brief template for parallel agents names the rule in its first lines. The working tree's line-ending check (`file ... | grep CRLF`, run at the gate) printed nothing
+- Resolved: 2026-10-28 · Status: resolved

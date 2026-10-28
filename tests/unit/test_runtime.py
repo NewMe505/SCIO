@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import socket
 import sys
@@ -347,3 +348,26 @@ def test_normalise_package_handles_npm_specs() -> None:
     assert normalise_package("@types/node@22") == "@types/node"
     assert normalise_package("@Scope/Pkg") == "@scope/pkg"
     assert normalise_package("left-pad") == "left-pad"
+
+
+def test_every_local_command_runs_with_the_product_interpreter_first_on_path(
+    tmp_path: Path,
+) -> None:
+    """I-114: SCIO runs under `uv run`, so its own interpreter leads the inherited PATH; only a
+    literal `python` was rewritten, so a product command (or a child the product spawns)
+    that starts `python` by name got SCIO's. Every local command now gets the product's
+    interpreter directory first and VIRTUAL_ENV at its environment root."""
+    sb = LocalSandbox(tmp_path)
+    venv = tmp_path / ".scio" / "sandbox" / "venv"
+    sb.python = str(venv / "Scripts" / "python.exe")  # need not exist: only its directory is used
+    probe = (
+        "import os; print(os.environ['PATH'].split(os.pathsep)[0]); "
+        "print(os.environ.get('VIRTUAL_ENV', '-'))"
+    )
+    r = sb.exec([sys.executable, "-c", probe])  # not the word `python`: no rewrite
+    first, root = r.stdout.strip().splitlines()
+    assert r.ok and Path(first) == venv / "Scripts" and Path(root) == venv, r.output
+    plain = LocalSandbox(tmp_path / "plain")
+    r = plain.exec([sys.executable, "-c", probe])
+    host_root = os.environ.get("VIRTUAL_ENV", "-")
+    assert r.ok and r.stdout.strip().splitlines()[1] == host_root  # no product interpreter

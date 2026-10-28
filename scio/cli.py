@@ -99,6 +99,9 @@ def _print_build(outcome: Any) -> None:
     from scio.product.build import total_usd
 
     print(f"usd {total_usd(s):.4f} (orchestrator {s.budgets.usd_used:.4f})")
+    if s.exit_reason is not None and s.ledger:
+        # a halt says why here, not only in `scio report`'s timeline (I-116's release refusal)
+        print(f"reason: {s.ledger[-1].text}")
     if s.release is not None:  # the release gate (M11)
         shipped = s.release.url or ", ".join(s.release.artifacts) or "not tagged"
         print(f"release {s.release.tag} {'green' if s.release.ok else 'FAILED'}: {shipped}")

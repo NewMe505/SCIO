@@ -9,6 +9,7 @@ $? > app.exit'``: the pid file holds the app's own pid, so ``stop`` frees its po
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import time
@@ -18,7 +19,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.sandbox.local import INTERPRETER_WORD, LocalSandbox, resolve_command
+from scio.aci.sandbox.local import (
+    INTERPRETER_WORD,
+    LocalSandbox,
+    resolve_command,
+    with_interpreter_first,
+)
 from scio.toolchain import Toolchain, python_toolchain
 
 HEALTH_TIMEOUT_S = 30
@@ -107,6 +113,7 @@ def start_app(
         proc = subprocess.Popen(
             argv,
             cwd=sb.root,
+            env=with_interpreter_first(os.environ, sb.python),  # the app's children too (I-114)
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

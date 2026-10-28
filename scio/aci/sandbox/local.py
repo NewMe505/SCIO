@@ -33,6 +33,26 @@ def _text(data: str | bytes | None) -> str:
     return data.decode("utf-8", "replace") if isinstance(data, bytes) else data
 
 
+def with_interpreter_first(env: Mapping[str, str], interpreter: str | None) -> dict[str, str]:
+    """``env`` with the product interpreter's directory first on PATH and ``VIRTUAL_ENV`` at
+    its environment root (I-114): SCIO runs under ``uv run``, so its own interpreter leads
+    the inherited PATH, and a product command that starts ``python`` (or a console script of
+    the product's environment) by name would get SCIO's. SCIO's directories stay after it for
+    the profile's other tools. Unchanged when there is no interpreter of the product's own."""
+    out = dict(env)
+    if not interpreter:
+        return out
+    bin_dir = Path(interpreter).parent
+    # Windows spells the key ``Path`` and matches names case-insensitively: one entry stays.
+    keys = [k for k in out if k.upper() == "PATH"]
+    entries = [e for k in keys for e in out.pop(k).split(os.pathsep) if e]
+    first = os.path.normcase(os.path.normpath(str(bin_dir)))
+    rest = [e for e in entries if os.path.normcase(os.path.normpath(e)) != first]
+    out[keys[0] if keys else "PATH"] = os.pathsep.join([str(bin_dir), *rest])
+    out["VIRTUAL_ENV"] = str(bin_dir.parent)
+    return out
+
+
 def resolve_command(argv: Sequence[str], interpreter: str | None) -> list[str]:
     """What the host actually spawns for a profile command.
 
@@ -92,7 +112,10 @@ class LocalSandbox:
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
         argv = resolve_command(argv, self.python)
-        run_env = {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})}
+        run_env = with_interpreter_first(
+            {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})},
+            self.python,  # the product's interpreter for every command, not only `python` (I-114)
+        )
         allow_network = self.limits.network if network is None else network
         if not allow_network:
             run_env.setdefault("PIP_NO_INDEX", "1")
