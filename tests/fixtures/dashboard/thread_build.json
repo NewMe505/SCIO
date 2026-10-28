@@ -258,6 +258,7 @@
     "P1": 0.023,
     "P2": 0.0445
   },
+  "running_usd": 0.0,
   "integration": [
     "[lint] clean",
     "[tests] passed",

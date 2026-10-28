@@ -121,7 +121,9 @@ class FeatureLink(BaseModel):
     attempt: int
     thread_id: str
     status: str
-    """The run's ``FeatureRun.status``: running, passed, failed or skipped."""
+    """The run's ``FeatureRun.status``: running, passed, failed or skipped; ``running`` also
+    for a feature thread of this build that has no ``FeatureRun`` yet (the attempt in
+    progress: SCIO records a run only when its attempt ends)."""
     present: bool
     """The feature thread has a checkpoint in the same root (the page links it only then)."""
 
@@ -148,7 +150,7 @@ class ThreadDetail(BaseModel):
     """The thread's own ledger (``ledger`` or ``task_ledger``), oldest first."""
     cost_by_role: dict[str, float] = Field(default_factory=dict)
     """Role -> usd from the cost ledgers, largest first: a build sums its own ledger and every
-    feature thread's; other threads their own ledger."""
+    feature thread's, the attempt in progress included; other threads their own ledger."""
     progress: ProgressFile | None = None
     """The product's ``.scio/product/progress.json`` (a build's ``product_dir``, a bootstrap's
     ``target_dir``); ``None`` for a task, or when the file is absent or unreadable."""
@@ -157,9 +159,17 @@ class ThreadDetail(BaseModel):
     milestone_features: list[str] = Field(default_factory=list)
     """The current milestone's planned feature ids, in order: rows not yet run included."""
     feature_threads: list[FeatureLink] = Field(default_factory=list)
-    """One per ``FeatureRun``, oldest first."""
+    """One per ``FeatureRun``, oldest first; then one per feature thread of this build in the
+    same root that has no ``FeatureRun`` yet (status ``running``, the feature id and attempt
+    from its id ``<build>-p4-a1``, which ``scio build`` derives the same way). SCIO appends a
+    run only when the attempt ends, so without these the feature running now would read
+    "not run"."""
     cost_by_feature: dict[str, float] = Field(default_factory=dict)
-    """Feature id -> usd over every attempt."""
+    """Feature id -> usd over every attempt, the attempt in progress included (its
+    checkpoint's ``budgets.usd_used`` so far)."""
+    running_usd: float = 0.0
+    """The spend of the attempts in progress: in ``cost_by_feature`` and ``cost_by_role``, not
+    in ``summary.usd`` (the figure ``scio report`` prints, which counts finished runs)."""
     integration: list[str] = Field(default_factory=list)
     """The integration checks' output lines; empty before they ran."""
     integration_ok: bool | None = None

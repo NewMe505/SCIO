@@ -169,6 +169,7 @@
   "milestone_features": [],
   "feature_threads": [],
   "cost_by_feature": {},
+  "running_usd": 0.0,
   "integration": [],
   "integration_ok": null,
   "pr_number": null,
