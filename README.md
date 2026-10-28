@@ -114,6 +114,8 @@ UV_SYSTEM_CERTS=1 uv sync --all-extras    # a bare `--extra dashboard` would rem
 uv run python -m scio dashboard --root . --root ../graphcalc-run   # one --root per workspace
 ```
 
+![The build view of the live graphcalc run: the milestone graph with the current step lit, P4's second attempt running, cost by role and by feature](docs/images/dashboard-build.png)
+
 Running on a Claude subscription instead of the API (ADR 0012): with `SCIO_PROVIDER_OVERRIDE=claude_code`
 every tool-less role (router, planners, advisor, gates, reviewer) runs as one `claude -p` call, and with
 `SCIO_WORKER_BACKEND=claude_code` every tool-using turn (coder, debugger, documenter, explorer) is one
