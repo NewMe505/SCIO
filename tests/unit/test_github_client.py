@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from urllib.parse import unquote
 
 import pytest
 
@@ -20,6 +21,7 @@ class FakeGh:
         self.issues: dict[int, dict[str, object]] = {}  # number -> issue
         self.merged: set[int] = set()
         self.releases: dict[str, dict[str, object]] = {}  # tag -> release
+        self.labels: set[str] = set()  # a new repository has none of SCIO's (I-113)
         self.fail_next_release = False
         """Make the next ``release create`` fail once (a crash between tag and Release)."""
         self.next_id = 100
@@ -48,6 +50,14 @@ class FakeGh:
             rows = [i for i in self.issues.values() if needle in str(i["title"])]
             return RunResult(0, json.dumps(rows), "")
         if a[:2] == ["issue", "create"]:
+            # as GitHub does: a label the repository lacks fails the whole create (I-113)
+            missing = [a[i + 1] for i, x in enumerate(a) if x == "--label"]
+            missing = [lb for lb in missing if lb not in self.labels]
+            if missing:
+                return RunResult(1, "", f"could not add label: '{missing[0]}' not found")
+            if "--milestone" in a and a[a.index("--milestone") + 1] not in self.milestones:
+                ms = a[a.index("--milestone") + 1]
+                return RunResult(1, "", f"could not add to milestone '{ms}': not found")
             n = self.next_id
             self.next_id += 1
             self.issues[n] = {
@@ -77,6 +87,17 @@ class FakeGh:
             return RunResult(0, url + "\n", "")
         if a[0] == "api":
             path = next(x for x in a[1:] if x.startswith("repos/"))
+            if path.endswith("/labels") and "-X" in a and a[a.index("-X") + 1] == "POST":
+                name = json.loads(stdin or "{}")["name"]
+                self.labels.add(name)
+                return RunResult(0, json.dumps({"name": name}), "")
+            if "/labels/" in path:
+                name = unquote(path.rsplit("/labels/", 1)[1])
+                return (
+                    RunResult(0, json.dumps({"name": name}), "")
+                    if name in self.labels
+                    else RunResult(1, "", "HTTP 404: Not Found")
+                )
             if "/milestones" in path:
                 if "-X" in a and a[a.index("-X") + 1] == "POST":
                     title = json.loads(stdin or "{}")["title"]
@@ -254,9 +275,32 @@ def test_ensure_milestone_and_issue_are_idempotent_by_title(
     assert ops == [
         ("ensure_milestone", False),
         ("ensure_milestone", True),
+        ("ensure_label", False),  # the repository had no product-mode label (I-113)
         ("ensure_issue", False),
         ("ensure_issue", True),
     ]
+    assert fake.labels == {"product-mode"}
+
+
+def test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-113: `gh issue create --label` fails on a label the repository lacks; graphcalc's
+    first `scio build --gh` crashed at its first issue. The client creates a missing label
+    (once) and never touches one the owner already has."""
+    client, fake = gh
+    fake.labels.add("bug")
+    client.ensure_issue(title="P1: a", body="b", milestone=None, labels=("product-mode", "bug"))
+    client.ensure_issue(title="P2: c", body="d", milestone=None, labels=("product-mode",))
+    posts = [a for a, _ in fake.calls if a[:3] == ["api", "-X", "POST"] and "labels" in a[3]]
+    assert len(posts) == 1 and fake.labels == {"bug", "product-mode"}
+    assert [(w.op, w.target, w.noop) for w in client.writes if w.op == "ensure_label"] == [
+        ("ensure_label", "product-mode", False),
+        ("ensure_label", "bug", True),
+        ("ensure_label", "product-mode", True),
+    ]
+    raw = fake(["issue", "create", "-R", "o/r", "--title", "x", "--label", "nope"])
+    assert raw.code == 1 and "could not add label: 'nope' not found" in raw.stderr
 
 
 def test_pr_merged_reads_the_merge_state(gh: tuple[GitHubClient, FakeGh]) -> None:

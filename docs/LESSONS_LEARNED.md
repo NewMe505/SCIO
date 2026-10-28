@@ -23,6 +23,8 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 15. **Always** record a thread's spend across processes: a resume carries the checkpoint's spend into the new process, and the guard still caps each process (I-110). Guard: `symbol:carry_spend`, `test:test_a_thread_records_the_spend_of_every_invocation`
 16. **Always** match a Python definition by name with its generic form too (`def name[T](`), not only `def name(` (I-111). Guard: `test:test_guard_exists_looks_in_the_repository`
 17. **Always** make an edit whose text contains a backslash with the Edit or Write tool, never through a shell-embedded script; a script edit asserts its anchor count before it writes (I-071, I-072, I-112). Guard: `manual:` a hook cannot tell a mangled backslash from an intended `\n` escape; the anchor assert turns a miss into a loud failure, never a silent wrong edit
+18. **Never** let a test fake accept what the real service refuses; a fake GitHub refuses a missing label or milestone, and SCIO creates a resource before it names it (I-113). Guard: `symbol:ensure_label`, `test:test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone`
+19. **Never** end a CLI command with a traceback when an external service refuses a step; say what failed and how to resume from the checkpoint (I-100, I-113). Guard: `test:test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 

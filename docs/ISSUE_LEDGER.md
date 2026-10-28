@@ -949,3 +949,18 @@ Template:
 - Fix: the edit was made with the Edit tool
 - Sweep: the edits of this session made through `python - <<` scripts (CHANGELOG, README, PR bodies, tests): every one asserted its anchor count before writing, so a miss fails loudly; this was the only one whose anchor needed a backslash. Guard: guardrail 17, `manual` with its reason (a hook cannot tell a mangled backslash from an intended `\n` escape, which those scripts use correctly), and the anchor-count assert as the convention that turns a miss into a failure
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-113 · `scio build --gh` crashes at its first issue: label `product-mode` not found
+- Found: 2026-10-27 · the graphcalc live run (RUN_LOG S4), thread `build-graphcalc-m1` on `1f92733`, 47 s in, before any feature · `GitHubError: gh issue create -R... failed (1): could not add label: 'product-mode' not found` (`build.py` `issues` node, `run_effect`, `GitHubClient.ensure_issue`, `_gh`)
+- Symptom: the build ends with a traceback at the `issues` node; GitHub milestone #1 exists with 0 issues; the product is on local `milestone/1` at `c7b5699` (the hand edit of PRODUCT.md committed there, so I-109's fix holds)
+- Root cause, confirmed: `build.py`'s `issues` node passes `labels=("product-mode",)` to `GitHubClient.ensure_issue`, which adds `--label product-mode` to `gh issue create`. GitHub refuses a label the repository lacks, and nothing (`scio new`'s publish, the client, the build) ever created it; a new repository has only GitHub's defaults. The tests' `FakeGh` accepted any label and any milestone, so no test met GitHub's refusal. Every live product run before graphcalc was offline (the M11 evals) or used an older repository. Present since M8 (`233c8e8`).
+- Fix:
+  - `GitHubClient.ensure_label`: GET `repos/<r>/labels/<name>`, POST it only when it is missing, so an existing label keeps its colour and description.
+  - `ensure_issue` ensures each of its labels before it creates the issue, which covers every caller.
+  - `scio build` catches `GitHubError` from any orchestrator node and stops with the error, the thread and "run the same scio build command again to resume", instead of a traceback. The checkpoint holds every finished node, and the failed one re-runs.
+  - For graphcalc: after the pinned SCIO moves to the fix, the same `scio build` command resumes `build-graphcalc-m1` at `issues`. The milestone effect is found by its probe, and the label is created with the first issue.
+- Sweep:
+  - Every gh write that names a repository resource (`grep -rn 'labels=\|"--label"\|"--milestone"\|"--assignee"\|"--reviewer"' scio`): `--label` in `ensure_issue` (fixed, its only caller is the issues node) and `--milestone` in `ensure_issue` (the issues node ensures the milestone first, as an effect). No reviewers or assignees.
+  - The fake: it now refuses a missing label and a missing milestone, as GitHub does.
+- Guard: with the strict fake, `test_github_mode_survives_squash_merged_milestone_prs` fails on `main` with S4's exact error (`could not add label: 'product-mode' not found`) and passes now. Also `test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone`, `test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback`, and guardrails 18 and 19.
+- Resolved: 2026-10-27 · Status: resolved

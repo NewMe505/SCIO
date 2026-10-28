@@ -11,6 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - CLAUDE.md and CONTRIBUTING protocols 4 and 5: Always/Never rules each backed by a guard, and a bottleneck audit after every pass (issue #61).
 
 ### Fixed
+- `scio build --gh` no longer fails at its first issue on a repository without the `product-mode` label: the GitHub client creates a missing label before it names it (an existing one is left as it is), and a GitHub refusal stops `scio build` with the error and how to resume instead of a traceback (I-113).
 - A hand edit of `PRODUCT.md` is no longer lost: the milestone's sync commit records it, a fresh feature attempt commits one made while the build waited, SCIO's own checkouts and resets carry it, and the next milestone of the same thread re-reads it (I-109).
 - A quality bar can no longer promise tools the stack's profile does not use: each profile names its fixed tools, the interviewer and the planner see them, and the normaliser replaces a contradicting line with the profile's fact, quoting the original (I-107).
 - A thread's recorded spend spans every CLI invocation: a resume carries the checkpoint's spend into the new process, so `scio new` and resumed `scio build` threads no longer report only their latest step (I-110).
