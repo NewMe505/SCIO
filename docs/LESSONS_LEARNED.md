@@ -28,6 +28,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 35. **Always** run a product's commands, and a worker turn, with the product's interpreter first on PATH, never with SCIO's inherited environment (I-114). Guard: `symbol:with_interpreter_first`, `test:test_worker_turn_runs_with_the_product_interpreter_first_on_path`, `test:test_every_local_command_runs_with_the_product_interpreter_first_on_path`
 36. **Always** name the cap that stopped a run (the run's total or one advisor call per step), never a counter that hides it (I-115). Guard: `test:test_halt_reason_names_the_per_step_cap_when_the_total_has_headroom`
 37. **Never** let a human decision silently drop a feature from the product: `skip` defers it, a skip finishes a feature only in its own milestone, and the release refuses while any feature in PRODUCT.md is not done (I-116). Guard: `test:test_a_skipped_feature_is_deferred_to_the_next_milestone_not_dropped`, `test:test_the_release_gate_refuses_while_a_feature_is_not_done`, `test:test_a_skip_finishes_a_feature_only_in_the_milestone_it_was_skipped_in`
+38. **Always** grep for a callable's fakes and monkeypatches before changing how it is called, and run the tests that patch it, not only the tests of the changed files (I-118). Guard: `test:test_resolve_command_rewrites_the_interpreter_and_finds_cmd_shims_on_windows`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 

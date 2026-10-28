@@ -1052,3 +1052,11 @@ Template:
 - Fix: the file was verified, nothing to undo
 - Sweep: the other two agents' reports name no shell-script edits; the orchestrator's script edits this session asserted their anchors. Guard: guardrail 17 now cites I-117, and the brief template for parallel agents names the rule in its first lines. The working tree's line-ending check (`file ... | grep CRLF`, run at the gate) printed nothing
 - Resolved: 2026-10-28 · Status: resolved
+
+### I-118 · Changing how `shutil.which` is called broke a test that replaced it with a one-argument fake
+- Found: 2026-10-28 · issue #69, the full check on `771a42e` · `TypeError: test_resolve_command_rewrites_the_interpreter_and_finds_cmd_shims_on_windows.<locals>.<lambda>() got an unexpected keyword argument 'path'` (`tests/unit/test_sandbox.py:252`); 1 failed, 400 passed
+- Symptom: the pre-push check failed; nothing was pushed
+- Root cause: the review fix for I-114 made `resolve_command` call `shutil.which(head, path=...)`, and I ran the tests of the files I had changed but not the test that monkeypatches `shutil.which` for `resolve_command`
+- Fix: the fake accepts `path`
+- Sweep: every fake of `shutil.which` in the tests (`grep -rn "shutil.which\|\"which\"" tests`): `test_sandbox.py:252` (fixed) and `test_aci_tools.py:111`, which patches `repo_search`'s own call (unchanged signature). Guard: the test itself, now with `path`, plus guardrail 38: before changing how a callable is called, grep for its fakes and monkeypatches
+- Resolved: 2026-10-28 · Status: resolved
