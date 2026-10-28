@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.types import Send
 from pydantic import BaseModel, ValidationError
 
 from scio.dashboard.contract import (
@@ -267,9 +268,8 @@ def _next_nodes(channels: dict[str, Any]) -> list[str]:
     nodes = {k.removeprefix(BRANCH_TO) for k in channels if k.startswith(BRANCH_TO)}
     packets = channels.get(TASKS)
     for packet in packets if isinstance(packets, list | tuple) else []:
-        node = getattr(packet, "node", None)
-        if isinstance(node, str):
-            nodes.add(node)
+        if isinstance(packet, Send) and isinstance(packet.node, str):
+            nodes.add(packet.node)
     return sorted(nodes)
 
 

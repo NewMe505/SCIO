@@ -1132,3 +1132,12 @@ Template:
 - Sweep: every place the server trusts a request header (`grep -n "headers" scio/dashboard/app.py`): the Origin check (fixed) and the Host check (`TrustedHostMiddleware`, already exact)
 - Guard: `test_ws_refuses_a_foreign_origin`, `test_any_other_origin_is_foreign`, `test_no_site_can_frame_the_page_or_the_api`; guardrail 33
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-139 · The Send fix spelled `"node"` as a string literal, which the toolchain boundary forbids
+- Found: 2026-10-27 · issue #68, the full CI-equivalent before the push · `test_no_stack_specific_command_outside_the_toolchain_package` failed: `scio\dashboard\data.py:270: node = getattr(packet, "node", None)`
+- Symptom: one failure in the full suite (481 passed); the dashboard test set at the wave gate had passed
+- Root cause: two parts. The code read LangGraph's `Send.node` with `getattr(..., "node")`, and `"node"` is the Node.js command word the M6 scan keeps inside `scio/toolchain/`. And my wave gates ran only the dashboard tests, so a repository-wide scan first ran at the full check, the same lesson as I-132.
+- Fix: plain attribute access on `langgraph.types.Send`, no string literal; the scan is unchanged
+- Sweep: the boundary scan covers all of `scio/`, and passes after the fix; the other repository-wide scans (`test_lf_writes.py`, `test_every_node_interrupts_at_most_once`, `test_budget_guards.py`, `check_docs.py`) passed in the same full run
+- Guard: `test_no_stack_specific_command_outside_the_toolchain_package` (it caught this); guardrail 34. The retrospective's bottleneck audit makes the full parallel suite the wave gate.
+- Resolved: 2026-10-27 · Status: resolved

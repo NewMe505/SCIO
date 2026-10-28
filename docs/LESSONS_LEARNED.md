@@ -39,6 +39,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 31. **Always** read a checkpoint's next nodes from its `Send` packets (`__pregel_tasks`) as well as its `branch:to:` channels (I-136). Guard: `test:test_next_nodes_include_pending_send_packets`
 32. **Always** show a running node's spend from its cost ledger, not its checkpoint: a checkpoint is written only when the node returns (I-137). Guard: `test:test_a_feature_attempt_in_progress_is_linked_and_counted`
 33. **Always** accept a WebSocket only from the server's own origin (the Origin's host and port equal the request's Host), and deny framing on every response (I-138). Guard: `test:test_ws_refuses_a_foreign_origin`, `test:test_no_site_can_frame_the_page_or_the_api`
+34. **Never** write a stack's command word (`node`, `npm`, `pytest` ...) as a string literal outside `scio/toolchain/`, even when it names something else; use attribute access (I-139). Guard: `test:test_no_stack_specific_command_outside_the_toolchain_package`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
@@ -661,10 +662,10 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - Tests: `test_dashboard_contract.py`, `test_dashboard_data.py`, `test_dashboard_app.py`, `test_dashboard_cli.py`, `tests/live/test_dashboard_page.py`, `tests/live/test_dashboard_server.py`, `test_lf_writes.py`, the torn-line test in `test_m5_observability.py`, `test_report_reads_a_build_that_stopped_before_its_first_feature`.
 - `CostLedger.load_entries` reads complete lines only; `_read_artifact` replaces a broken character (I-127).
 - The review's fixes: the answered-stop rule and `test_every_node_interrupts_at_most_once`, `Send` packets in `next_nodes`, the running spend from the ledger, `FailureStreaks` and the 503 for an unreadable root, `is_same_origin`, `FrameDenyMiddleware`.
-- ADR 0017, `docs/OBSERVABILITY.md`, README, CHANGELOG, PRODUCT_MODE, ARCHITECTURE's tree; ledger I-120 to I-138; guardrails 20 to 33.
+- ADR 0017, `docs/OBSERVABILITY.md`, README, CHANGELOG, PRODUCT_MODE, ARCHITECTURE's tree; ledger I-120 to I-139; guardrails 20 to 34.
 
 ### Bottleneck audit
 - Slowest steps: the page agent (35 minutes, most of it Playwright waits and screenshots), diagnosing I-132 (about 15 minutes: three full runs and an instrumented one), and agent D's second round, which waited on the other agents' facts.
 - Ran one after another but could have run in parallel: the live check waited for the running-feature fix; the snapshot-based check could have started as soon as the API and page were committed. The docs agent's second round could have been briefed with placeholders in its first.
 - Repeated friction: lint findings on first drafts in every agent (E501, SIM105, SIM117, RUF100), all fixed before a commit; Windows-only behaviour once more (CRLF, the proactor's reset connection).
-- Improvements: (1) the `_Server` helper in `tests/live/test_dashboard_server.py` runs uvicorn exactly as the CLI does, so a future server test starts from it; (2) run the full parallel test set at each gate, not only the new files: I-132 showed only under load.
+- Improvements: (1) the `_Server` helper in `tests/live/test_dashboard_server.py` runs uvicorn exactly as the CLI does, so a future server test starts from it; (2) run the full parallel test set at each gate, not only the new files: I-132 showed only under load, and I-139 only in a repository-wide scan.
