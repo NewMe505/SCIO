@@ -1058,3 +1058,34 @@ def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_p
     assert second in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
     assert sum("[scio:sync:M2:plan_milestone]" in s for s in _subjects(repo, "milestone/2")) == 1
     assert _git(repo, "status", "--porcelain", "--", PRODUCT_MD) == ""  # committed, not dangling
+
+
+def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I-113: graphcalc's first `scio build --gh` ended in a traceback at its first issue.
+    A GitHub refusal in an orchestrator node now stops the command with the error and how to
+    resume; the checkpoint already holds every finished node."""
+    import scio.product.build as build_module
+    from scio.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
+    monkeypatch.setenv("SCIO_FAKE_SCRIPT", "1")
+    monkeypatch.setenv("SCIO_CHECKPOINT_DSN", f"sqlite:///{(tmp_path / 'ckpt.sqlite').as_posix()}")
+    target = str(tmp_path / "product")
+    assert main(["new", "--prompt", PROMPT, "--dir", target, "--thread", "new-gh"]) == 0
+    assert main(["new", "--thread", "new-gh", "--dir", target, "--decision", "answers"]) == 0
+    assert main(["new", "--thread", "new-gh", "--dir", target, "--decision", "approve"]) == 0
+    capsys.readouterr()
+
+    def refused(*args: Any, **kwargs: Any) -> Any:
+        raise GitHubError(
+            "gh issue create -R... failed (1): could not add label: 'product-mode' not found"
+        )
+
+    monkeypatch.setattr(build_module, "run_build", refused)
+    assert main(["build", "--product", target, "--gh", "o/r"]) == 1
+    err = capsys.readouterr().err
+    assert "scio build stopped on GitHub" in err and "product-mode" in err
+    assert "run the same scio build command again to resume" in err and "Traceback" not in err

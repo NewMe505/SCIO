@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from urllib.parse import quote
 
 log = logging.getLogger(__name__)
 
@@ -225,15 +226,36 @@ class GitHubClient:
         self._record("ensure_milestone", title, noop=False, detail=f"#{d['number']}")
         return int(d["number"])
 
+    def ensure_label(
+        self, name: str, *, color: str = "5319e7", description: str = "created by SCIO"
+    ) -> bool:
+        """Create the label unless the repository has it (I-113: `gh issue create --label`
+        fails on a label that does not exist, and a fresh repository has only GitHub's
+        defaults). An existing label keeps its colour and description. True if created."""
+        r = self._run(("api", f"repos/{self.repo}/labels/{quote(name, safe='')}"), stdin=None)
+        if r.code == 0:
+            self._record("ensure_label", name, noop=True)
+            return False
+        payload = {"name": name, "color": color, "description": description}
+        self._gh(
+            "api", "-X", "POST", f"repos/{self.repo}/labels", "--input", "-",
+            stdin=json.dumps(payload),
+        )  # fmt: skip
+        self._record("ensure_label", name, noop=False)
+        return True
+
     def ensure_issue(
         self, *, title: str, body: str, milestone: str | None, labels: Sequence[str] = ()
     ) -> IssueInfo:
         """Create the issue unless one with exactly this title exists (the title carries the
-        feature id, so a resumed build finds its own issue)."""
+        feature id, so a resumed build finds its own issue). Its labels are created first when
+        the repository lacks them (I-113)."""
         existing = self.find_issue(title)
         if existing is not None:
             self._record("ensure_issue", title, noop=True, detail=f"#{existing.number}")
             return existing
+        for lb in labels:
+            self.ensure_label(lb)
         argv = ["issue", "create", "-R", self.repo, "--title", title, "--body-file", "-"]
         if milestone:
             argv += ["--milestone", milestone]

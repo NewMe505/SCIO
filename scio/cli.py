@@ -115,7 +115,7 @@ def _build(args: argparse.Namespace) -> int:
     (ADR 0011). The thread is ``build-<product>-m<next milestone>`` unless ``--thread`` names
     another; a paused thread is resumed, an ended one (done, halted, or ``merge and stop``)
     is left alone and a fresh thread starts (``-r2``, ``-r3`` ... after a halt)."""
-    from scio.harness.github.client import GitHubClient
+    from scio.harness.github.client import GitHubClient, GitHubError
     from scio.product.build import (
         build_finished,
         build_started,
@@ -169,6 +169,16 @@ def _build(args: argparse.Namespace) -> int:
             outcome = resume_build(ctx, args.decision)
         else:
             outcome = run_build(ctx, gh_repo=gh_repo)
+    except GitHubError as exc:
+        # A GitHub refusal in an orchestrator node (a missing label, I-113; a rate limit) is
+        # not a traceback: the checkpoint holds every finished node, and the same command
+        # resumes at the one that failed.
+        print(
+            f"scio build stopped on GitHub: {exc}\nEvery finished step is checkpointed (thread "
+            f"{thread}); fix the cause and run the same scio build command again to resume.",
+            file=sys.stderr,
+        )
+        return 1
     finally:
         ctx.close()
     _print_build(outcome)
