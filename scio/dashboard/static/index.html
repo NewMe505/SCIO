@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-refresh="idle">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <!-- Thread text is model output: scripts only from here and the pinned CDN file, no inline
+       script or handlers. Mermaid's SVG carries its own <style>, hence 'unsafe-inline' styles. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>SCIO dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">SCIO</a>
+    <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+    <span class="conn" id="conn" data-state="connecting" role="status" aria-live="polite" title="Live updates: connecting">
+      <span class="dot" aria-hidden="true"></span><span class="conn-label">connecting</span>
+    </span>
+  </header>
+  <div class="notice" id="notice" role="alert" hidden></div>
+  <main id="app">
+    <p class="muted">Loading the threads...</p>
+  </main>
+  <noscript><p class="page-note">The dashboard needs JavaScript to read the API.</p></noscript>
+  <!-- app.js runs first and listens for the Mermaid tag's load or error; Mermaid loads async,
+       so a slow or dead CDN never holds the page up (the diagrams fall back to text). -->
+  <script src="/static/app.js"></script>
+  <script id="mermaid-js" src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js" integrity="sha512-HH52omhHpZF6RfVnGiQwYgYm4H/ya2xsZYLl5xJ4+tLfX+rN4+8zF7V/H/KLeicPrKZYi1g6iBmVkk2AhXTGlg==" crossorigin="anonymous" referrerpolicy="no-referrer" async></script>
+</body>
+</html>
