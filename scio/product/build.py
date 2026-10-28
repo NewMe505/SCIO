@@ -1380,6 +1380,7 @@ def update_progress(ctx: RunContext) -> Node:
         assert spec is not None and plan is not None and pr is not None
         sb = ctx.sandbox
         marker = f"[scio:progress:{plan.id}]"
+        synced: list[str] = []  # the re-read's notes, from inside the commit
 
         def apply() -> str:
             _git(ctx, "checkout", "-q", "main")
@@ -1413,6 +1414,11 @@ def update_progress(ctx: RunContext) -> Node:
                 rec.tier = mf.tier.value
                 rec.issue = state.issues.get(mf.id)
                 rec.usd = run.usd if run else 0.0
+            # PRODUCT.md as it is now, inside this commit (I-116, I-109): a feature added or
+            # removed by hand at this merge stop is synced before the route is chosen, and
+            # the sync and the edit are committed here, so a release cut right after
+            # tags a main that agrees with them (I-116 review)
+            synced.extend(reread_product_md(ctx, spec, progress)[1])
             _write_progress(ctx, progress)
             notes_path = f"{sb.root}/NOTES.md"
             notes = sb.read_text(notes_path) if sb.exists(notes_path) else "# Notes\n\n"
@@ -1425,7 +1431,7 @@ def update_progress(ctx: RunContext) -> Node:
             sb.write_text(notes_path, f"{head}{sep}{line}{tail}" if sep else notes + line)
             paths = [
                 p
-                for p in (PROGRESS_PATH, "NOTES.md", MILESTONES_DIR)
+                for p in (PROGRESS_PATH, "NOTES.md", MILESTONES_DIR, PRODUCT_MD)
                 if sb.exists(f"{sb.root}/{p}")
             ]
             _git(ctx, "add", "-A", *paths)
@@ -1443,11 +1449,11 @@ def update_progress(ctx: RunContext) -> Node:
             apply=apply,
             probe=lambda: find_commit(sb, marker),
         )
-        # PRODUCT.md as it is now, before routing (I-116, I-109): a feature added by hand at
-        # this merge stop gets its record and is planned, rather than the release going out
-        # without it; the sync is committed with the next milestone's bookkeeping.
+        # The spec for routing: the commit above already holds the re-read (a crash after it
+        # re-reads the committed file here, which changes nothing on disk).
         progress = _read_progress(ctx)
         spec_now, reread = reread_product_md(ctx, spec, progress)
+        reread = synced or reread
         remaining = progress.open_feature_ids()
         entries = [fact(n) for n in reread] + [
             fact(
@@ -1458,6 +1464,7 @@ def update_progress(ctx: RunContext) -> Node:
         ]
         return {
             "spec": spec_now,
+            "feature_runs": state.runs_stamped(plan.id),  # older runs get this milestone
             "milestones_done": [*state.milestones_done, plan.id],
             "milestone": None,  # recorded in progress.json; the next plan sets a new one
             "pr": None,
@@ -1608,6 +1615,19 @@ def release(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         spec, rel = state.spec, state.release
         assert spec is not None and rel is not None
+        # the release decision was a human stop: a feature added to PRODUCT.md there is not
+        # built yet, so the release waits; the next `scio build` plans it (I-116 review)
+        progress = _read_progress(ctx)
+        spec_now, _ = reread_product_md(ctx, spec, progress)
+        blocked = _not_done(spec_now, progress)
+        if blocked:
+            return _halt(
+                ctx,
+                "release_failed",
+                "PRODUCT.md changed at the release stop; not done: "
+                + ", ".join(blocked)
+                + ". Run scio build again to plan them (I-116)",
+            )
         sb = ctx.sandbox
         marker = f"[scio:release:{rel.tag}]"
         changelog = f"{sb.root}/CHANGELOG.md"

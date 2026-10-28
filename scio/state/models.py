@@ -631,6 +631,17 @@ class ProductBuildState(BaseModel):
             if r.feature_id in ids and (r.milestone is None or r.milestone == mid)
         ]
 
+    def runs_stamped(self, milestone_id: str) -> list[FeatureRun]:
+        """``feature_runs`` with every run that has no milestone (recorded before the field)
+        stamped ``milestone_id``, the milestone that is closing: such a run belongs to it or
+        to an earlier one, so later milestones read it exactly. Without this, a skip
+        recorded by older code finished its feature in every later milestone and the loop
+        planned it, passed it over and escalated, milestone after milestone (I-116 review)."""
+        return [
+            r if r.milestone is not None else r.model_copy(update={"milestone": milestone_id})
+            for r in self.feature_runs
+        ]
+
 
 # ---------- the graph state ----------
 

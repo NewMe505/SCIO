@@ -53,13 +53,22 @@ def with_interpreter_first(env: Mapping[str, str], interpreter: str | None) -> d
     return out
 
 
-def resolve_command(argv: Sequence[str], interpreter: str | None) -> list[str]:
+def env_path(env: Mapping[str, str]) -> str | None:
+    """The PATH value of ``env``, whatever the key's spelling (``Path`` on Windows)."""
+    return next((v for k, v in env.items() if k.upper() == "PATH"), None)
+
+
+def resolve_command(
+    argv: Sequence[str], interpreter: str | None, *, path: str | None = None
+) -> list[str]:
     """What the host actually spawns for a profile command.
 
     ``python`` becomes the product environment's interpreter once it exists, else the one
     running SCIO, never whatever is on PATH. On Windows a bare command word (``npm``,
     ``npx``) is resolved through PATH first, because ``CreateProcess`` does not try the
-    ``.cmd`` shims npm ships and Python would report "command not found" (I-081).
+    ``.cmd`` shims npm ships and Python would report "command not found" (I-081). ``path``
+    is the PATH the command will run with (the product's first, I-114), so a word both
+    environments provide resolves to the product's, as it does on POSIX.
     """
     argv = list(argv)
     if not argv:
@@ -68,7 +77,7 @@ def resolve_command(argv: Sequence[str], interpreter: str | None) -> list[str]:
     if head == INTERPRETER_WORD:
         argv[0] = interpreter or sys.executable
     elif sys.platform == "win32" and Path(head).name == head and not head.lower().endswith(".exe"):
-        found = shutil.which(head)
+        found = shutil.which(head, path=path)
         if found:
             argv[0] = found
     return argv
@@ -111,11 +120,11 @@ class LocalSandbox:
         network: bool | None = None,
     ) -> ExecResult:
         timeout = timeout_s or self.limits.timeout_s
-        argv = resolve_command(argv, self.python)
         run_env = with_interpreter_first(
             {**os.environ, "PYTHONUTF8": "1", "SCIO_SANDBOX": "local", **(env or {})},
             self.python,  # the product's interpreter for every command, not only `python` (I-114)
         )
+        argv = resolve_command(argv, self.python, path=env_path(run_env))
         allow_network = self.limits.network if network is None else network
         if not allow_network:
             run_env.setdefault("PIP_NO_INDEX", "1")

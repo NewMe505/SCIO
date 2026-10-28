@@ -371,3 +371,19 @@ def test_every_local_command_runs_with_the_product_interpreter_first_on_path(
     r = plain.exec([sys.executable, "-c", probe])
     host_root = os.environ.get("VIRTUAL_ENV", "-")
     assert r.ok and r.stdout.strip().splitlines()[1] == host_root  # no product interpreter
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="the PATH lookup of a bare word is Windows-only"
+)
+def test_a_bare_command_word_resolves_through_the_product_first_path(tmp_path: Path) -> None:
+    """I-114 review: on Windows a bare word is looked up with `shutil.which`, which used SCIO's
+    PATH even after the product's interpreter directory was put first for the command."""
+    from scio.aci.sandbox.local import resolve_command
+
+    product, scio_env = tmp_path / "product-bin", tmp_path / "scio-bin"
+    for d in (product, scio_env):
+        d.mkdir()
+        (d / "sciotool.cmd").write_text("@echo off\n", encoding="utf-8")
+    path = os.pathsep.join([str(product), str(scio_env)])
+    assert Path(resolve_command(["sciotool", "-v"], None, path=path)[0]).parent == product

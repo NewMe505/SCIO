@@ -181,3 +181,39 @@ def test_runs_recorded_before_the_milestone_field_keep_the_old_rules() -> None:
         ).milestone
         is None
     )
+
+
+def test_closing_a_milestone_stamps_runs_recorded_before_the_milestone_field() -> None:
+    """I-116 review: a skip recorded by older code has no milestone, and a skip without one
+    finished its feature in every later milestone, so the loop planned the feature, passed
+    it over and escalated, milestone after milestone. Closing a milestone stamps such runs,
+    and the next milestone runs the deferred feature again."""
+    from scio.state.models import (
+        FeatureRun,
+        MilestoneFeatureOutput,
+        MilestonePlan,
+        ProductBuildState,
+        Tier,
+    )
+
+    old = FeatureRun(
+        feature_id="P1", attempt=1, thread_id="t-p1-a1", tier=Tier.T1, status="skipped"
+    )
+    m2 = MilestonePlan(
+        number=2,
+        title="again",
+        branch="milestone/2",
+        features=[MilestoneFeatureOutput(id="P1")],
+    )
+    state = ProductBuildState(
+        thread_id="t",
+        product_dir=".",
+        feature_runs=[old],
+        budgets=Budget(tokens_max=1, usd_max=1.0, advisor_calls_max=1),
+    )
+    stamped = state.runs_stamped("M1")
+    assert [r.milestone for r in stamped] == ["M1"] and old.milestone is None
+    assert state.model_copy(update={"milestone": m2}).next_feature() is None  # the old rule
+    after = state.model_copy(update={"feature_runs": stamped, "milestone": m2})
+    nxt = after.next_feature()
+    assert nxt is not None and nxt.id == "P1"  # deferred, so it runs again in M2

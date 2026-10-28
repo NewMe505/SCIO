@@ -982,6 +982,7 @@ Template:
   - The worker: fixed.
   - `LocalSandbox.exec` passed SCIO's PATH to every product command, rewriting only a leading `python`. Fixed: it now uses `with_interpreter_first`, so a product command or a child the product spawns that starts `python` by name gets the product's.
   - The local `start_app` Popen: fixed the same way.
+  - Found by the independent review: on Windows `resolve_command` looked up a bare command word with `shutil.which` against SCIO's PATH, not the product-first one. It now takes the command's own PATH (`env_path(run_env)`), in `LocalSandbox.exec` and `start_app` (`test_a_bare_command_word_resolves_through_the_product_first_path`, Windows-only).
   - Not affected: the Docker sandbox (product code runs in the container's environment), the GitHub client (`gh`), the tool-less provider calls (`--tools ""`, no cwd), the eval solver (SCIO's interpreter on purpose; its product command already uses `sb.python`), and the scaffold's `sys.executable`.
   - The graph test's fake runner gained `env`.
 - Guard:
@@ -1027,9 +1028,10 @@ Template:
   - `update_progress` re-reads PRODUCT.md before it routes.
   - `scio build` prints the halt's reason.
   - Done by a parallel agent that owned `progress.py`, `build.py` and `models.py`; its first workaround, which relabelled old skipped runs, was replaced by the milestone field so nothing is counted twice.
-- Known limits, not reachable in any existing thread (graphcalc never answered skip):
-  - A thread that recorded a skip under the old code and is paused at its gate or merge stop would pass the feature over again, because the old run has milestone None.
-  - A re-read at the last stop can leave `progress.json` uncommitted on `main` until the next build's plan commits it, as `load`'s sync does.
+- Found by the independent review of the commit, and fixed before the push:
+  - A skip recorded by older code (milestone None) finished its feature in every later milestone of its thread, so the loop planned the feature, passed it over and escalated, every milestone. `ProductBuildState.runs_stamped` lets `update_progress` stamp the closing milestone on such runs, and later milestones read them exactly. Before the review I had called this a one-time limit; it repeated forever.
+  - The re-read ran after `update_progress`'s commit, so on the release path the tag pointed at a `main` whose PRODUCT.md and progress.json disagreed with the working tree (with `--gh`, a squash merge's `sync_main` reset could even drop the progress sync). The re-read now runs inside the progress commit, and PRODUCT.md is one of its paths.
+  - `release_decision` is a human stop too, so `release` re-reads PRODUCT.md and refuses (`release_failed`) when a feature added there is not done, before it cuts or tags anything.
 - Sweep: `grep -rn '"skipped"\|skipped\|next_feature\|open_feature_ids\|\.status ==\|\.status !=\|status in (' scio/product scio/cli.py scio/state/models.py evals scio/graph` and `grep -rn "FeatureRun(\|feature_runs\|latest_run\|next_feature" scio evals tests`.
   - Fixed: every reader that treated `skipped` as finished, the PR body's `Closes`, and the per-milestone cost readers.
   - Correct as they are: `latest_run` for the attempt number (it counts across milestones on purpose, so a deferred feature gets attempt 2 on a new thread), the whole-thread sums (`total_usd`, the report, the eval solver), and the display-only readers.
@@ -1040,6 +1042,7 @@ Template:
   - `test_the_release_gate_refuses_while_a_feature_is_not_done` and `test_a_milestone_pr_closes_only_the_issues_of_passed_features`.
   - `test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_release`.
   - All fail on `main`. Plus guardrail 37.
+  - From the review's fixes: `test_closing_a_milestone_stamps_runs_recorded_before_the_milestone_field`, `test_a_feature_added_at_the_release_stop_holds_the_release`, and the last-merge-stop and hand-edit tests asserting that the progress commit on `main` holds PRODUCT.md.
 - Resolved: 2026-10-28 · Status: resolved
 
 ### I-117 · A parallel agent made one edit through a shell-embedded script with `\n` escapes (I-112's rule again)

@@ -1188,9 +1188,14 @@ def test_a_hand_edit_of_product_md_survives_resets_merges_and_reaches_main(tmp_p
         assert any("re-read" in e.text for e in out.state.ledger)
     finally:
         ctx.close()
-    assert first in _git(repo, "show", f"main:{PRODUCT_MD}")  # M1's merge took the first edit
+    # M1's merge took the first edit; M1's progress commit on main records the edit made at
+    # its merge stop (I-116 review), so main and milestone/2 both carry the second one
+    merged = _git(repo, "log", "-1", "--format=%H", "--grep=Merge milestone/1", "main")
+    assert first in _git(repo, "show", f"{merged}:{PRODUCT_MD}")
+    progress_commit = _git(repo, "log", "-1", "--format=%H", "--grep=scio:progress:M1", "main")
+    assert PRODUCT_MD in _git(repo, "show", "--name-only", "--format=", progress_commit)
+    assert second in _git(repo, "show", f"main:{PRODUCT_MD}")
     assert second in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
-    assert sum("[scio:sync:M2:plan_milestone]" in s for s in _subjects(repo, "milestone/2")) == 1
     assert _git(repo, "status", "--porcelain", "--", PRODUCT_MD) == ""  # committed, not dangling
 
 
@@ -1239,6 +1244,11 @@ def test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_r
         ("P4", "todo"),
     ]
     assert "### P4: Slugify todo titles" in _git(repo, "show", f"milestone/2:{PRODUCT_MD}")
+    # committed on main by M1's progress commit itself, so a release cut right there would
+    # tag a main that agrees with PRODUCT.md (I-116 review)
+    main_progress = ProgressFile.from_json(_git(repo, "show", f"main:{PROGRESS_PATH}"))
+    assert "P4" in [f.id for f in main_progress.features]
+    assert "### P4: Slugify todo titles" in _git(repo, "show", f"main:{PRODUCT_MD}")
     assert _git(repo, "tag", "--list") == ""
 
 
@@ -1271,3 +1281,45 @@ def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(
     err = capsys.readouterr().err
     assert "scio build stopped on GitHub" in err and "product-mode" in err
     assert "run the same scio build command again to resume" in err and "Traceback" not in err
+
+
+def test_a_feature_added_at_the_release_stop_holds_the_release(tmp_path: Path) -> None:
+    """I-116 review: `release_decision` is a human stop too. A feature added to PRODUCT.md
+    there is not built, so `release` re-reads PRODUCT.md and refuses, naming it, before it
+    cuts or tags anything; the next `scio build` plans it."""
+    from scio.product.build import release
+    from scio.state.models import ReleaseRecord
+
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    progress = _progress(repo)
+    for rec in progress.features:
+        rec.status = "done"
+    (repo / PROGRESS_PATH).write_text(progress.to_json(), encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "chore: every feature done")
+    md = repo / PRODUCT_MD
+    spec = parse_product_md(md.read_text(encoding="utf-8"))
+    bar = "## Quality bar (release gate)"
+    md.write_text(
+        md.read_text(encoding="utf-8").replace(
+            bar, "### P4: Added at the release stop\n- [ ] it works\n\n" + bar, 1
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    ctx = _ctx(tmp_path, harness, "build-release-stop")
+    try:
+        state = ProductBuildState(
+            thread_id=ctx.thread_id,
+            product_dir=str(repo),
+            spec=spec,
+            budgets=ctx.budget,
+            release=ReleaseRecord(version="0.1.0", tag="v0.1.0", report="", ok=True),
+        )
+        patch = release(ctx)(state)
+        assert patch.get("exit_reason") == "release_failed", patch.get("phase")
+        assert "P4 todo" in patch["ledger"][-1].text
+    finally:
+        ctx.close()
+    assert _git(repo, "tag", "--list") == ""
+    assert not any("[scio:release:" in s for s in _subjects(repo, "main"))

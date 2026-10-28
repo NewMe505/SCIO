@@ -22,6 +22,7 @@ from scio.aci.sandbox.base import Sandbox
 from scio.aci.sandbox.local import (
     INTERPRETER_WORD,
     LocalSandbox,
+    env_path,
     resolve_command,
     with_interpreter_first,
 )
@@ -109,11 +110,12 @@ def start_app(
     argv = list(argv)
     tc = toolchain or python_toolchain()
     if isinstance(sb, LocalSandbox):
-        argv = resolve_command(argv, sb.python)
+        env = with_interpreter_first(os.environ, sb.python)  # the app's children too (I-114)
+        argv = resolve_command(argv, sb.python, path=env_path(env))
         proc = subprocess.Popen(
             argv,
             cwd=sb.root,
-            env=with_interpreter_first(os.environ, sb.python),  # the app's children too (I-114)
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
