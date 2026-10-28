@@ -96,6 +96,21 @@ class FixtureDataSource:
                 ledger_bytes=old.ledger_bytes + ledger_bytes,
             )
 
+    def set_summary(self, root: str, thread_id: str, **fields: Any) -> None:
+        """Change a listed thread's summary (its list row and its detail's summary) and bump
+        its version, the way a new checkpoint would."""
+        for i, t in enumerate(self._threads):
+            if (t.root, t.thread_id) == (root, thread_id):
+                self._threads[i] = ThreadSummary.model_validate({**t.model_dump(), **fields})
+        key = (root, thread_id)
+        if key in self._details:
+            detail = self._details[key]
+            summary = {**detail.summary.model_dump(), **fields}
+            self._details[key] = ThreadDetail.model_validate(
+                {**detail.model_dump(), "summary": summary}
+            )
+        self.bump(root, thread_id)
+
     def drop(self, root: str, thread_id: str) -> None:
         """The thread disappears (its checkpoints were deleted)."""
         with self._lock:

@@ -221,6 +221,11 @@ def _upgrade(args: argparse.Namespace) -> int:
 DASHBOARD_HOST = "127.0.0.1"
 """``scio dashboard`` binds the loopback interface only (ADR 0017): it shows every thread's
 state and costs, and nothing on the network should see that."""
+DASHBOARD_SHUTDOWN_S = 3  # seconds; uvicorn types the bound as int
+"""How long a stopping dashboard waits for its connections. uvicorn's last shutdown step,
+``asyncio.Server.wait_closed``, waits for every client transport, and on Windows one the
+browser reset can stay attached forever, through a second Ctrl+C too (I-132); uvicorn bounds
+that wait only by ``timeout_graceful_shutdown``."""
 
 
 def _dashboard(args: argparse.Namespace) -> int:
@@ -245,7 +250,13 @@ def _dashboard(args: argparse.Namespace) -> int:
         note = "" if w.present else " (no checkpoint DB yet: it lists once SCIO runs there)"
         print(f"root {w.name}: {w.path}{note}")
     print(f"scio dashboard on http://{DASHBOARD_HOST}:{args.port} (read-only; Ctrl+C stops it)")
-    uvicorn.run(create_app(source), host=DASHBOARD_HOST, port=args.port, log_level="warning")
+    uvicorn.run(
+        create_app(source),
+        host=DASHBOARD_HOST,
+        port=args.port,
+        log_level="warning",
+        timeout_graceful_shutdown=DASHBOARD_SHUTDOWN_S,
+    )
     return 0
 
 

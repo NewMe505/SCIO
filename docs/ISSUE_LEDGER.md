@@ -1004,7 +1004,7 @@ Template:
 - Symptom: none shipped. `uv sync` removes every extra it is not told to install, so following the hint drops `otlp`, `postgres` and `e2b`, and a later `SCIO_OTEL_EXPORTER=otlp` fails on import
 - Root cause: I wrote the hint as an install command, but `uv sync` makes the environment match exactly what it was told
 - Fix: the CLI says `uv sync --all-extras` (or add `--extra dashboard` to the usual `uv sync`) and the README uses `--all-extras`; agent D's docs name the combined form
-- Sweep: every `uv sync --extra` in the docs and code (`grep -rn "uv sync --extra" --include=*.md --include=*.py .`): the README and CLI (fixed), `docs/OBSERVABILITY.md` (already combined) and ADR 0017 (fixed with D)
+- Sweep: every `uv sync --extra` in the docs and code (`grep -rn "uv sync --extra" --include=*.md --include=*.py .`): the README and CLI (fixed), ADR 0017's decision 3 and two lines of `docs/OBSERVABILITY.md`, the dashboard install and the trace viewer's `uv sync --extra otlp` (fixed by agent D; my first pass had called the second one fine). The only remaining matches are the warnings that name the bare form.
 - Guard: `test_the_dashboard_without_the_extra_says_how_to_install_it` asserts `--all-extras`; guardrail 21
 - Resolved: 2026-10-27 · Status: resolved
 
@@ -1042,4 +1042,40 @@ Template:
 - Fix: the tests use the absolute `ws://127.0.0.1/ws`, with a comment. The handshake refusal raises when the session's context is entered, so the refusal tests wrap the call in `with`
 - Sweep: every `websocket_connect(` in the tests (`grep -rn "websocket_connect(" tests`): only `tests/unit/test_dashboard_app.py`, all absolute
 - Guard: `test_ws_says_hello_first_with_nothing_in_it` fails with a relative URL (the Host check refuses it); guardrail 25
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-129 · Playwright's `wait_for_function` with a string predicate fails under the page's CSP
+- Found: 2026-10-27 · issue #68, wave 1 (agent C) · `tests/live/test_dashboard_page.py`, intermittently (2 of 3 runs)
+- Symptom: `EvalError` from Playwright whenever the predicate's first check was false
+- Root cause: the page's Content-Security-Policy forbids `eval` (`script-src 'self' https://cdnjs.cloudflare.com`, no `'unsafe-eval'`), and Playwright evaluates a string predicate's later polls as code inside the page; the first check runs through another path, so a predicate already true passed
+- Fix: the tests wait on selectors (`html[data-refresh="idle"]`, `.head[data-thread=...]`) or poll from Python with `page.evaluate`; the page sets `data-refresh` when a refresh ends so there is something to wait on
+- Sweep: every `wait_for_function` in the code and tests (`grep -rln "wait_for_function" evals scio tests`): only a comment in `tests/live/test_dashboard_page.py` that says why it is not used
+- Guard: guardrail 26; `test_the_page_never_writes_html_from_data_or_evaluates_code` keeps the CSP's premise (no eval in `app.js`) true
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-130 · uvicorn could not stop while a send-only WebSocket handler held a connection
+- Found: 2026-10-27 · issue #68, wave 1 (agent C's test server) · uvicorn 0.54 with the websockets-sansio protocol
+- Symptom: in C's first test server, `Server.run` raised `InvalidState('connection is closing')` at shutdown after a tab closed. A send-only mutant of the real `/ws` handler made uvicorn hang past 10 s instead.
+- Root cause: a handler that only sends never reads the browser's close frame, so the connection stays half-closed; shutdown then sends its own close (1012) on a connection already closing, or waits on a handler that never returns
+- Fix: C's server reads the socket concurrently; the real handler (`_push_changes` in `scio/dashboard/app.py`) already waits on `websocket.receive()` between polls, so a closed tab ends it at once
+- Sweep: every WebSocket handler (`grep -rn "websocket" scio tests --include=*.py -l`): the app's `/ws` and C's test hub, both reading now
+- Guard: `test_the_real_app_serves_the_page_live_and_stops_cleanly` (the real `create_app` under uvicorn with Chromium: one tab closed, one open, then `should_exit`), which fails with "uvicorn did not stop" when the receive loop is replaced by a sleep; guardrail 27
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-131 · A shell-embedded `python -c` with a `\\u` regex was mangled on its way through bash (I-071, I-072, I-112 again)
+- Found: 2026-10-27 · issue #68, wave 2 (agent C, checking `app.js` for escapes) · `re.error: incomplete escape` from a one-off `python -c` check
+- Symptom: the check failed loudly; nothing was written
+- Root cause: the standing rule (guardrail 17) says text with a backslash goes through the file tools; the brief did not repeat it for read-only checks, and a regex in a one-liner is still text with a backslash
+- Fix: the check was rewritten as a script file with the Write tool and ran
+- Sweep: the other shell-embedded scripts of this session, mine and the agents' (`python - <<` and `python -c` uses in the four agents' reports and my own commands): the only other one with a backslash was my `app.py` mutation, whose anchor held no backslash and which asserted its anchor count before writing
+- Guard: guardrail 17 (`manual:`, its reason stands), now citing I-131
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-132 · A stopping dashboard can hang forever on Windows once a browser connection was reset
+- Found: 2026-10-27 · issue #68, wave 2, the gate · `test_the_real_app_serves_the_page_live_and_stops_cleanly` failed in the full parallel run (`-n 6`, three times out of three) and passed alone and in any pair: `AssertionError: uvicorn did not stop`, still alive after 60 s, next to `ConnectionResetError: [WinError 10054]`
+- Symptom: a task dump of the hung server loop showed no uvicorn connections and no tasks (`server_state.connections` and `.tasks` empty), the lifespan task still pending, and `serve()` awaiting a future
+- Root cause: uvicorn 0.54's `_wait_tasks_to_complete` ends with `await server.wait_closed()`. On Python 3.12, that waits until asyncio's server has detached every client transport. On Windows' proactor loop, a connection the browser reset under load can stay attached, so the wait never ends. A second Ctrl+C does not help, since that loop never reads `force_exit`. Only `timeout_graceful_shutdown`, which wraps the whole wait, bounds it, and `scio dashboard` passed none. The send-only handler of I-130 was a different cause with the same symptom.
+- Fix: `scio dashboard` passes `timeout_graceful_shutdown=DASHBOARD_SHUTDOWN_S` (3 s) to uvicorn, so a stop takes at most that long; the server test runs uvicorn with the same constant
+- Sweep: every place SCIO starts a server (`grep -rn "uvicorn\.\|serve_forever\|HTTPServer(" scio evals tests --include=*.py`): the CLI (fixed); the page test's tiny server (agent C's, already waits for its handlers and stops in bounded time); the products' own HTTP servers are the products' code, started and killed by `scio/aci/apps.py`, not stopped gracefully
+- Guard: `test_the_dashboard_binds_loopback_only_and_lists_its_roots` asserts the bound is passed; `test_the_real_app_serves_the_page_live_and_stops_cleanly` hung in the full run before the fix and passes three runs out of three after it; guardrail 28
 - Resolved: 2026-10-27 · Status: resolved

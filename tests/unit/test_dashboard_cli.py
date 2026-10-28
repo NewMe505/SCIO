@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from scio.cli import DASHBOARD_HOST, main
+from scio.cli import DASHBOARD_HOST, DASHBOARD_SHUTDOWN_S, main
 
 
 def test_the_dashboard_binds_loopback_only_and_lists_its_roots(
@@ -25,6 +25,8 @@ def test_the_dashboard_binds_loopback_only_and_lists_its_roots(
     assert main([*argv, "--port", "9911"]) == 0
     assert [(c["host"], c["port"]) for c in calls] == [("127.0.0.1", 9911)]
     assert DASHBOARD_HOST == "127.0.0.1"
+    # a bounded stop: an unbounded one can hang on Windows, through a second Ctrl+C (I-132)
+    assert calls[0]["timeout_graceful_shutdown"] == DASHBOARD_SHUTDOWN_S > 0
     out = capsys.readouterr().out
     assert "root a:" in out and "root b:" in out and "http://127.0.0.1:9911" in out
     assert "no checkpoint DB yet" in out

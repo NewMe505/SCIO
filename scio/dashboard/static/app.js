@@ -585,6 +585,14 @@
 
   // ---------------------------------------------------------------- one thread
 
+  // summary.usd counts finished runs (the figure scio report prints); the attempts still
+  // running have spent running_usd on top of it
+  function runningNote(detail) {
+    const running = Number(detail.running_usd);
+    if (!(running > 0)) return null;
+    return el("span", { class: "running-usd", text: " + " + usd(running) + " running" });
+  }
+
   function headerCard(detail) {
     const s = detail.summary;
     const pairs = [
@@ -592,7 +600,7 @@
       ["Phase", el("span", { class: "head-phase", text: dash(s.phase) })],
       ["Exit", dash(s.exit_reason)],
       ["Updated", timeEl(s.updated_at)],
-      ["Cost", el("span", { class: "head-cost", text: usd(s.usd) })],
+      ["Cost", [el("span", { class: "head-cost", text: usd(s.usd) }), runningNote(detail)]],
     ];
     if (s.parent_thread) {
       pairs.push(["Build", el("a", { class: "parent-link", href: threadHref(s.root, s.parent_thread), text: s.parent_thread })]);
@@ -671,38 +679,49 @@
       descriptions.get(id) ? el("div", { class: "title", text: descriptions.get(id) }) : null,
       threadLine(threadId, link),
     ];
+    const featureCost = detail.cost_by_feature && typeof detail.cost_by_feature === "object" ? detail.cost_by_feature : {};
     const out = [];
     for (const id of ids) {
       const attempts = rows.filter((r) => r.feature_id === id).sort((a, b2) => a.attempt - b2.attempt);
       const linksFor = links.filter((l) => l.feature_id === id);
-      if (attempts.length) {
-        for (const r of attempts) {
-          const link = linksFor.find((l) => l.attempt === r.attempt && l.thread_id === r.thread_id) || linksFor.find((l) => l.thread_id === r.thread_id);
+      const linkOf = (r) => linksFor.find((l) => l.attempt === r.attempt && l.thread_id === r.thread_id) || linksFor.find((l) => l.thread_id === r.thread_id);
+      // a link with no FeatureRow is an attempt still running: SCIO records a run when it ends
+      const unfinished = linksFor.filter((l) => !attempts.some((r) => linkOf(r) === l));
+      const entries = [...attempts.map((r) => ({ row: r, attempt: r.attempt })), ...unfinished.map((l) => ({ link: l, attempt: l.attempt }))];
+      entries.sort((a, b2) => a.attempt - b2.attempt);
+      // cost_by_feature spans every attempt; what the finished rows do not account for is the
+      // unfinished attempts' spend so far
+      const finishedUsd = attempts.reduce((sum, r) => sum + (Number(r.usd) || 0), 0);
+      const unfinishedUsd = id in featureCost ? Math.max(Number(featureCost[id]) - finishedUsd, 0) : null;
+      for (const entry of entries) {
+        const r = entry.row;
+        if (r) {
           out.push(el("tr", { "data-feature": id, "data-attempt": String(r.attempt) }, [
-            td(featureCell(id, r.thread_id, link), "c-feature"),
+            td(featureCell(id, r.thread_id, linkOf(r)), "c-feature"),
             td(String(r.attempt), "num"),
             td(dash(r.tier)),
             td(featureBadge(r.status)),
             td(int(r.iterations), "num"),
             td(int(r.escalations_resolved) + "/" + int(r.escalations), "num"),
-            td(usd(r.usd), "num"),
+            td(usd(r.usd), "num c-cost"),
             td(commitEl(r.commit)),
           ]));
+          continue;
         }
-      } else if (linksFor.length) {
-        for (const l of linksFor) {
-          out.push(el("tr", { "data-feature": id, "data-attempt": String(l.attempt) }, [
-            td(featureCell(id, l.thread_id, l), "c-feature"),
-            td(String(l.attempt), "num"),
-            td("—"),
-            td(featureBadge(l.status)),
-            td("—", "num"),
-            td("—", "num"),
-            td(detail.cost_by_feature && id in detail.cost_by_feature ? usd(detail.cost_by_feature[id]) : "—", "num"),
-            td("—"),
-          ]));
-        }
-      } else {
+        const l = entry.link;
+        const cost = unfinishedUsd !== null && unfinished.length === 1 ? usd(unfinishedUsd) : "—";
+        out.push(el("tr", { "data-feature": id, "data-attempt": String(l.attempt), class: "unfinished" }, [
+          td(featureCell(id, l.thread_id, l), "c-feature"),
+          td(String(l.attempt), "num"),
+          td("—"),
+          td(featureBadge(l.status)),
+          td("—", "num"),
+          td("—", "num"),
+          td(cost, "num c-cost"),
+          td("—"),
+        ]));
+      }
+      if (!entries.length) {
         out.push(el("tr", { "data-feature": id, class: "not-run" }, [
           td(featureCell(id, null, null), "c-feature"),
           td("—", "num"),
@@ -748,7 +767,7 @@
   function costCard(detail, extraFacts, extraBars, extraLabel) {
     const s = detail.summary;
     const parts = [
-      el("p", { class: "total" }, [el("span", { class: "total-label", text: "Total " }), el("strong", { class: "total-cost", text: usd(s.usd) })]),
+      el("p", { class: "total" }, [el("span", { class: "total-label", text: "Total " }), el("strong", { class: "total-cost", text: usd(s.usd) }), runningNote(detail)]),
     ];
     if (extraFacts) parts.push(facts(extraFacts));
     parts.push(el("h3", { text: "By role" }), bars(detail.cost_by_role, "Cost by role", extraLabel));

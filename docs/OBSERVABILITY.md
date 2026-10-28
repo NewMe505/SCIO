@@ -33,10 +33,9 @@ SCIO emits OpenTelemetry GenAI spans from the harness ([`scio/harness/telemetry.
 
 ### Turn it on
 
-1. Install the `otlp` extra. `uv sync` installs exactly the extras you name and removes the others. To keep the dashboard too, name both:
+1. Install the `otlp` extra. `uv sync` installs exactly the extras you name and uninstalls the others, so never run a bare `uv sync --extra otlp` (guardrail 21, I-124). Sync every extra, or add `--extra otlp` to the extras you already sync:
    ```sh
-   UV_SYSTEM_CERTS=1 uv sync --extra otlp
-   UV_SYSTEM_CERTS=1 uv sync --extra otlp --extra dashboard   # with the dashboard
+   UV_SYSTEM_CERTS=1 uv sync --all-extras
    ```
 2. Set the exporter and the endpoint, then run SCIO as usual:
    ```sh
@@ -99,7 +98,7 @@ Use it to watch a build live: every thread in one place, the step each one is on
 ### Run it
 
 ```sh
-UV_SYSTEM_CERTS=1 uv sync --extra dashboard    # add --extra otlp to keep the exporter
+UV_SYSTEM_CERTS=1 uv sync --all-extras    # the dashboard extra, the others kept (guardrail 21)
 uv run python -m scio dashboard --root . --root ../graphcalc-run
 ```
 
@@ -113,20 +112,20 @@ A root is a directory SCIO ran in: the directory a `scio run`, `scio new` or `sc
   - a **waiting** badge, carrying the stop's question, when a thread waits for your decision;
   - a **crashed** badge when the process died in a node. The latest checkpoint has a pending error, and a resume clears it;
   - no badge for a process killed without an exception: it still reads in progress, and its last update shows how long it has been quiet.
-- **A build thread:** the milestone and its features, with each attempt's tier, status, iterations, escalations, cost and commit, and a link to the feature's own thread. Also the integration check lines and the PR link.
+- **A build thread:** the milestone and its features, with each attempt's tier, status, iterations, escalations, cost and commit, and a link to the feature's own thread. The attempt running now is listed too, as `running`: SCIO records an attempt in the build's state only when it ends. Also the integration check lines and the PR link.
 - **A feature thread** (a task): iterations, escalations, and the last test and verify lines.
 - **A bootstrap thread** (`scio new`): the interview's questions, each revision round's notes, the bootstrap commit and the repository.
 - **The lit graph:** the thread's graph (build, bootstrap, or the task's tier) drawn from the same source as ARCHITECTURE.md's diagrams, with the nodes it runs next lit. Mermaid loads from a CDN; without it the page falls back to text.
-- **Costs** by role and, for a build, by feature over every attempt. A build's total includes its feature threads. The figures are the ones `scio report` prints, built by the same functions.
+- **Costs** by role and, for a build, by feature over every attempt. A build's total includes its feature threads and is the figure `scio report` prints, built by the same functions. While a feature runs, its spend so far is in the breakdowns and shown on its own as the running spend, but not in the total until the attempt ends.
 - **The live timeline:** the thread's ledger of facts, guesses and decisions, oldest first.
 
-The page updates without a reload. Once a second the server checks each thread for a new checkpoint, a new pending write (a stop or a crash) and ledger growth, and pushes the threads that changed over a WebSocket.
+The page updates without a reload. While a page is open, the server checks each thread once a second for a new checkpoint, a new pending write (a stop or a crash) and ledger growth, and pushes the threads that changed over a WebSocket. Nothing polls with no page open.
 
 ### Safe beside a live build
 
 The dashboard is read-only. It opens the checkpoint DB read-only, has no write route, and closes each connection after each read, so it never holds up the build's writes. It is safe to run beside a live build. On an idle DB it may leave empty `-wal` and `-shm` files next to it; they are SQLite's index files, and the next writer cleans them up. The DB file itself is not changed.
 
-The dashboard answers only on 127.0.0.1. It cannot answer a stop: answer it from the CLI, as the waiting badge's question says (`scio build --product DIR --decision "<text>"`, or `scio new --thread ID --decision "<text>"`).
+The dashboard answers only on 127.0.0.1, and refuses a request whose `Host` is not 127.0.0.1 or localhost. It cannot answer a stop: answer it from the CLI (`scio build --product DIR --decision "<text>"`, or `scio new --thread ID --decision "<text>"`).
 
 ## 4. The CLI views
 

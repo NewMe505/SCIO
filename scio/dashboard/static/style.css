@@ -225,7 +225,8 @@ main {
   color: var(--grey-fg);
 }
 
-.s-waiting {
+.s-waiting,
+.f-waiting {
   background: var(--wait-bg);
   color: var(--wait-fg);
   box-shadow: inset 0 0 0 1px var(--wait-line);
@@ -233,7 +234,9 @@ main {
 
 .s-crashed,
 .s-halted,
-.f-failed {
+.f-failed,
+.f-crashed,
+.f-halted {
   background: var(--red-bg);
   color: var(--red-fg);
 }
@@ -643,6 +646,12 @@ pre.lines {
   white-space: nowrap;
 }
 
+.features th,
+.features td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .features .c-feature,
 .features .c-feature .title {
   white-space: normal;
@@ -687,6 +696,14 @@ pre.lines {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
+}
+
+.running-usd {
+  color: var(--blue-fg);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .total-cost {

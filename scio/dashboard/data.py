@@ -17,6 +17,7 @@ import functools
 import importlib
 import json
 import os
+import re
 import sqlite3
 import threading
 from collections import defaultdict
@@ -67,6 +68,9 @@ KIND_GRAPH: dict[ThreadKind, str] = {
     "bootstrap": "product_new",
     "task": "t0",
 }
+STOPPED: tuple[ThreadStatus, ...] = ("waiting", "crashed", "halted")
+"""The statuses of a feature attempt's thread that its build link shows instead of
+``running``."""
 _OLDEST = datetime.min.replace(tzinfo=UTC)
 _LATEST_SQL = (
     "select thread_id, max(checkpoint_id) from checkpoints where checkpoint_ns = '' "
@@ -74,6 +78,9 @@ _LATEST_SQL = (
 )
 _WRITES_SQL = "select thread_id, count(*) from writes where checkpoint_ns = '' group by thread_id"
 _GRAPHS_LOCK = threading.Lock()
+_FEATURE_SUFFIX = re.compile(r"-(p\d+)-a(\d+)")
+"""What ``scio build`` appends to the build's thread id for a feature attempt
+(``f"{build}-{feat.id.lower()}-a{attempt}"``): ``-p4-a1``."""
 
 
 def workspace(
@@ -196,6 +203,54 @@ def _load(saver: SqliteSaver, thread_id: str, checkpoint_id: str) -> _Thread:
 def _parent_id(thread_id: str, builds: Sequence[str]) -> str | None:
     """The longest build thread id this one extends (``build-x-m1`` for ``build-x-m1-p2-a1``)."""
     return max((b for b in builds if thread_id.startswith(b + "-")), key=len, default=None)
+
+
+@dataclass(frozen=True)
+class _Running:
+    """A feature attempt in progress: its thread, and the feature id and attempt its id names."""
+
+    thread: _Thread
+    feature_id: str
+    attempt: int
+
+
+def _running(saver: SqliteSaver, latest: dict[str, str], build: _Thread) -> list[_Running]:
+    """The build's feature threads that have no ``FeatureRun`` yet. ``scio build`` appends a
+    run only when its attempt ends, so without these the feature running now would read "not
+    run" and its spend would be missing from the build's costs. A child counts when this build
+    is its parent by :func:`_parent_id` and its id ends the way ``scio build`` names attempts."""
+    if not isinstance(build.state, ProductBuildState):
+        return []
+    recorded = {r.thread_id for r in build.state.feature_runs}
+    prefix = build.thread_id + "-"
+    out: list[_Running] = []
+    for tid in latest:
+        if not tid.startswith(prefix) or tid in recorded:
+            continue
+        match = _FEATURE_SUFFIX.fullmatch(tid[len(build.thread_id) :])
+        if match is None:
+            continue
+        nearer = [b for b in latest if tid.startswith(b + "-") and len(b) > len(build.thread_id)]
+        if any(_load(saver, b, latest[b]).kind == "build" for b in nearer):
+            continue
+        child = _load(saver, tid, latest[tid])
+        if child.kind == "task":
+            out.append(_Running(child, match.group(1).upper(), int(match.group(2))))
+    return sorted(out, key=lambda r: (int(r.feature_id[1:]), r.attempt))
+
+
+def _attempt_status(t: _Thread) -> str:
+    """An attempt with no ``FeatureRun`` is ``running`` unless its thread has stopped, so a
+    paused or dead attempt never reads as busy (the live graphcalc P4 waited at ``advisor_cap``).
+    ``done`` or ``error`` with no run recorded yet still read ``running``."""
+    next_nodes = _next_nodes(t.channels) if t.state is not None else []
+    status = _status(t.state, _stop(t.pending, next_nodes), _crash(t.pending))
+    return status if status in STOPPED else "running"
+
+
+def _spent(t: _Thread) -> float:
+    """A task thread's spend so far; 0 when its checkpoint could not be read."""
+    return t.state.budgets.usd_used if isinstance(t.state, SCIOState) else 0.0
 
 
 def _next_nodes(channels: dict[str, Any]) -> list[str]:
@@ -407,17 +462,26 @@ def _newest_first(summaries: list[ThreadSummary]) -> list[ThreadSummary]:
 
 
 def _build_detail(
-    ws: Workspace, summary: ThreadSummary, state: ProductBuildState, listed: set[str]
+    ws: Workspace,
+    summary: ThreadSummary,
+    state: ProductBuildState,
+    listed: set[str],
+    running: list[_Running],
 ) -> ThreadDetail:
+    """``summary.usd`` stays the figure ``scio report`` prints (finished runs); the attempts in
+    progress add to ``cost_by_role``, ``cost_by_feature`` and ``running_usd`` only."""
     own = _entries(ws, summary.thread_id)
     features = [
         tid
         for tid in dict.fromkeys(r.thread_id for r in state.feature_runs)
         if tid in listed and tid != summary.thread_id
     ]
+    features += [r.thread.thread_id for r in running]
     by_feature: dict[str, float] = defaultdict(float)
     for r in state.feature_runs:
         by_feature[r.feature_id] += r.usd
+    for a in running:
+        by_feature[a.feature_id] += _spent(a.thread)
     milestone = state.milestone
     return ThreadDetail(
         summary=summary,
@@ -428,16 +492,29 @@ def _build_detail(
         milestone_title=milestone.title if milestone else None,
         milestone_features=milestone.feature_ids() if milestone else [],
         feature_threads=[
-            FeatureLink(
-                feature_id=r.feature_id,
-                attempt=r.attempt,
-                thread_id=r.thread_id,
-                status=r.status,
-                present=r.thread_id in listed,
-            )
-            for r in state.feature_runs
+            *(
+                FeatureLink(
+                    feature_id=r.feature_id,
+                    attempt=r.attempt,
+                    thread_id=r.thread_id,
+                    status=r.status,
+                    present=r.thread_id in listed,
+                )
+                for r in state.feature_runs
+            ),
+            *(
+                FeatureLink(
+                    feature_id=a.feature_id,
+                    attempt=a.attempt,
+                    thread_id=a.thread.thread_id,
+                    status=_attempt_status(a.thread),
+                    present=True,
+                )
+                for a in running
+            ),
         ],
         cost_by_feature={fid: round(usd, 4) for fid, usd in by_feature.items()},
+        running_usd=round(sum(_spent(a.thread) for a in running), 4),
         integration=(state.integration or "").splitlines(),
         integration_ok=state.integration_ok,
         pr_number=state.pr.number if state.pr else None,
@@ -548,6 +625,7 @@ class CheckpointDataSource:
             if thread_id not in latest:
                 raise UnknownThread(thread_id)
             t = _load(saver, thread_id, latest[thread_id])
+            running = _running(saver, latest, t) if t.kind == "build" else []
             parent = None
             if t.kind == "task":
                 prefixes = [b for b in latest if thread_id.startswith(b + "-")]
@@ -559,7 +637,7 @@ class CheckpointDataSource:
         summary = _summary(ws, t, parent)
         state = t.state
         if isinstance(state, ProductBuildState):
-            return _build_detail(ws, summary, state, set(latest))
+            return _build_detail(ws, summary, state, set(latest), running)
         if isinstance(state, ProductState):
             return _bootstrap_detail(ws, summary, state)
         if isinstance(state, SCIOState):

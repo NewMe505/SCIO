@@ -587,6 +587,71 @@ def test_the_build_view_marks_unrun_and_unlinked_features(
 
 
 @requires_browser
+def test_the_build_view_shows_the_attempts_still_running(
+    open_page: OpenPage, served: PageServer
+) -> None:
+    """SCIO records a FeatureRun only when its attempt ends: a feature running now has a
+    running link and spend so far, and no row yet (the live graphcalc build)."""
+    detail = load_fixture("thread_build.json")
+    p3_thread = f"{BUILD[1]}-p3-a1"
+    p2_retry = f"{BUILD[1]}-p2-a2"
+
+    def unfinished(feature: str, attempt: int, thread_id: str, status: str) -> dict[str, Any]:
+        return {
+            "feature_id": feature,
+            "attempt": attempt,
+            "thread_id": thread_id,
+            "status": status,
+            "present": True,
+        }
+
+    served.detail_overrides[BUILD] = {
+        "milestone_features": ["P1", "P2", "P3"],
+        "feature_threads": [
+            *detail["feature_threads"],
+            # a stopped attempt carries its thread's status (graphcalc's P4 at advisor_cap)
+            unfinished("P2", 2, p2_retry, "waiting"),
+            unfinished("P3", 1, p3_thread, "running"),
+        ],
+        # every attempt's spend: P2's finished $0.0445 plus $0.0100 so far on its retry
+        "cost_by_feature": {**detail["cost_by_feature"], "P2": 0.0545, "P3": 0.0123},
+        "running_usd": 0.0223,
+    }
+    watched = open_page()
+    watched.goto(_href(BUILD))
+    page = watched.page
+    p3 = page.locator('.features tr[data-feature="P3"]')
+    expect(p3).to_have_count(1)
+    expect(p3.locator(".badge")).to_have_text("running")
+    expect(p3.locator(".badge")).to_have_class(re.compile(r"\bf-running\b"))
+    expect(p3.locator("a.feature-link")).to_have_attribute("href", _href((BUILD[0], p3_thread)))
+    expect(p3.locator("td.num").first).to_have_text("1")  # the attempt
+    expect(p3.locator(".c-cost")).to_have_text("$0.0123")
+    expect(p3).not_to_contain_text("not run")
+    # a retry not finished sits under the finished attempt, with only its own spend
+    p2 = page.locator('.features tr[data-feature="P2"]')
+    expect(p2).to_have_count(2)
+    assert p2.evaluate_all("rows => rows.map(r => r.dataset.attempt)") == ["1", "2"]
+    expect(p2.nth(0).locator(".badge")).to_have_text("passed")
+    expect(p2.nth(1).locator(".badge")).to_have_text("waiting")
+    expect(p2.nth(1).locator(".badge")).to_have_class(re.compile(r"\bf-waiting\b"))
+    assert p2.nth(1).locator(".badge").evaluate(
+        "b => getComputedStyle(b).backgroundColor"
+    ) == page.locator(".head .badge.s-waiting").evaluate(
+        "b => getComputedStyle(b).backgroundColor"
+    )  # the waiting look, amber
+    expect(p2.nth(1).locator("a.feature-link")).to_have_attribute(
+        "href", _href((BUILD[0], p2_retry))
+    )
+    expect(p2.nth(1).locator(".c-cost")).to_have_text("$0.0100")
+    # summary.usd stays the finished runs' figure; the running spend is shown beside it
+    expect(page.locator(".head .head-cost")).to_have_text("$0.0824")
+    expect(page.locator(".head .running-usd")).to_have_text("+ $0.0223 running")
+    expect(page.locator(".cost-card .running-usd")).to_have_text("+ $0.0223 running")
+    watched.assert_clean()
+
+
+@requires_browser
 def test_a_live_redraw_waits_while_text_is_selected(
     open_page: OpenPage, served: PageServer
 ) -> None:

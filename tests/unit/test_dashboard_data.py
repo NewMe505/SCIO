@@ -6,6 +6,7 @@ layer does changes the DB."""
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sqlite3
 from collections import defaultdict
 from contextlib import closing, suppress
@@ -106,7 +107,7 @@ def _finish(_state: SCIOState) -> dict[str, Any]:
     return {"phase": "done"}
 
 
-def _run_tiny(db: Path, thread_id: str, second: Any) -> None:
+def _run_tiny(db: Path, thread_id: str, second: Any, *, usd: float = 0.125) -> None:
     """``route`` then ``second`` over :class:`SCIOState` on a writable saver. The state must be
     a real task state: anything else reads as ``error``, which outranks every other status."""
     g: Any = StateGraph(SCIOState)
@@ -118,7 +119,7 @@ def _run_tiny(db: Path, thread_id: str, second: Any) -> None:
     state = SCIOState(
         thread_id=thread_id,
         task=TaskSpec(title="Tiny task", description="d", acceptance=["a"], repo_url="r"),
-        budgets=Budget(tokens_max=1_000, usd_max=1.0, advisor_calls_max=0, usd_used=0.125),
+        budgets=Budget(tokens_max=1_000, usd_max=1.0, advisor_calls_max=0, usd_used=usd),
         github=GitHubRefs(owner="o", repo="r"),
     )
     with closing(sqlite3.connect(str(db), check_same_thread=False)) as conn:
@@ -180,6 +181,7 @@ def test_feature_threads_are_tasks_linked_to_their_build(built: Built) -> None:
         ("P1", P1, "passed", True),
         ("P2", P2, "passed", True),
     ]
+    assert detail.running_usd == 0.0
     feature = built.source.thread(ROOT, P2)
     assert feature.summary == rows[P2]
     assert feature.task is not None and (feature.build, feature.bootstrap) == (None, None)
@@ -289,6 +291,70 @@ def test_unknown_roots_and_threads_raise_and_never_reach_the_filesystem(built: B
     ws = source.roots()[0]
     assert data._ledger_path(ws, "run-1") == Path(ws.ledger_dir) / "run-1.jsonl"
     assert data._ledger_path(ws, "../x") is None and data._ledger_path(ws, "a/b") is None
+
+
+def test_a_feature_attempt_in_progress_is_linked_and_counted(built: Built, tmp_path: Path) -> None:
+    """``scio build`` appends a ``FeatureRun`` only when an attempt ends (the live graphcalc
+    build ran P4 with no run for it): the attempt in progress is still linked, and its spend is
+    in the build's costs and ``running_usd`` but not in ``summary.usd``."""
+    db, ledgers = tmp_path / "ckpt.sqlite", tmp_path / "ledger"
+    with closing(data._connect(built.db)) as src, closing(sqlite3.connect(db)) as dst:
+        src.backup(dst)
+    shutil.copytree(built.ledgers, ledgers)
+    p3, p4, p5 = f"{BUILD}-p3-a1", f"{BUILD}-p4-a2", f"{BUILD}-p5-a1"
+    stray = f"{BUILD}-notes"
+    _run_tiny(db, p3, _ask, usd=0.3125)
+    _run_tiny(db, p5, _ask, usd=0.0625)  # stopped at an interrupt: the link says so
+    _run_tiny(db, stray, _finish, usd=0.5)
+    with closing(sqlite3.connect(db, check_same_thread=False)) as conn:
+        # P3 mid-node: its checkpoint before `implement` with no stop written yet
+        conn.execute("delete from writes where thread_id = ? and channel = '__interrupt__'", (p3,))
+        conn.commit()
+        checkpoint = empty_checkpoint()  # an attempt whose checkpoint cannot be read: spend 0
+        checkpoint["channel_values"] = {"thread_id": p4, "task": "not a task"}
+        config = {"configurable": {"thread_id": p4, "checkpoint_ns": ""}}
+        SqliteSaver(conn, serde=serializer()).put(config, checkpoint, {}, {})  # type: ignore[arg-type]
+    for tid, role, usd in ((p3, "debugger", 0.25), (p3, "coder", 0.0625), (stray, "advisor", 0.5)):
+        ledger = CostLedger()
+        ledger.persist_to(ledgers / f"{tid}.jsonl")
+        ledger.record(
+            role=role,
+            model="m",
+            provider="fake",
+            usage=Usage(output_tokens=1),
+            usd=usd,
+            latency_ms=1,
+        )
+    source = CheckpointDataSource(
+        [workspace(tmp_path, name=ROOT, checkpoints=db, ledger_dir=ledgers)]
+    )
+    before = built.source.thread(ROOT, BUILD)
+    detail = source.thread(ROOT, BUILD)
+    links = [
+        (f.feature_id, f.attempt, f.thread_id, f.status, f.present) for f in detail.feature_threads
+    ]
+    assert links == [
+        ("P1", 1, P1, "passed", True),
+        ("P2", 1, P2, "passed", True),
+        ("P3", 1, p3, "running", True),
+        ("P4", 2, p4, "running", True),
+        ("P5", 1, p5, "waiting", True),
+    ]
+    assert detail.cost_by_feature["P3"] == 0.3125 and detail.cost_by_feature["P5"] == 0.0625
+    assert detail.running_usd == 0.375 and detail.cost_by_feature["P4"] == 0.0
+    assert {f: detail.cost_by_feature[f] for f in ("P1", "P2")} == before.cost_by_feature
+    assert detail.cost_by_role["debugger"] == 0.25 and "advisor" not in detail.cost_by_role
+    assert detail.cost_by_role["coder"] == pytest.approx(before.cost_by_role["coder"] + 0.0625)
+    assert detail.summary.usd == before.summary.usd and detail.build == before.build
+    assert before.running_usd == 0.0
+    rows = {s.thread_id: s for s in source.list_threads(ROOT)}
+    assert rows[stray].parent_thread == BUILD  # the build's child, but not a feature attempt
+    assert rows[p3].parent_thread == BUILD and rows[p3].product == PRODUCT
+    assert (rows[p3].status, rows[p4].status, rows[p5].status) == (
+        "in_progress",
+        "error",
+        "waiting",
+    )
 
 
 # ---------- version changes, stops and crashes ----------

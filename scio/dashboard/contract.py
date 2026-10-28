@@ -121,9 +121,11 @@ class FeatureLink(BaseModel):
     attempt: int
     thread_id: str
     status: str
-    """The run's ``FeatureRun.status``: running, passed, failed or skipped; ``running`` also
-    for a feature thread of this build that has no ``FeatureRun`` yet (the attempt in
-    progress: SCIO records a run only when its attempt ends)."""
+    """The run's ``FeatureRun.status``: running, passed, failed or skipped. For a feature
+    thread of this build that has no ``FeatureRun`` yet (the attempt in progress: SCIO records
+    a run only when its attempt ends), ``running``, or the thread's own status when it has
+    stopped: ``waiting``, ``crashed`` or ``halted`` (the live graphcalc build's P4 waited at
+    ``advisor_cap`` with no run recorded)."""
     present: bool
     """The feature thread has a checkpoint in the same root (the page links it only then)."""
 
