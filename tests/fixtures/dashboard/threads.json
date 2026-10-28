@@ -1,0 +1,133 @@
+[
+  {
+    "root": "SCIO",
+    "thread_id": "run-5f0c2a1b",
+    "kind": "task",
+    "status": "in_progress",
+    "graph": "t1",
+    "phase": "implement",
+    "exit_reason": null,
+    "next_nodes": [
+      "implement"
+    ],
+    "checkpoint_id": "1f1d27e9-0000-6000-8004-000000000001",
+    "updated_at": "2026-10-28T03:21:17.014061Z",
+    "title": "Add a --json flag to scio status",
+    "product": null,
+    "parent_thread": null,
+    "usd": 0.4123,
+    "waiting": null,
+    "error": null
+  },
+  {
+    "root": "graphcalc-run",
+    "thread_id": "build-todo_cli-m1",
+    "kind": "build",
+    "status": "waiting",
+    "graph": "product_build",
+    "phase": "merge_wait",
+    "exit_reason": null,
+    "next_nodes": [
+      "merge_wait"
+    ],
+    "checkpoint_id": "1f1d27e8-b4f5-65c8-8008-5741adbde88f",
+    "updated_at": "2026-10-28T03:20:37.014061Z",
+    "title": "M1: Milestone 1",
+    "product": "todo_cli",
+    "parent_thread": null,
+    "usd": 0.0824,
+    "waiting": {
+      "node": "merge_wait",
+      "question": "Milestone M1 (Milestone 1) is ready. Reply 'merge' to merge the milestone branch into main locally; reply 'stop' to end the build.",
+      "interrupt_id": "38c82de144f91c5c26c63a09a86324c1",
+      "payload": {
+        "question": "Milestone M1 (Milestone 1) is ready. Reply 'merge' to merge the milestone branch into main locally; reply 'stop' to end the build.",
+        "pr": {
+          "number": null,
+          "url": null,
+          "body_path": ".scio/product/milestones/M1-pr.md"
+        },
+        "branch": "milestone/1",
+        "features": [
+          "P1: passed",
+          "P2: passed"
+        ],
+        "cost_usd": 0.0824,
+        "resume": "scio build --product <dir> --decision \"<merged|stop>\""
+      }
+    },
+    "error": null
+  },
+  {
+    "root": "graphcalc-run",
+    "thread_id": "build-todo_cli-m1-p2-a1",
+    "kind": "task",
+    "status": "done",
+    "graph": "t1",
+    "phase": "done",
+    "exit_reason": "success",
+    "next_nodes": [],
+    "checkpoint_id": "1f1d27e8-982c-6e10-800e-f05c54856e9d",
+    "updated_at": "2026-10-28T03:20:33.995931Z",
+    "title": "P2: Add and list todos",
+    "product": "todo_cli",
+    "parent_thread": "build-todo_cli-m1",
+    "usd": 0.04445600000000001,
+    "waiting": null,
+    "error": null
+  },
+  {
+    "root": "graphcalc-run",
+    "thread_id": "build-todo_cli-m1-p1-a1",
+    "kind": "task",
+    "status": "done",
+    "graph": "t0",
+    "phase": "done",
+    "exit_reason": "success",
+    "next_nodes": [],
+    "checkpoint_id": "1f1d27e8-6ab0-6960-800a-f53d01245b35",
+    "updated_at": "2026-10-28T03:20:29.226428Z",
+    "title": "P1: Walking skeleton: the app starts, answers --version, and one smoke test passes",
+    "product": "todo_cli",
+    "parent_thread": "build-todo_cli-m1",
+    "usd": 0.023031999999999997,
+    "waiting": null,
+    "error": null
+  },
+  {
+    "root": "graphcalc-run",
+    "thread_id": "new-1",
+    "kind": "bootstrap",
+    "status": "done",
+    "graph": "product_new",
+    "phase": "done",
+    "exit_reason": null,
+    "next_nodes": [],
+    "checkpoint_id": "1f1d27e8-1f5a-6f5c-8006-9b88102e1dc4",
+    "updated_at": "2026-10-28T03:20:21.327036Z",
+    "title": "todo_cli",
+    "product": "todo_cli",
+    "parent_thread": null,
+    "usd": 0.0088,
+    "waiting": null,
+    "error": null
+  },
+  {
+    "root": "SCIO",
+    "thread_id": "run-old0001",
+    "kind": "task",
+    "status": "error",
+    "graph": "t0",
+    "phase": "unknown",
+    "exit_reason": null,
+    "next_nodes": [],
+    "checkpoint_id": "1f0a0000-0000-6000-8000-000000000009",
+    "updated_at": "2026-10-16T03:20:37.014061Z",
+    "title": "",
+    "product": null,
+    "parent_thread": null,
+    "usd": 0.0,
+    "waiting": null,
+    "error": "1 validation error for SCIOState: task Field required"
+  }
+]

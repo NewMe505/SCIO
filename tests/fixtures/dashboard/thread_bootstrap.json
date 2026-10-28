@@ -1,0 +1,176 @@
+{
+  "summary": {
+    "root": "graphcalc-run",
+    "thread_id": "new-1",
+    "kind": "bootstrap",
+    "status": "done",
+    "graph": "product_new",
+    "phase": "done",
+    "exit_reason": null,
+    "next_nodes": [],
+    "checkpoint_id": "1f1d27e8-1f5a-6f5c-8006-9b88102e1dc4",
+    "updated_at": "2026-10-28T03:20:21.327036Z",
+    "title": "todo_cli",
+    "product": "todo_cli",
+    "parent_thread": null,
+    "usd": 0.0088,
+    "waiting": null,
+    "error": null
+  },
+  "build": null,
+  "bootstrap": {
+    "thread_id": "new-1",
+    "target_dir": "/work/graphcalc-run/product",
+    "phase": "done",
+    "exit_reason": null,
+    "product": "todo_cli",
+    "features": 3,
+    "revisions": 0,
+    "bootstrap_commit": "64a835e9ee6d63740741b218a68275407819b222",
+    "repo_url": null,
+    "usd": 0.0088,
+    "calls_by_role": {
+      "interviewer": 1,
+      "product_planner": 1
+    },
+    "usd_by_role": {
+      "product_planner": 0.0061,
+      "interviewer": 0.0027
+    },
+    "timeline": [
+      "`03:20:19` **interviewer** interview: 3 questions",
+      "`03:20:19` **product_planner** spec: 3 features, stack python",
+      "`03:20:19` **system** product_name 'Todo CLI' normalised to 'todo_cli'",
+      "`03:20:19` **system** feature 'F1' renumbered to P1",
+      "`03:20:19` **system** feature 'F2' renumbered to P2",
+      "`03:20:19` **system** walking skeleton inserted as P1; later features renumbered",
+      "`03:20:19` **human** PRODUCT.md approved",
+      "`03:20:19` **system** git repository initialised on main",
+      "`03:20:19` **system** scaffold written: 20 files for stack python",
+      "`03:20:21` **tester** bootstrap checks green: lint clean, smoke test passed",
+      "`03:20:21` **system** bootstrap commit 64a835e9ee6d"
+    ]
+  },
+  "task": null,
+  "timeline": [
+    {
+      "at": "2026-10-28T03:20:19.549772Z",
+      "source": "interviewer",
+      "kind": "fact",
+      "text": "interview: 3 questions"
+    },
+    {
+      "at": "2026-10-28T03:20:19.576269Z",
+      "source": "product_planner",
+      "kind": "fact",
+      "text": "spec: 3 features, stack python"
+    },
+    {
+      "at": "2026-10-28T03:20:19.576269Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "product_name 'Todo CLI' normalised to 'todo_cli'"
+    },
+    {
+      "at": "2026-10-28T03:20:19.576269Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "feature 'F1' renumbered to P1"
+    },
+    {
+      "at": "2026-10-28T03:20:19.576269Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "feature 'F2' renumbered to P2"
+    },
+    {
+      "at": "2026-10-28T03:20:19.576269Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "walking skeleton inserted as P1; later features renumbered"
+    },
+    {
+      "at": "2026-10-28T03:20:19.587874Z",
+      "source": "human",
+      "kind": "fact",
+      "text": "PRODUCT.md approved"
+    },
+    {
+      "at": "2026-10-28T03:20:19.705017Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "git repository initialised on main"
+    },
+    {
+      "at": "2026-10-28T03:20:19.718986Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "scaffold written: 20 files for stack python"
+    },
+    {
+      "at": "2026-10-28T03:20:21.013863Z",
+      "source": "tester",
+      "kind": "fact",
+      "text": "bootstrap checks green: lint clean, smoke test passed"
+    },
+    {
+      "at": "2026-10-28T03:20:21.322977Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "bootstrap commit 64a835e9ee6d"
+    }
+  ],
+  "cost_by_role": {
+    "product_planner": 0.0061,
+    "interviewer": 0.0027
+  },
+  "progress": {
+    "product": "todo_cli",
+    "stack": "python",
+    "bootstrap_commit": "64a835e9ee6d63740741b218a68275407819b222",
+    "build_thread": null,
+    "milestones": [],
+    "features": [
+      {
+        "id": "P1",
+        "description": "Walking skeleton: the app starts, answers --version, and one smoke test passes",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      },
+      {
+        "id": "P2",
+        "description": "Add and list todos",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      },
+      {
+        "id": "P3",
+        "description": "Tags and JSON export",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      }
+    ],
+    "updated": "2026-10-28T03:20:21+00:00"
+  },
+  "milestone_title": null,
+  "milestone_features": [],
+  "feature_threads": [],
+  "cost_by_feature": {},
+  "integration": [],
+  "integration_ok": null,
+  "pr_number": null,
+  "pr_url": null,
+  "verify_lines": []
+}

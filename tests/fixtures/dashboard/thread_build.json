@@ -1,0 +1,278 @@
+{
+  "summary": {
+    "root": "graphcalc-run",
+    "thread_id": "build-todo_cli-m1",
+    "kind": "build",
+    "status": "waiting",
+    "graph": "product_build",
+    "phase": "merge_wait",
+    "exit_reason": null,
+    "next_nodes": [
+      "merge_wait"
+    ],
+    "checkpoint_id": "1f1d27e8-b4f5-65c8-8008-5741adbde88f",
+    "updated_at": "2026-10-28T03:20:37.014061Z",
+    "title": "M1: Milestone 1",
+    "product": "todo_cli",
+    "parent_thread": null,
+    "usd": 0.0824,
+    "waiting": {
+      "node": "merge_wait",
+      "question": "Milestone M1 (Milestone 1) is ready. Reply 'merge' to merge the milestone branch into main locally; reply 'stop' to end the build.",
+      "interrupt_id": "38c82de144f91c5c26c63a09a86324c1",
+      "payload": {
+        "question": "Milestone M1 (Milestone 1) is ready. Reply 'merge' to merge the milestone branch into main locally; reply 'stop' to end the build.",
+        "pr": {
+          "number": null,
+          "url": null,
+          "body_path": ".scio/product/milestones/M1-pr.md"
+        },
+        "branch": "milestone/1",
+        "features": [
+          "P1: passed",
+          "P2: passed"
+        ],
+        "cost_usd": 0.0824,
+        "resume": "scio build --product <dir> --decision \"<merged|stop>\""
+      }
+    },
+    "error": null
+  },
+  "build": {
+    "thread_id": "build-todo_cli-m1",
+    "product_dir": "/work/graphcalc-run/product",
+    "phase": "merge_wait",
+    "exit_reason": null,
+    "milestones_done": [],
+    "current_milestone": "M1",
+    "features": [
+      {
+        "feature_id": "P1",
+        "attempt": 1,
+        "thread_id": "build-todo_cli-m1-p1-a1",
+        "tier": "T0",
+        "status": "passed",
+        "exit_reason": "success",
+        "commit": "2010f98cb792fdaa1334152f7bb0dd0ea1264acd",
+        "usd": 0.023,
+        "iterations": 1,
+        "escalations": 0,
+        "escalations_resolved": 0
+      },
+      {
+        "feature_id": "P2",
+        "attempt": 1,
+        "thread_id": "build-todo_cli-m1-p2-a1",
+        "tier": "T1",
+        "status": "passed",
+        "exit_reason": "success",
+        "commit": "bd1df219e98d9f29a6c12024954b445ab92bfaf8",
+        "usd": 0.0445,
+        "iterations": 1,
+        "escalations": 0,
+        "escalations_resolved": 0
+      }
+    ],
+    "orchestrator_usd": 0.0149,
+    "features_usd": 0.0675,
+    "by_role": {
+      "product_planner": 0.0061,
+      "milestone_gate": 0.0032,
+      "milestone_planner": 0.0029,
+      "interviewer": 0.0027
+    },
+    "timeline": [
+      "`03:20:21` **system** loaded todo_cli: 3 features, 3 open, 0 milestone(s) done",
+      "`03:20:21` **system** sandbox: local; no Docker daemon reachable, so the network and the registry allowlist are not enforced",
+      "`03:20:24` **system** product environment created at .scio/sandbox/venv (registry allowlist: pypi.org, files.pythonhosted.org)",
+      "`03:20:24` **milestone_planner** M1 Milestone 1: P1@T0, P2@T1",
+      "`03:20:24` **system** branch milestone/1 at beeea3ff3895",
+      "`03:20:24` **system** offline: 2 issue files committed on milestone/1",
+      "`03:20:24` **system** P1: starting thread build-todo_cli-m1-p1-a1 at T0",
+      "`03:20:29` **system** P1 passed at T0 in 1 iteration(s), $0.0230, 0 escalation(s); milestone/1 fast-forwarded to 2010f98cb792",
+      "`03:20:29` **system** P2: starting thread build-todo_cli-m1-p2-a1 at T1",
+      "`03:20:34` **system** P2 passed at T1 in 1 iteration(s), $0.0445, 0 escalation(s); milestone/1 fast-forwarded to bd1df219e98d",
+      "`03:20:36` **tester** integration checks on milestone/1: green",
+      "`03:20:37` **milestone_gate** milestone gate pass: scripted gate verdict",
+      "`03:20:37` **system** offline: milestone PR body written to .scio/product/milestones/M1-pr.md"
+    ],
+    "human_notes": []
+  },
+  "bootstrap": null,
+  "task": null,
+  "timeline": [
+    {
+      "at": "2026-10-28T03:20:21.432660Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "loaded todo_cli: 3 features, 3 open, 0 milestone(s) done"
+    },
+    {
+      "at": "2026-10-28T03:20:21.438823Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "sandbox: local; no Docker daemon reachable, so the network and the registry allowlist are not enforced"
+    },
+    {
+      "at": "2026-10-28T03:20:24.223177Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "product environment created at .scio/sandbox/venv (registry allowlist: pypi.org, files.pythonhosted.org)"
+    },
+    {
+      "at": "2026-10-28T03:20:24.232350Z",
+      "source": "milestone_planner",
+      "kind": "fact",
+      "text": "M1 Milestone 1: P1@T0, P2@T1"
+    },
+    {
+      "at": "2026-10-28T03:20:24.374673Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "branch milestone/1 at beeea3ff3895"
+    },
+    {
+      "at": "2026-10-28T03:20:24.784001Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "offline: 2 issue files committed on milestone/1"
+    },
+    {
+      "at": "2026-10-28T03:20:24.806362Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "P1: starting thread build-todo_cli-m1-p1-a1 at T0"
+    },
+    {
+      "at": "2026-10-28T03:20:29.432327Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "P1 passed at T0 in 1 iteration(s), $0.0230, 0 escalation(s); milestone/1 fast-forwarded to 2010f98cb792"
+    },
+    {
+      "at": "2026-10-28T03:20:29.454345Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "P2: starting thread build-todo_cli-m1-p2-a1 at T1"
+    },
+    {
+      "at": "2026-10-28T03:20:34.136596Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "P2 passed at T1 in 1 iteration(s), $0.0445, 0 escalation(s); milestone/1 fast-forwarded to bd1df219e98d"
+    },
+    {
+      "at": "2026-10-28T03:20:36.968917Z",
+      "source": "tester",
+      "kind": "fact",
+      "text": "integration checks on milestone/1: green"
+    },
+    {
+      "at": "2026-10-28T03:20:37.006041Z",
+      "source": "milestone_gate",
+      "kind": "decision",
+      "text": "milestone gate pass: scripted gate verdict"
+    },
+    {
+      "at": "2026-10-28T03:20:37.014061Z",
+      "source": "system",
+      "kind": "fact",
+      "text": "offline: milestone PR body written to .scio/product/milestones/M1-pr.md"
+    }
+  ],
+  "cost_by_role": {
+    "coder": 0.0363,
+    "documenter": 0.0159,
+    "product_planner": 0.0061,
+    "gate": 0.0057,
+    "planner": 0.0039,
+    "explorer": 0.0037,
+    "milestone_gate": 0.0032,
+    "milestone_planner": 0.0029,
+    "interviewer": 0.0027,
+    "reviewer": 0.0019
+  },
+  "progress": {
+    "product": "todo_cli",
+    "stack": "python",
+    "bootstrap_commit": "64a835e9ee6d63740741b218a68275407819b222",
+    "build_thread": null,
+    "milestones": [],
+    "features": [
+      {
+        "id": "P1",
+        "description": "Walking skeleton: the app starts, answers --version, and one smoke test passes",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      },
+      {
+        "id": "P2",
+        "description": "Add and list todos",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      },
+      {
+        "id": "P3",
+        "description": "Tags and JSON export",
+        "status": "todo",
+        "commit": null,
+        "thread": null,
+        "tier": null,
+        "issue": null,
+        "usd": 0.0
+      }
+    ],
+    "updated": "2026-10-28T03:20:21+00:00"
+  },
+  "milestone_title": "Milestone 1",
+  "milestone_features": [
+    "P1",
+    "P2"
+  ],
+  "feature_threads": [
+    {
+      "feature_id": "P1",
+      "attempt": 1,
+      "thread_id": "build-todo_cli-m1-p1-a1",
+      "status": "passed",
+      "present": true
+    },
+    {
+      "feature_id": "P2",
+      "attempt": 1,
+      "thread_id": "build-todo_cli-m1-p2-a1",
+      "status": "passed",
+      "present": true
+    }
+  ],
+  "cost_by_feature": {
+    "P1": 0.023,
+    "P2": 0.0445
+  },
+  "integration": [
+    "[lint] clean",
+    "[tests] passed",
+    ".....                                                                    [100%]",
+    "5 passed in 0.14s",
+    "",
+    "[coverage] passed: 5 passed in 0.17s",
+    "[build] skipped: tool absent (python -m build)",
+    "[audit] skipped: tool absent (python -m pip_audit)",
+    "[secrets] clean",
+    "[release files] present: README.md, CHANGELOG.md, LICENSE, Dockerfile",
+    "[readme] passed: 1 run command(s)",
+    "[acceptance] passed (cli): 1 passed in 0.08s"
+  ],
+  "integration_ok": true,
+  "pr_number": null,
+  "pr_url": null,
+  "verify_lines": []
+}

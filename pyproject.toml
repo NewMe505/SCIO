@@ -21,6 +21,8 @@ dependencies = [
 otlp = ["opentelemetry-exporter-otlp-proto-http>=1.30"]
 postgres = ["langgraph-checkpoint-postgres>=3.0,<4"]
 e2b = ["e2b>=2.0,<3"]
+# the read-only live dashboard, `scio dashboard` (issue #68, ADR 0017)
+dashboard = ["fastapi>=0.162,<1", "uvicorn[standard]>=0.54,<1"]
 
 [dependency-groups]
 dev = [
