@@ -173,5 +173,13 @@
   "integration_ok": null,
   "pr_number": null,
   "pr_url": null,
+  "questions": [
+    "Who uses this first, and on what platform?",
+    "Which single workflow must work on day one?",
+    "What is explicitly out of scope for the first release?"
+  ],
+  "revision_notes": [
+    "Drop the export feature; keep tags."
+  ],
   "verify_lines": []
 }

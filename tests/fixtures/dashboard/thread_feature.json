@@ -297,6 +297,8 @@
   "integration_ok": null,
   "pr_number": null,
   "pr_url": null,
+  "questions": [],
+  "revision_notes": [],
   "verify_lines": [
     "[run_tests filter='add_list']",
     "all tests passed: 1 passed, 4 deselected in 0.02s",

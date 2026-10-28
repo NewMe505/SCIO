@@ -275,5 +275,7 @@
   "integration_ok": true,
   "pr_number": null,
   "pr_url": null,
+  "questions": [],
+  "revision_notes": [],
   "verify_lines": []
 }

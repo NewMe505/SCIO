@@ -163,6 +163,11 @@ class ThreadDetail(BaseModel):
     integration_ok: bool | None = None
     pr_number: int | None = None
     pr_url: str | None = None
+    # ---- bootstrap threads ----
+    questions: list[str] = Field(default_factory=list)
+    """The interview's questions (``ProductState.questions``)."""
+    revision_notes: list[str] = Field(default_factory=list)
+    """The human's notes on each rejected draft, one per revision round."""
     # ---- task threads ----
     verify_lines: list[str] = Field(default_factory=list)
     """The last 60 lines of the ``verify:last`` artifact; empty without one."""
