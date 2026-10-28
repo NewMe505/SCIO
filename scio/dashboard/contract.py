@@ -1,8 +1,9 @@
 """The dashboard's contract (issue #68, ADR 0017), fixed before any layer was built.
 
 The data layer (:mod:`scio.dashboard.data`) implements :class:`DataSource` over the checkpoint
-DBs; the API (:mod:`scio.dashboard.app`, ``create_app(source, *, poll_interval_s=1.0)``) reads
-only through a :class:`DataSource` and serves these models as JSON
+DBs; the API (:mod:`scio.dashboard.app`, ``create_app(source, *, poll_interval_s=1.0,
+static_dir=None, allowed_hosts=("127.0.0.1", "localhost"))``) reads only through a
+:class:`DataSource` and serves these models as JSON
 (``model_dump(mode="json")``); the page (``scio/dashboard/static/``) renders that JSON. The
 example payloads in ``tests/fixtures/dashboard/`` validate against these models
 (``tests/unit/test_dashboard_contract.py``), so the API and page tests need no real data.
@@ -95,7 +96,8 @@ class ThreadSummary(BaseModel):
     """The latest checkpoint's ``ts``."""
     title: str = ""
     """A task: its title; a build: ``M1: <milestone title>`` (the product name before a
-    milestone is planned); a bootstrap: the product name, else the prompt's first 80 chars."""
+    milestone is planned and after the build ends, when the milestone is cleared); a
+    bootstrap: the product name, else the prompt's first 80 chars."""
     product: str | None = None
     """Builds and bootstraps: the spec's name; a feature run: its build's product."""
     parent_thread: str | None = None

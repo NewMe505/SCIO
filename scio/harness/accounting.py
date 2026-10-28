@@ -67,11 +67,19 @@ class CostLedger:
 
     @staticmethod
     def load_entries(path: Path) -> list[CostEntry]:
-        if not path.exists():
+        """Every complete line of ``path``. A run appends one ``<json>\\n`` per call, so a reader
+        racing a live writer (``scio report`` or the dashboard during a build) can see a last
+        line without its newline, cut anywhere, even inside a UTF-8 character. That line is
+        not an entry yet and is left out (I-127); a complete line that does not parse still
+        raises."""
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
             return []
+        complete = data[: data.rfind(b"\n") + 1]
         return [
             CostEntry.model_validate_json(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
+            for line in complete.decode("utf-8").splitlines()
             if line.strip()
         ]
 

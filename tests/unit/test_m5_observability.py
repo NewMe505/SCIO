@@ -76,6 +76,27 @@ def test_cost_ledger_persists_and_reloads(tmp_path: Path) -> None:
     assert CostLedger.load_entries(tmp_path / "missing.jsonl") == []
 
 
+def test_a_torn_last_ledger_line_is_left_out_and_a_corrupt_one_still_raises(
+    tmp_path: Path,
+) -> None:
+    """A reader racing a live run sees the last append half written (I-127): ``scio report``
+    and the dashboard read the complete lines and leave the torn one out."""
+    ledger = CostLedger()
+    path = tmp_path / "t.jsonl"
+    ledger.persist_to(path)
+    ledger.record(
+        role="coder", model="m", provider="fake", usage=Usage(input_tokens=1), usd=0.1, latency_ms=1
+    )
+    whole = path.read_bytes()
+    line = ('{"role": "advisor", "note": "caf' + "é" + '"}').encode()
+    with path.open("ab") as fh:
+        fh.write(line[: line.index(b"\xa9")])  # cut inside the two bytes of the e-acute
+    assert [e.role for e in CostLedger.load_entries(path)] == ["coder"]
+    path.write_bytes(whole + b"not json\n")
+    with pytest.raises(ValueError):
+        CostLedger.load_entries(path)
+
+
 def _state() -> SCIOState:
     ref = ArtifactRef(kind="brief", path="/a/brief.txt", sha256="x", produced_by=Role.SYSTEM)
     return SCIOState(

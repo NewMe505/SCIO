@@ -5,6 +5,7 @@ them, so neither test needs a checkpoint DB."""
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,8 @@ def load_fixture(name: str) -> Any:
 class FixtureDataSource:
     """A DataSource over the fixture payloads. A thread listed in ``threads.json`` without a
     detail fixture gets a detail with its summary only. :meth:`bump` changes a thread's
-    version the way a new checkpoint would."""
+    version the way a new checkpoint would. The versions are guarded by a lock: the server
+    reads them from a worker thread while the test bumps them."""
 
     def __init__(self) -> None:
         self._roots = [Workspace.model_validate(w) for w in load_fixture("roots.json")]
@@ -45,6 +47,7 @@ class FixtureDataSource:
             for t in self._threads
         }
         self.calls: list[str] = []
+        self._lock = threading.Lock()
 
     def _check_root(self, root: str) -> None:
         if root not in {w.name for w in self._roots}:
@@ -77,20 +80,23 @@ class FixtureDataSource:
     def versions(self, root: str) -> dict[str, ThreadVersion]:
         self.calls.append(f"versions:{root}")
         self._check_root(root)
-        return {tid: v for (r, tid), v in self._versions.items() if r == root}
+        with self._lock:
+            return {tid: v for (r, tid), v in self._versions.items() if r == root}
 
     def bump(
         self, root: str, thread_id: str, *, checkpoint: bool = True, ledger_bytes: int = 100
     ) -> None:
         """A new checkpoint for ``thread_id`` (``checkpoint=False``: only a pending write, the
         way a stop arrives) and ledger growth; adds the thread if new."""
-        old = self._versions.get((root, thread_id)) or ThreadVersion(checkpoint_id="new")
-        self._versions[(root, thread_id)] = ThreadVersion(
-            checkpoint_id=old.checkpoint_id + ("+" if checkpoint else ""),
-            writes=old.writes + 1,
-            ledger_bytes=old.ledger_bytes + ledger_bytes,
-        )
+        with self._lock:
+            old = self._versions.get((root, thread_id)) or ThreadVersion(checkpoint_id="new")
+            self._versions[(root, thread_id)] = ThreadVersion(
+                checkpoint_id=old.checkpoint_id + ("+" if checkpoint else ""),
+                writes=old.writes + 1,
+                ledger_bytes=old.ledger_bytes + ledger_bytes,
+            )
 
     def drop(self, root: str, thread_id: str) -> None:
         """The thread disappears (its checkpoints were deleted)."""
-        self._versions.pop((root, thread_id), None)
+        with self._lock:
+            self._versions.pop((root, thread_id), None)
