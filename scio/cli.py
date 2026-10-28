@@ -1,5 +1,5 @@
 """Command line: ``scio run`` and ``scio resume`` (one task), ``scio new``, ``scio build``
-and ``scio status`` (product mode), ``scio report``.
+and ``scio status`` (product mode), ``scio report``, ``scio dashboard``.
 
     scio run --spec task.md --repo <url-or-path> [--issue N] [--sandbox DIR] [--thread ID]
     scio resume --thread ID [--sandbox DIR] [--decision "approved"]
@@ -7,6 +7,7 @@ and ``scio status`` (product mode), ``scio report``.
     scio new --prompt "<idea>" --dir DIR [--gh owner/name]   (resume: --thread ID --decision)
     scio build --product DIR [--gh owner/name] [--thread ID] [--decision "<text>"]
     scio status --product DIR
+    scio dashboard [--root DIR ...] [--port 8765]  # read-only, on 127.0.0.1 (ADR 0017)
 
 The spec file is Markdown: the first ``#`` heading is the title, checkbox lines are the
 acceptance criteria, everything else is the description.
@@ -217,6 +218,48 @@ def _upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+DASHBOARD_HOST = "127.0.0.1"
+"""``scio dashboard`` binds the loopback interface only (ADR 0017): it shows every thread's
+state and costs, and nothing on the network should see that."""
+DASHBOARD_SHUTDOWN_S = 3  # seconds; uvicorn types the bound as int
+"""How long a stopping dashboard waits for its connections. uvicorn's last shutdown step,
+``asyncio.Server.wait_closed``, waits for every client transport, and on Windows one the
+browser reset can stay attached forever, through a second Ctrl+C too (I-132); uvicorn bounds
+that wait only by ``timeout_graceful_shutdown``."""
+
+
+def _dashboard(args: argparse.Namespace) -> int:
+    """``scio dashboard``: a live, read-only view of every thread under the roots (ADR 0017).
+    A root is a directory SCIO ran in; it holds ``.scio/checkpoints.sqlite``."""
+    try:
+        import uvicorn
+
+        from scio.dashboard.app import create_app
+    except ImportError:
+        # `uv sync --extra X` uninstalls every extra it does not name (I-124)
+        print(
+            "scio dashboard needs the dashboard extra: UV_SYSTEM_CERTS=1 uv sync --all-extras "
+            "(or add --extra dashboard to the uv sync you use; extras it omits are removed)",
+            file=sys.stderr,
+        )
+        return 2
+    from scio.dashboard.data import CheckpointDataSource
+
+    source = CheckpointDataSource.from_roots(args.root or [Path(".")])
+    for w in source.roots():
+        note = "" if w.present else " (no checkpoint DB yet: it lists once SCIO runs there)"
+        print(f"root {w.name}: {w.path}{note}")
+    print(f"scio dashboard on http://{DASHBOARD_HOST}:{args.port} (read-only; Ctrl+C stops it)")
+    uvicorn.run(
+        create_app(source),
+        host=DASHBOARD_HOST,
+        port=args.port,
+        log_level="warning",
+        timeout_graceful_shutdown=DASHBOARD_SHUTDOWN_S,
+    )
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     from scio.product.build import progress_summary
     from scio.product.progress import PROGRESS_PATH
@@ -332,7 +375,20 @@ def main(argv: list[str] | None = None) -> int:
         "upgrade", help="product mode: bring an older product up to the current product bar"
     )
     upgrade.add_argument("--product", type=Path, required=True)
+    dash = sub.add_parser(
+        "dashboard", help="a live, read-only view of every thread (needs the dashboard extra)"
+    )
+    dash.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        default=None,
+        help="a directory SCIO ran in (repeatable; default: the current directory)",
+    )
+    dash.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
+    if args.cmd == "dashboard":
+        return _dashboard(args)
     if args.cmd == "new":
         return _new(args)
     if args.cmd == "build":

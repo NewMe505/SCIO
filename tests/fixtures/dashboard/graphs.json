@@ -1,0 +1,103 @@
+[
+  {
+    "name": "product_build",
+    "mermaid": "---\nconfig:\n  flowchart:\n    curve: linear\n---\ngraph TD;\n\t__start__([<p>__start__</p>]):::first\n\tload(load)\n\tplan_milestone(plan_milestone)\n\tissues(issues)\n\tfeature(feature)\n\tintegrate(integrate)\n\tmilestone_gate(milestone_gate)\n\tgate_decision(gate_decision)\n\tmilestone_pr(milestone_pr)\n\tmerge_wait(merge_wait)\n\tupdate_progress(update_progress)\n\trelease_check(release_check)\n\trelease_decision(release_decision)\n\trelease(release)\n\trelease_merge_wait(release_merge_wait)\n\trelease_publish(release_publish)\n\tdone(done)\n\t__end__([<p>__end__</p>]):::last\n\t__start__ --> load;\n\tfeature -. &nbsp;halt&nbsp; .-> done;\n\tfeature -.-> integrate;\n\tgate_decision -. &nbsp;halt&nbsp; .-> done;\n\tgate_decision -. &nbsp;pr&nbsp; .-> milestone_pr;\n\tintegrate -. &nbsp;halt&nbsp; .-> done;\n\tintegrate -. &nbsp;gate&nbsp; .-> milestone_gate;\n\tissues --> feature;\n\tload -. &nbsp;halt&nbsp; .-> done;\n\tload -. &nbsp;plan&nbsp; .-> plan_milestone;\n\tmerge_wait -. &nbsp;halt&nbsp; .-> done;\n\tmerge_wait -. &nbsp;update&nbsp; .-> update_progress;\n\tmilestone_gate -. &nbsp;halt&nbsp; .-> done;\n\tmilestone_gate -.-> gate_decision;\n\tmilestone_gate -. &nbsp;pr&nbsp; .-> milestone_pr;\n\tmilestone_pr --> merge_wait;\n\tplan_milestone -. &nbsp;halt&nbsp; .-> done;\n\tplan_milestone -.-> issues;\n\tplan_milestone -. &nbsp;release&nbsp; .-> release_check;\n\trelease -. &nbsp;merge_wait&nbsp; .-> release_merge_wait;\n\trelease -. &nbsp;publish&nbsp; .-> release_publish;\n\trelease_check -.-> done;\n\trelease_check -. &nbsp;decide&nbsp; .-> release_decision;\n\trelease_decision -.-> done;\n\trelease_decision -.-> release;\n\trelease_merge_wait -.-> done;\n\trelease_merge_wait -. &nbsp;publish&nbsp; .-> release_publish;\n\trelease_publish --> done;\n\tupdate_progress -.-> done;\n\tupdate_progress -. &nbsp;plan&nbsp; .-> plan_milestone;\n\tupdate_progress -. &nbsp;release&nbsp; .-> release_check;\n\tdone --> __end__;\n\tfeature -.-> feature;\n\tmerge_wait -.-> merge_wait;\n\trelease_decision -.-> release_decision;\n\trelease_merge_wait -.-> release_merge_wait;\n\tclassDef default fill:#f2f0ff,line-height:1.2\n\tclassDef first fill-opacity:0\n\tclassDef last fill:#bfb6fc\n",
+    "nodes": [
+      "load",
+      "plan_milestone",
+      "issues",
+      "feature",
+      "integrate",
+      "milestone_gate",
+      "gate_decision",
+      "milestone_pr",
+      "merge_wait",
+      "update_progress",
+      "release_check",
+      "release_decision",
+      "release",
+      "release_merge_wait",
+      "release_publish",
+      "done"
+    ]
+  },
+  {
+    "name": "product_new",
+    "mermaid": "---\nconfig:\n  flowchart:\n    curve: linear\n---\ngraph TD;\n\t__start__([<p>__start__</p>]):::first\n\tinterview(interview)\n\tanswers(answers)\n\tspecify(specify)\n\tapproval(approval)\n\tbootstrap(bootstrap)\n\tpublish(publish)\n\tdone(done)\n\t__end__([<p>__end__</p>]):::last\n\t__start__ -.-> bootstrap;\n\t__start__ -.-> interview;\n\tanswers --> specify;\n\tapproval -.-> bootstrap;\n\tapproval -. &nbsp;halt&nbsp; .-> done;\n\tapproval -.-> specify;\n\tbootstrap -.-> done;\n\tbootstrap -.-> publish;\n\tinterview -.-> answers;\n\tinterview -. &nbsp;halt&nbsp; .-> done;\n\tpublish --> done;\n\tspecify -.-> approval;\n\tspecify -. &nbsp;halt&nbsp; .-> done;\n\tdone --> __end__;\n\tclassDef default fill:#f2f0ff,line-height:1.2\n\tclassDef first fill-opacity:0\n\tclassDef last fill:#bfb6fc\n",
+    "nodes": [
+      "interview",
+      "answers",
+      "specify",
+      "approval",
+      "bootstrap",
+      "publish",
+      "done"
+    ]
+  },
+  {
+    "name": "t0",
+    "mermaid": "---\nconfig:\n  flowchart:\n    curve: linear\n---\ngraph TD;\n\t__start__([<p>__start__</p>]):::first\n\tintake(intake)\n\troute(route)\n\tprepare_repo(prepare_repo)\n\tverify(verify)\n\tgit_checkpoint(git_checkpoint)\n\tdocument(document)\n\tgate(gate)\n\tpr_ready(pr_ready)\n\tmerge_wait(merge_wait)\n\thalt(halt)\n\tt0_loop(t0_loop)\n\t__end__([<p>__end__</p>]):::last\n\t__start__ --> intake;\n\tdocument -.-> gate;\n\tdocument -.-> halt;\n\tgate -.-> halt;\n\tgate -.-> pr_ready;\n\tgit_checkpoint -.-> document;\n\tintake --> route;\n\tpr_ready --> merge_wait;\n\tprepare_repo -.-> t0_loop;\n\troute -.-> halt;\n\troute -. &nbsp;T0&nbsp; .-> prepare_repo;\n\tt0_loop -.-> halt;\n\tt0_loop -.-> verify;\n\tverify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;\n\tverify -.-> halt;\n\tverify -.-> t0_loop;\n\thalt --> __end__;\n\tmerge_wait --> __end__;\n\tclassDef default fill:#f2f0ff,line-height:1.2\n\tclassDef first fill-opacity:0\n\tclassDef last fill:#bfb6fc\n",
+    "nodes": [
+      "intake",
+      "route",
+      "prepare_repo",
+      "verify",
+      "git_checkpoint",
+      "document",
+      "gate",
+      "pr_ready",
+      "merge_wait",
+      "halt",
+      "t0_loop"
+    ]
+  },
+  {
+    "name": "t1",
+    "mermaid": "---\nconfig:\n  flowchart:\n    curve: linear\n---\ngraph TD;\n\t__start__([<p>__start__</p>]):::first\n\tintake(intake)\n\troute(route)\n\tprepare_repo(prepare_repo)\n\tverify(verify)\n\tgit_checkpoint(git_checkpoint)\n\tdocument(document)\n\tgate(gate)\n\tpr_ready(pr_ready)\n\tmerge_wait(merge_wait)\n\thalt(halt)\n\tplan(plan)\n\tpost_plan(post_plan)\n\timplement(implement)\n\tdebug(debug)\n\tadvise(advise)\n\treview(review)\n\tlocalize(localize)\n\ttriage(triage)\n\t__end__([<p>__end__</p>]):::last\n\t__start__ --> intake;\n\tadvise -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;\n\tadvise -.-> halt;\n\tadvise -.-> implement;\n\tadvise -.-> plan;\n\tdebug -.-> halt;\n\tdebug -.-> verify;\n\tdocument -.-> gate;\n\tdocument -.-> halt;\n\tgate -.-> halt;\n\tgate -.-> plan;\n\tgate -.-> pr_ready;\n\tgit_checkpoint -.-> document;\n\tgit_checkpoint -.-> implement;\n\tgit_checkpoint -.-> review;\n\timplement -.-> halt;\n\timplement -.-> verify;\n\tintake --> route;\n\tlocalize -.-> halt;\n\tlocalize -. &nbsp;verify&nbsp; .-> implement;\n\tplan -.-> halt;\n\tplan -.-> post_plan;\n\tpost_plan -.-> implement;\n\tpost_plan -.-> localize;\n\tpr_ready --> merge_wait;\n\tprepare_repo -.-> plan;\n\treview -.-> document;\n\treview -.-> halt;\n\troute -.-> halt;\n\troute -. &nbsp;T1&nbsp; .-> prepare_repo;\n\ttriage -.-> advise;\n\ttriage -.-> debug;\n\ttriage -.-> halt;\n\tverify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;\n\tverify -.-> halt;\n\tverify -.-> triage;\n\thalt --> __end__;\n\tmerge_wait --> __end__;\n\tclassDef default fill:#f2f0ff,line-height:1.2\n\tclassDef first fill-opacity:0\n\tclassDef last fill:#bfb6fc\n",
+    "nodes": [
+      "intake",
+      "route",
+      "prepare_repo",
+      "verify",
+      "git_checkpoint",
+      "document",
+      "gate",
+      "pr_ready",
+      "merge_wait",
+      "halt",
+      "plan",
+      "post_plan",
+      "implement",
+      "debug",
+      "advise",
+      "review",
+      "localize",
+      "triage"
+    ]
+  },
+  {
+    "name": "t2",
+    "mermaid": "---\nconfig:\n  flowchart:\n    curve: linear\n---\ngraph TD;\n\t__start__([<p>__start__</p>]):::first\n\tintake(intake)\n\troute(route)\n\tprepare_repo(prepare_repo)\n\tverify(verify)\n\tgit_checkpoint(git_checkpoint)\n\tdocument(document)\n\tgate(gate)\n\tpr_ready(pr_ready)\n\tmerge_wait(merge_wait)\n\thalt(halt)\n\tplan(plan)\n\tpost_plan(post_plan)\n\timplement(implement)\n\tdebug(debug)\n\tadvise(advise)\n\treview(review)\n\tscope(scope)\n\texplore(explore)\n\ttriage(triage)\n\t__end__([<p>__end__</p>]):::last\n\t__start__ --> intake;\n\tadvise -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;\n\tadvise -.-> halt;\n\tadvise -.-> implement;\n\tadvise -.-> plan;\n\tdebug -.-> halt;\n\tdebug -.-> verify;\n\tdocument -.-> gate;\n\tdocument -.-> halt;\n\texplore --> plan;\n\tgate -.-> halt;\n\tgate -.-> plan;\n\tgate -.-> pr_ready;\n\tgit_checkpoint -.-> document;\n\tgit_checkpoint -.-> implement;\n\tgit_checkpoint -.-> review;\n\timplement -.-> halt;\n\timplement -.-> verify;\n\tintake --> route;\n\tplan -.-> halt;\n\tplan -.-> post_plan;\n\tpost_plan --> implement;\n\tpr_ready --> merge_wait;\n\tprepare_repo -.-> plan;\n\tprepare_repo -.-> scope;\n\treview -.-> document;\n\treview -.-> halt;\n\troute -.-> halt;\n\troute -. &nbsp;T2&nbsp; .-> prepare_repo;\n\tscope -.-> explore;\n\tscope -.-> halt;\n\ttriage -.-> advise;\n\ttriage -.-> debug;\n\ttriage -.-> halt;\n\tverify -. &nbsp;checkpoint&nbsp; .-> git_checkpoint;\n\tverify -.-> halt;\n\tverify -.-> triage;\n\thalt --> __end__;\n\tmerge_wait --> __end__;\n\tclassDef default fill:#f2f0ff,line-height:1.2\n\tclassDef first fill-opacity:0\n\tclassDef last fill:#bfb6fc\n",
+    "nodes": [
+      "intake",
+      "route",
+      "prepare_repo",
+      "verify",
+      "git_checkpoint",
+      "document",
+      "gate",
+      "pr_ready",
+      "merge_wait",
+      "halt",
+      "plan",
+      "post_plan",
+      "implement",
+      "debug",
+      "advise",
+      "review",
+      "scope",
+      "explore",
+      "triage"
+    ]
+  }
+]

@@ -179,8 +179,10 @@ def tool_signals(
 
 
 def _read_artifact(ref: ArtifactRef) -> str | None:
+    """A transcript of a thread that may still be running: a file caught mid-write can end
+    inside a UTF-8 character, which is replaced rather than raised (I-127)."""
     try:
-        return Path(ref.path).read_text(encoding="utf-8")
+        return Path(ref.path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 

@@ -1089,3 +1089,37 @@ def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(
     err = capsys.readouterr().err
     assert "scio build stopped on GitHub" in err and "product-mode" in err
     assert "run the same scio build command again to resume" in err and "Traceback" not in err
+
+
+def test_report_reads_a_build_that_stopped_before_its_first_feature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A build that died before any feature ran (graphcalc's S4 died at ``issues``) still
+    reports as a build: ``initial_build_state`` writes every field, ``feature_runs`` included,
+    into the first checkpoint, which ``scio report`` and the dashboard classify by (I-121)."""
+    from scio.cli import main
+
+    inner = ScriptedResponder()
+
+    def planner_dies(req: CompletionRequest) -> Any:
+        schema = req.output_schema or {}
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        if "milestone_title" in props:
+            raise Crash("killed at the milestone planner")
+        return inner(req)
+
+    harness = _bootstrap(tmp_path, planner_dies)
+    thread = build_thread_id(PRODUCT)
+    ctx = _ctx(tmp_path, harness, thread)
+    try:
+        with pytest.raises(Crash):
+            run_build(ctx)
+    finally:
+        ctx.close()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
+    monkeypatch.setenv("SCIO_CHECKPOINT_DSN", harness.settings.checkpoint_dsn)
+    capsys.readouterr()
+    assert main(["report", "--thread", thread, "--out", str(tmp_path / "reports")]) == 0
+    out = capsys.readouterr().out
+    assert f"# Product build {thread}" in out and "| none |" in out

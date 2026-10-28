@@ -1,0 +1,16 @@
+[
+  {
+    "name": "SCIO",
+    "path": "/work/SCIO",
+    "checkpoints": "/work/SCIO/.scio/checkpoints.sqlite",
+    "ledger_dir": "/work/SCIO/.scio/ledger",
+    "present": true
+  },
+  {
+    "name": "graphcalc-run",
+    "path": "/work/graphcalc-run",
+    "checkpoints": "/work/graphcalc-run/.scio/checkpoints.sqlite",
+    "ledger_dir": "/work/graphcalc-run/.scio/ledger",
+    "present": true
+  }
+]

@@ -26,6 +26,8 @@ PACKAGES = [
     "scio.graph",
     "scio.graph.build",
     "scio.cli",
+    "scio.dashboard.contract",  # core dependencies only; app.py needs the dashboard extra
+    "scio.dashboard.data",
     "evals",
     "evals.runner",
     "evals.tune",
