@@ -36,6 +36,7 @@
         "resume": "scio build --product <dir> --decision \"<merged|stop>\""
       }
     },
+    "crash": null,
     "error": null
   },
   "build": {

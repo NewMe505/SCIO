@@ -79,12 +79,16 @@ class FixtureDataSource:
         self._check_root(root)
         return {tid: v for (r, tid), v in self._versions.items() if r == root}
 
-    def bump(self, root: str, thread_id: str, *, ledger_bytes: int = 100) -> None:
-        """A new checkpoint (or ledger growth) for ``thread_id``; adds the thread if new."""
-        old = self._versions.get((root, thread_id))
+    def bump(
+        self, root: str, thread_id: str, *, checkpoint: bool = True, ledger_bytes: int = 100
+    ) -> None:
+        """A new checkpoint for ``thread_id`` (``checkpoint=False``: only a pending write, the
+        way a stop arrives) and ledger growth; adds the thread if new."""
+        old = self._versions.get((root, thread_id)) or ThreadVersion(checkpoint_id="new")
         self._versions[(root, thread_id)] = ThreadVersion(
-            checkpoint_id=(old.checkpoint_id if old else "new") + "+",
-            ledger_bytes=(old.ledger_bytes if old else 0) + ledger_bytes,
+            checkpoint_id=old.checkpoint_id + ("+" if checkpoint else ""),
+            writes=old.writes + 1,
+            ledger_bytes=old.ledger_bytes + ledger_bytes,
         )
 
     def drop(self, root: str, thread_id: str) -> None:

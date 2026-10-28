@@ -31,17 +31,20 @@ from scio.product.progress import ProgressFile
 from scio.product.report import BootstrapReport, ProductReport
 
 ThreadKind = Literal["build", "bootstrap", "task"]
-"""``build``: a ``scio build`` thread (its channels hold ``feature_runs``); ``bootstrap``: a
-``scio new`` thread (``target_dir``); ``task``: every other thread, a ``scio run`` or a feature
-run inside a build. Decided by the checkpoint's channels, never by the name: the same rules as
-``scio report`` (I-066, I-108)."""
+"""``build``: a ``scio build`` thread (its channels hold ``feature_runs`` or ``product_dir``,
+the build's required input, so a build that stopped before its first feature still counts);
+``bootstrap``: a ``scio new`` thread (``target_dir``); ``task``: every other thread, a
+``scio run`` or a feature run inside a build. Decided by the checkpoint's channels, never by
+the name: the same rules as ``scio report`` (I-066, I-108)."""
 
-ThreadStatus = Literal["in_progress", "waiting", "done", "halted", "error"]
-"""Derived once, by the data layer, so the API and the page never re-derive it: ``error`` when
-the checkpoint could not be read with its kind's model; ``waiting`` when a stop is pending;
-``halted`` when ``exit_reason`` is set and is not ``success``, or the phase is ``halted``;
-``done`` when the phase is ``done``; otherwise ``in_progress``. A process that crashed
-mid-run also reads ``in_progress``: ``updated_at`` says how long it has been quiet."""
+ThreadStatus = Literal["in_progress", "waiting", "crashed", "done", "halted", "error"]
+"""Derived once, by the data layer, so the API and the page never re-derive it, in this order:
+``error`` when the checkpoint could not be read with its kind's model; ``crashed`` when the
+latest checkpoint has a pending ``__error__`` write (the process died in a node; a resume
+clears it); ``waiting`` when a stop is pending (an ``__interrupt__`` write); ``halted`` when
+``exit_reason`` is set and is not ``success``, or the phase is ``halted``; ``done`` when the
+phase is ``done``; otherwise ``in_progress``. A process killed without an exception also
+reads ``in_progress``: ``updated_at`` says how long it has been quiet."""
 
 
 class Workspace(BaseModel):
@@ -102,6 +105,9 @@ class ThreadSummary(BaseModel):
     """The figure ``scio report`` prints for the thread: a build's total (features plus
     orchestrator), a bootstrap's ``usd``, a task's ``usd_used``."""
     waiting: StopInfo | None = None
+    crash: str | None = None
+    """The pending ``__error__`` write's value as text (status ``crashed``), at most 2,000
+    characters."""
     error: str | None = None
     """Why the checkpoint could not be read; the row still lists (status ``error``)."""
 
@@ -180,6 +186,10 @@ class ThreadVersion(BaseModel):
 
     checkpoint_id: str
     """The thread's latest checkpoint id."""
+    writes: int = 0
+    """The thread's rows in the ``writes`` table. A stop arrives as a pending write on a
+    checkpoint that already exists, so the checkpoint id alone never shows a thread starting
+    to wait; nor a crash, nor a parallel task's progress."""
     ledger_bytes: int = 0
     """The size of the thread's cost ledger file; 0 when there is none."""
 
@@ -227,6 +237,6 @@ class DataSource(Protocol):
     def graphs(self) -> list[GraphDiagram]: ...
 
     def versions(self, root: str) -> dict[str, ThreadVersion]:
-        """Thread id -> its version: one query and one ``stat`` per ledger, cheap enough to
-        call every second. Raises :class:`UnknownRoot`."""
+        """Thread id -> its version: two grouped queries (checkpoints, writes) and one
+        ``stat`` per ledger, cheap enough to call every second. Raises :class:`UnknownRoot`."""
         ...

@@ -17,6 +17,7 @@
     "parent_thread": null,
     "usd": 0.4123,
     "waiting": null,
+    "crash": null,
     "error": null
   },
   {
@@ -56,6 +57,7 @@
         "resume": "scio build --product <dir> --decision \"<merged|stop>\""
       }
     },
+    "crash": null,
     "error": null
   },
   {
@@ -74,6 +76,7 @@
     "parent_thread": "build-todo_cli-m1",
     "usd": 0.04445600000000001,
     "waiting": null,
+    "crash": null,
     "error": null
   },
   {
@@ -92,6 +95,7 @@
     "parent_thread": "build-todo_cli-m1",
     "usd": 0.023031999999999997,
     "waiting": null,
+    "crash": null,
     "error": null
   },
   {
@@ -110,6 +114,28 @@
     "parent_thread": null,
     "usd": 0.0088,
     "waiting": null,
+    "crash": null,
+    "error": null
+  },
+  {
+    "root": "SCIO",
+    "thread_id": "build-demo-m1",
+    "kind": "build",
+    "status": "crashed",
+    "graph": "product_build",
+    "phase": "issues",
+    "exit_reason": null,
+    "next_nodes": [
+      "issues"
+    ],
+    "checkpoint_id": "1f1d27e9-0000-6000-8003-000000000002",
+    "updated_at": "2026-10-28T01:20:37.014061Z",
+    "title": "M1: Server skeleton",
+    "product": "demo",
+    "parent_thread": null,
+    "usd": 0.0312,
+    "waiting": null,
+    "crash": "GitHubError(\"gh issue create -R owner/demo failed (1): could not add label: 'product-mode' not found\")",
     "error": null
   },
   {
@@ -128,6 +154,7 @@
     "parent_thread": null,
     "usd": 0.0,
     "waiting": null,
+    "crash": null,
     "error": "1 validation error for SCIOState: task Field required"
   }
 ]
