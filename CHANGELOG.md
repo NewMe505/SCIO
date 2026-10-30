@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- The local pre-push check runs the tests on 8 workers (`uv run python -m pytest -n 8`), as CI runs them in parallel; a serial run took 14 to 28 minutes per push (issue #73, the owner's decision).
+
 ### Added
 - `scio dashboard [--root DIR ...] [--port 8765]` (issue #68, ADR 0017): a live, read-only web view of every SCIO thread across workspaces, on 127.0.0.1 only. A threads list with the stop waiting for you and crashed threads; the build view (the milestone graph with the current step lit, feature runs with tier, status, iterations, escalations, cost and links to their threads, integration lines, the PR, the timeline, cost by role and by feature); the feature and bootstrap views. It reads the checkpoint DB with `mode=ro` connections, the cost ledgers and `progress.json`, reuses the `scio report` builders, and pushes changes over a WebSocket. Plain HTML/JS with no build step; the optional `dashboard` extra (FastAPI, uvicorn) installs it.
 - `docs/OBSERVABILITY.md`: the ways to watch SCIO (GitHub, an OpenTelemetry trace viewer with `SCIO_OTEL_EXPORTER=otlp`, the dashboard, the CLI views).
