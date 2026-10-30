@@ -10,7 +10,9 @@ persistence, the role's static system prompt from a file, the messages on stdin,
 explorer) go through :class:`scio.loop.claude_code_worker.ClaudeCodeWorker` instead.
 
 The subprocess environment drops ``CLAUDECODE`` (print mode refuses to nest otherwise) and
-``ANTHROPIC_API_KEY`` (which would shadow the subscription login).
+``ANTHROPIC_API_KEY`` (which would shadow the subscription login). A worker turn hands the
+runner its own environment, built on the same one, so its Bash commands run the product's
+interpreter rather than SCIO's (I-114).
 """
 
 from __future__ import annotations
@@ -54,7 +56,9 @@ class ClaudeRunResult:
 
 
 Runner = Callable[..., ClaudeRunResult]
-"""``runner(argv, *, cwd, stdin, timeout_s) -> ClaudeRunResult``; argv excludes the binary."""
+"""``runner(argv, *, cwd, stdin, timeout_s, env=None) -> ClaudeRunResult``; argv excludes the
+binary. ``env`` is the whole process environment when given (a worker turn's, with the product
+interpreter first on PATH, I-114); None means :func:`subprocess_env`."""
 
 
 def subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -73,12 +77,13 @@ def claude_runner(binary: str = "claude") -> Runner:
         cwd: str | Path | None = None,
         stdin: str | None = None,
         timeout_s: float = 600.0,
+        env: Mapping[str, str] | None = None,
     ) -> ClaudeRunResult:
         proc = subprocess.run(
             [binary, *argv],
             input=stdin,
             cwd=str(cwd) if cwd else None,
-            env=subprocess_env(),
+            env=dict(env) if env is not None else subprocess_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",

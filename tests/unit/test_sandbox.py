@@ -249,7 +249,8 @@ def test_resolve_command_rewrites_the_interpreter_and_finds_cmd_shims_on_windows
     assert resolve_command(["python"], None) == [sys.executable]
     assert resolve_command([], None) == []
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(shutil, "which", lambda name: {"npm": "C:/n/npm.CMD"}.get(name))
+    # `path`: the command's own PATH, the product's first (I-114 review, I-118)
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: {"npm": "C:/n/npm.CMD"}.get(name))
     assert resolve_command(["npm", "install"], None) == ["C:/n/npm.CMD", "install"]
     assert resolve_command(["node", "x.ts"], None) == ["node", "x.ts"]  # not found: unchanged
     assert resolve_command(["C:/n/node.exe", "x"], None) == ["C:/n/node.exe", "x"]  # a path

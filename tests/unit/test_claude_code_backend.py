@@ -9,7 +9,9 @@ structured call into ``--json-schema``; the worker turns a tool-using turn into 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import os
+import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,7 @@ from scio.harness.failures import FatalError, RetryableError
 from scio.harness.providers.claude_code import (
     ClaudeCodeProvider,
     ClaudeRunResult,
+    claude_runner,
     render_messages,
     subprocess_env,
 )
@@ -39,13 +42,17 @@ HAIKU = ModelsConfig.load(Settings().models_path).role("router").model
 
 
 class FakeClaude:
-    """Canned ``claude -p`` runs keyed by the call order; records argv, cwd and stdin."""
+    """Canned ``claude -p`` runs keyed by the call order; records argv, cwd and stdin, the
+    process environment (``envs``, None when the caller left the default) and the text of
+    each system prompt file while it still exists (``systems``)."""
 
     def __init__(
         self, results: list[dict[str, Any] | list[dict[str, Any]] | ClaudeRunResult]
     ) -> None:
         self.results = list(results)
         self.calls: list[tuple[list[str], str | None, str | None]] = []
+        self.envs: list[dict[str, str] | None] = []
+        self.systems: list[str] = []
 
     def __call__(
         self,
@@ -54,8 +61,13 @@ class FakeClaude:
         cwd: str | Path | None = None,
         stdin: str | None = None,
         timeout_s: float = 0.0,
+        env: Mapping[str, str] | None = None,
     ) -> ClaudeRunResult:
         self.calls.append((list(argv), str(cwd) if cwd else None, stdin))
+        self.envs.append(dict(env) if env is not None else None)
+        if "--system-prompt-file" in argv:
+            path = Path(_flag(list(argv), "--system-prompt-file"))
+            self.systems.append(path.read_text(encoding="utf-8"))
         nxt = self.results.pop(0)
         if isinstance(nxt, ClaudeRunResult):
             return nxt
@@ -96,6 +108,26 @@ def _flag(argv: list[str], name: str) -> str:
 def test_subprocess_env_strips_nesting_and_api_key_variables() -> None:
     env = subprocess_env({"CLAUDECODE": "1", "ANTHROPIC_API_KEY": "x", "PATH": "p", "HOME": "h"})
     assert env == {"PATH": "p", "HOME": "h"}
+
+
+def test_claude_runner_uses_a_given_env_else_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-114: a worker turn hands the runner its own environment; the provider's calls pass
+    none and keep :func:`subprocess_env`."""
+    seen: list[dict[str, str]] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs["env"])
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run = claude_runner("claude")
+    run(["-p"], stdin="q", env={"PATH": "product-bin", "K": "v"})
+    run(["-p"], stdin="q")
+    assert seen[0] == {"PATH": "product-bin", "K": "v"}
+    assert seen[1] == subprocess_env() and "CLAUDECODE" not in seen[1]
 
 
 def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None:
@@ -555,3 +587,100 @@ def test_claude_code_backend_requires_the_local_sandbox(tmp_path: Path) -> None:
         assert "Bash(rm *)" in allowed_tools_for(("edit_file", "delete_file"), python_toolchain())
     finally:
         ctx.close()
+
+
+# ---------- the turn's environment (I-114) ----------
+
+
+def _run_worker(sandbox: LocalSandbox) -> FakeClaude:
+    """One worker turn plus its typed summary on ``sandbox``; returns the fake runner."""
+    settings = Settings(provider_override="fake")
+    config = ModelsConfig.load(settings.models_path)
+    harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+    summary = {
+        "step_id": "S1", "summary": "done", "files_touched": [], "confidence": "high",
+        "needs_design_decision": False, "design_question": None, "next_action": "verify",
+        "tests_added": [], "sweep": None,
+    }  # fmt: skip
+    fake = FakeClaude([STREAM, _result(session_id="sess-w", structured_output=summary)])
+    worker = ClaudeCodeWorker(
+        harness, sandbox, PromptRegistry(), "coder",
+        toolchain=python_toolchain(), tool_names=("edit_file", "run_tests"), runner=fake,
+    )  # fmt: skip
+    worker.run("task")
+    assert len(fake.calls) == 2
+    return fake
+
+
+def _path_entries(env: Mapping[str, str]) -> list[str]:
+    keys = [k for k in env if k.upper() == "PATH"]
+    assert len(keys) == 1, keys  # one PATH variable, whatever its spelling
+    return env[keys[0]].split(os.pathsep)
+
+
+def test_worker_turn_runs_with_the_product_interpreter_first_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I-114 (live run): the turn's Bash ran SCIO's own interpreter, first on SCIO's PATH
+    under ``uv run``, which lacked the product's approved dependency; the coder spent 36
+    tool calls looking for one that had it. Both calls now lead PATH with the directory of
+    ``sandbox.python`` and set ``VIRTUAL_ENV`` to its environment root."""
+    interpreter = tmp_path / "product-env" / "bin" / "python"
+    scio_bin, other = str(tmp_path / "scio-bin"), str(tmp_path / "other")
+    monkeypatch.setenv("PATH", os.pathsep.join([scio_bin, str(interpreter.parent), other]))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    fake = _run_worker(LocalSandbox(tmp_path / "repo", python=str(interpreter)))
+    assert len(fake.envs) == 2  # the turn and the --resume summary
+    for env in fake.envs:
+        assert env is not None
+        # prepended once, SCIO's own directories kept after it in order (the lint tool)
+        assert _path_entries(env) == [str(interpreter.parent), scio_bin, other]
+        assert env["VIRTUAL_ENV"] == str(interpreter.parent.parent)
+        assert "CLAUDECODE" not in env  # still built on subprocess_env
+
+
+def test_worker_without_a_product_interpreter_runs_with_subprocess_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stack with no interpreter of its own (``sandbox.python`` is None) keeps the plain
+    ``claude -p`` environment; SCIO injects no ``VIRTUAL_ENV``."""
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)  # ``uv run`` sets SCIO's own
+    monkeypatch.setenv("CLAUDECODE", "1")
+    fake = _run_worker(LocalSandbox(tmp_path))
+    assert fake.envs == [subprocess_env(), subprocess_env()]
+    assert all(env is not None and "VIRTUAL_ENV" not in env for env in fake.envs)
+
+
+def test_worker_env_keeps_one_path_variable_in_its_own_spelling(tmp_path: Path) -> None:
+    """Windows spells the key ``Path``: it is updated in place, not shadowed by a second
+    ``PATH``; an environment with no PATH gets one."""
+    from scio.loop.claude_code_worker import worker_env
+
+    interpreter = tmp_path / "product-env" / "bin" / "python"
+    bin_dir = str(interpreter.parent)
+    sandbox = LocalSandbox(tmp_path / "repo", python=str(interpreter))
+    env = worker_env(sandbox, {"Path": os.pathsep.join(["a", bin_dir]), "ANTHROPIC_API_KEY": "x"})
+    assert env == {
+        "Path": os.pathsep.join([bin_dir, "a"]),
+        "VIRTUAL_ENV": str(interpreter.parent.parent),
+    }
+    assert worker_env(sandbox, {"HOME": "h"})["PATH"] == bin_dir
+    assert worker_env(LocalSandbox(tmp_path / "plain"), {"Path": "a"}) == {"Path": "a"}
+    # ``env_interpreter`` joins a Windows root and its relative path with "/": normalised
+    mixed = f"{tmp_path}/product-env/bin/python"
+    joined = worker_env(LocalSandbox(tmp_path / "repo", python=mixed), {"PATH": "a"})
+    assert _path_entries(joined) == [str(Path(mixed).parent), "a"]
+    assert joined["VIRTUAL_ENV"] == str(Path(mixed).parent.parent)
+
+
+def test_worker_system_prompt_says_python_is_the_product_environment(tmp_path: Path) -> None:
+    """I-114: the backend note tells the worker the interpreter question is already settled,
+    so it never goes looking for another one; the rest of the note is kept."""
+    fake = _run_worker(LocalSandbox(tmp_path))
+    assert len(fake.systems) == 1  # the summary call resumes the session, no new prompt
+    system = " ".join(fake.systems[0].split())
+    assert (
+        "`python` already runs the product's environment with its approved dependencies "
+        "installed; never look for another interpreter." in system
+    )
+    assert "never install packages yourself" in system and "Bash for run_tests" in system

@@ -5,7 +5,13 @@ from __future__ import annotations
 
 import pytest
 
-from scio.product.build import feature_task, issue_body, issue_title
+from scio.product.build import (
+    _not_done,
+    _open_features,
+    feature_task,
+    issue_body,
+    issue_title,
+)
 from scio.product.progress import (
     MAX_FEATURES_PER_MILESTONE,
     ProgressFile,
@@ -67,6 +73,46 @@ def test_progress_file_starts_every_feature_todo_and_syncs_with_product_md() -> 
     assert again.feature("P4") is not None and "P4 added" in notes[0]
     notes = again.sync_features(_spec(2))
     assert [f.id for f in again.features] == ["P1", "P2"] and "removed" in notes[0]
+
+
+def test_a_skipped_feature_stays_open_and_is_planned_first_again() -> None:
+    """I-116: 'skip' at a halted feature defers it, it does not drop it. ``skipped`` used to
+    leave the open set, so the next milestone never planned the feature and the release went
+    out without it. Now it is open, keeps its PRODUCT.md place, and a planner cannot route
+    around it; only ``done`` is finished."""
+    spec = _spec(4)
+    progress = ProgressFile.initial(spec, bootstrap_commit=None)
+    for fid, status in (("P1", "skipped"), ("P2", "done"), ("P3", "failed")):
+        rec = progress.feature(fid)
+        assert rec is not None
+        rec.status = status  # type: ignore[assignment]
+    assert progress.open_feature_ids() == ["P1", "P3", "P4"]
+    open_features = _open_features(spec, progress)  # what plan_milestone hands the normaliser
+    assert [f.id for f in open_features] == ["P1", "P3", "P4"]
+
+    out = MilestonePlanOutput(
+        milestone_title="Next",
+        features=[MilestoneFeatureOutput(id="P1"), MilestoneFeatureOutput(id="P3")],
+        rationale="r",
+    )
+    plan, _ = normalise_milestone(out, open_features, 2)
+    assert plan.feature_ids() == ["P1", "P3"]
+
+    # a planner that leaves the deferred feature out gets it alone, not the features after it
+    out = MilestonePlanOutput(
+        milestone_title="Next",
+        features=[MilestoneFeatureOutput(id="P3"), MilestoneFeatureOutput(id="P4")],
+        rationale="r",
+    )
+    plan, notes = normalise_milestone(out, open_features, 2)
+    assert plan.feature_ids() == ["P1"] and any("alone" in n for n in notes)
+
+    # the release guard names what is not done; a feature with no record counts too
+    progress.features = [f for f in progress.features if f.id != "P4"]
+    assert _not_done(spec, progress) == ["P1 skipped", "P3 failed", "P4 no record"]
+    for rec in progress.features:
+        rec.status = "done"
+    assert progress.open_feature_ids() == [] and _not_done(_spec(3), progress) == []
 
 
 def test_milestone_normaliser_keeps_a_consecutive_prefix_in_product_order() -> None:

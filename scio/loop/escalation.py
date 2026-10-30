@@ -111,11 +111,17 @@ def decide(state: SCIOState, cfg: EscalationConfig, *, root: str | None = None) 
             route="advise", triggers=triggers, reason=", ".join(t.value for t in triggers)
         )
     used, cap = state.budgets.advisor_calls_used, state.budgets.advisor_calls_max
-    return TriageDecision(
-        route="halt",
-        triggers=triggers,
-        reason=f"advisor cap hit ({used}/{cap}, step {step_id})",
-    )
+    # I-115: name the cap that fired. The per-step cap (one call per step) refuses while the
+    # run's total still has headroom, and "2/3" alone reads as headroom left. The total wins
+    # when both are spent.
+    if used >= cap:
+        reason = f"advisor cap hit ({used}/{cap} for this run, step {step_id})"
+    else:
+        reason = (
+            f"advisor already consulted on step {step_id} "
+            f"(one call per step; {used}/{cap} for this run)"
+        )
+    return TriageDecision(route="halt", triggers=triggers, reason=reason)
 
 
 def review_decision(state: SCIOState, cfg: EscalationConfig) -> TriageDecision | None:

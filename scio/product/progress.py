@@ -29,6 +29,7 @@ PRODUCT_MD = "PRODUCT.md"
 MAX_FEATURES_PER_MILESTONE = 4
 
 FeatureState = Literal["todo", "in_progress", "done", "skipped", "failed"]
+"""Only ``done`` is finished; ``skipped`` means deferred to a later milestone (I-116)."""
 MilestoneState = Literal["planned", "in_progress", "done", "failed"]
 
 
@@ -71,7 +72,10 @@ class ProgressFile(BaseModel):
         return next((m for m in self.milestones if m.id == mid), None)
 
     def open_feature_ids(self) -> list[str]:
-        return [f.id for f in self.features if f.status in ("todo", "in_progress", "failed")]
+        """Every feature not ``done``, in record order. A ``skipped`` feature is open: the
+        human's ``skip`` defers it to the next milestone, and only removing it from PRODUCT.md
+        drops it (I-116; a skip used to drop it silently and the release went out without it)."""
+        return [f.id for f in self.features if f.status != "done"]
 
     def next_milestone_number(self) -> int:
         return len(self.milestones) + 1
@@ -232,7 +236,10 @@ def normalise_milestone(
     """The planner proposes, the orchestrator decides (I-046): the milestone is the longest
     prefix of the open features (PRODUCT.md order) the planner named, capped at
     :data:`MAX_FEATURES_PER_MILESTONE`; an empty or out-of-order proposal becomes the first
-    open feature alone. Tiers default to T1. Notes explain every change."""
+    open feature alone. Tiers default to T1. Notes explain every change. A feature skipped in
+    an earlier milestone is open and keeps its place in PRODUCT.md order, so a planner cannot
+    route around it: leaving it out stops the milestone before it, and when it is the first
+    open feature the milestone is that feature alone (I-116)."""
     notes: list[str] = []
     if not open_features:
         raise ValueError("no open features to plan")
