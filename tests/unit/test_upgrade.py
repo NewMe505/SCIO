@@ -131,3 +131,83 @@ def test_upgrade_refuses_a_dirty_tree_and_a_directory_without_product_md(tmp_pat
     empty.mkdir()
     with pytest.raises(UpgradeRefused, match="not a SCIO product"):
         upgrade_product(LocalSandbox(empty))
+
+
+def _v090_python_product(root: Path) -> dict[str, str]:
+    """A python product as the 0.9.0 scaffold wrote it: CI and README install only the tools,
+    never the project, and pyproject.toml has no build system (the graphcalc run's S6)."""
+    from scio.product.scaffold import PYTHON_BUILD_SYSTEM, PYTHON_INSTALL, python_packages_find
+
+    spec = _spec("python").model_copy(update={"dependencies": ["sympy"]})
+    fresh = scaffold_for(spec)
+    old = dict(fresh)
+    for rel in (".github/workflows/ci.yml", "README.md"):
+        old[rel] = old[rel].replace(PYTHON_INSTALL, "pip install ruff pytest")
+    old["pyproject.toml"] = (
+        old["pyproject.toml"]
+        .replace(PYTHON_BUILD_SYSTEM + "\n", "")
+        .replace(python_packages_find(spec.name) + "\n", "")
+    )
+    old["PRODUCT.md"] = render_product_md(spec)
+    for rel, text in old.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8", newline="\n")
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "chore: bootstrap (0.9.0)")
+    _git(root, "checkout", "-q", "-b", "milestone/1")
+    return fresh
+
+
+def test_upgrade_makes_an_old_python_products_ci_install_the_project(tmp_path: Path) -> None:
+    """I-140, I-142: the 0.9.0 scaffold's CI never installed the project, so a declared
+    dependency never reached the tests; upgrade rewrites exactly that line in the CI and the
+    README, gives pyproject.toml a build system so ``pip install -e .`` works, and commits
+    on the branch that is checked out (a milestone branch at a merge stop)."""
+    import tomllib
+
+    from scio.product.scaffold import PYTHON_INSTALL
+
+    fresh = _v090_python_product(tmp_path)
+    report = upgrade_product(LocalSandbox(tmp_path))
+    assert report.added == [
+        "[build-system] and the package list in pyproject.toml",
+        f".github/workflows/ci.yml: {PYTHON_INSTALL!r}, which installs the project",
+        f"README.md: {PYTHON_INSTALL!r}, which installs the project",
+    ]
+    ci = (tmp_path / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert ci == fresh[".github/workflows/ci.yml"] and f"- run: {PYTHON_INSTALL}\n" in ci
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert readme == fresh["README.md"]
+    pyproject = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(pyproject) == tomllib.loads(fresh["pyproject.toml"])
+    assert _git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD") == "milestone/1"
+    assert MARKER in _git(tmp_path, "log", "-1", "--format=%s")
+    assert _git(tmp_path, "log", "-1", "--format=%an") == "scio"
+    assert upgrade_product(LocalSandbox(tmp_path)).added == []
+
+
+def test_upgrade_keeps_an_install_line_and_build_system_the_product_changed(
+    tmp_path: Path,
+) -> None:
+    """I-142: only the old scaffold's exact line is SCIO's; a line the product changed (here
+    it names sympy) and a build system of its own (graphcalc's) are left alone."""
+    _v090_python_product(tmp_path)
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    ci.write_text(
+        ci.read_text(encoding="utf-8").replace(
+            "pip install ruff pytest\n", "pip install ruff pytest sympy\n"
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    pyproject = tmp_path / "pyproject.toml"
+    own = '[build-system]\nrequires = ["flit_core>=3.9"]\nbuild-backend = "flit_core.buildapi"\n'
+    pyproject.write_text(own + pyproject.read_text(encoding="utf-8"), encoding="utf-8")
+    _git(tmp_path, "commit", "-q", "-am", "chore: our own install line and build system")
+    report = upgrade_product(LocalSandbox(tmp_path))
+    assert "[build-system] (the product's own)" in report.kept
+    assert [a for a in report.added if a.startswith(".github")] == []
+    assert "      - run: pip install ruff pytest sympy\n" in ci.read_text(encoding="utf-8")
+    assert pyproject.read_text(encoding="utf-8").startswith(own)

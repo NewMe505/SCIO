@@ -6,12 +6,19 @@ own ``PRODUCT.md`` (``scaffold_for``), so the upgrade and a fresh bootstrap cann
 - a missing ``Dockerfile`` or ``.dockerignore`` is written; an existing one is left alone;
 - the README gets the marked run block (the skeleton command, which always terminates) under
   its ``## Run`` heading, or a new ``## Run`` section, unless the markers are already there;
-- a python product's ``pyproject.toml`` gets ``[tool.coverage.run]`` unless it has one;
+- a python product's ``pyproject.toml`` gets ``[tool.coverage.run]`` unless it has one, and
+  ``[build-system]`` with the package list unless it has ``[build-system]`` or
+  ``[tool.setuptools]``, so ``pip install -e .`` works (I-140);
 - the product's CI gets the README run step only where its last step is still the old
-  scaffold's skeleton step; any other CI file is the product's and is left alone.
+  scaffold's skeleton step; any other CI file is the product's and is left alone;
+- an old scaffold install line (``OLD_PYTHON_INSTALLS``, which never installed the project,
+  I-140) becomes the current one in the CI and the README Develop block, line for line;
+  a line the product changed is its own (I-142).
 Tests are not rewritten: a product whose tests reach the code only through a subprocess
 misses the coverage floor at its next feature's verify, which sends it to the debugger
-(I-091). The changes are one commit with a marker; a clean tree is required.
+(I-091). The changes are one commit with a marker, on the branch that is checked out; a
+clean tree is required. Run at a merge stop, the commit lands on the milestone branch, and
+the build's ``recheck`` answer pushes it and reads the PR's CI again (I-142).
 """
 
 from __future__ import annotations
@@ -24,7 +31,14 @@ from scio.aci.sandbox.base import Sandbox
 from scio.aci.tools import SCIO_GIT_IDENTITY
 from scio.product.progress import PRODUCT_MD, parse_product_md
 from scio.product.release_checks import RUN_END, RUN_START
-from scio.product.scaffold import README_RUN_STEP, scaffold_for
+from scio.product.scaffold import (
+    OLD_PYTHON_INSTALLS,
+    PYTHON_BUILD_SYSTEM,
+    PYTHON_INSTALL,
+    README_RUN_STEP,
+    python_packages_find,
+    scaffold_for,
+)
 from scio.toolchain import get_toolchain
 
 CI_PATH = ".github/workflows/ci.yml"
@@ -64,6 +78,22 @@ def readme_with_run_block(text: str, block: str) -> str:
     return text.rstrip("\n") + "\n\n## Run\n\n" + block
 
 
+def replace_install_lines(text: str, *, prefix: str) -> tuple[str, int]:
+    """``text`` with every line that is exactly ``prefix`` + an old scaffold install line
+    replaced by the current one (I-140), and how many were replaced. Any other line, even a
+    near miss, is the product's own (I-142)."""
+    old = {prefix + line for line in OLD_PYTHON_INSTALLS}
+    out, n = [], 0
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        if body in old:
+            out.append(prefix + PYTHON_INSTALL + line[len(body) :])
+            n += 1
+        else:
+            out.append(line)
+    return "".join(out), n
+
+
 def upgrade_product(sb: Sandbox) -> UpgradeReport:
     root = sb.root
     if not sb.exists(f"{root}/{PRODUCT_MD}"):
@@ -101,6 +131,15 @@ def upgrade_product(sb: Sandbox) -> UpgradeReport:
             current = sb.read_text(pyproject).rstrip("\n")
             sb.write_text(pyproject, f"{current}\n\n[tool.coverage.run]{section}")
             report.added.append("[tool.coverage.run] in pyproject.toml")
+        if sb.exists(pyproject):
+            data = tomllib.loads(sb.read_text(pyproject))
+            if "build-system" in data or "setuptools" in data.get("tool", {}):
+                report.kept.append("[build-system] (the product's own)")
+            else:
+                current = sb.read_text(pyproject).rstrip("\n")
+                packages = python_packages_find(spec.name)
+                sb.write_text(pyproject, f"{PYTHON_BUILD_SYSTEM}\n{current}\n\n{packages}")
+                report.added.append("[build-system] and the package list in pyproject.toml")
 
     ci = f"{root}/{CI_PATH}"
     old_step = f"      - run: {tc.skeleton_command(spec.name)}\n"
@@ -112,6 +151,16 @@ def upgrade_product(sb: Sandbox) -> UpgradeReport:
         report.added.append(f"{CI_PATH} README run step")
     else:
         report.kept.append(f"{CI_PATH} (the product's own; add the README run step by hand)")
+
+    if spec.stack == "python":
+        for rel, prefix in ((CI_PATH, "      - run: "), ("README.md", "")):
+            path = f"{root}/{rel}"
+            if not sb.exists(path):
+                continue
+            text, n = replace_install_lines(sb.read_text(path), prefix=prefix)
+            if n:
+                sb.write_text(path, text)
+                report.added.append(f"{rel}: {PYTHON_INSTALL!r}, which installs the project")
 
     if report.added:
         _git(sb, "add", "-A")

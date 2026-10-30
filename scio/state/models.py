@@ -515,11 +515,38 @@ class FeatureRun(BaseModel):
     milestone's cost" are per milestone. None on a run recorded before the field existed."""
 
 
+class CiStatus(BaseModel):
+    """A PR's CI on GitHub as SCIO last read it (I-141): the merge stops say it, never
+    "ready" over a red or unread CI."""
+
+    state: Literal["passed", "failed", "pending", "none", "unread"]
+    """``none``: GitHub reported no checks on the head commit within the wait; ``unread``:
+    the push or ``gh`` failed, and ``detail`` says how."""
+    head: str = ""
+    """The commit the checks ran on."""
+    detail: str = ""
+    """The failing or unfinished checks, each ``name (link)``."""
+
+    def line(self) -> str:
+        what = {
+            "passed": "CI passed",
+            "failed": "CI failed",
+            "pending": "CI is still running",
+            "none": "no CI checks reported",
+            "unread": "CI not read",
+        }[self.state]
+        on = f" on {self.head[:12]}" if self.head else ""
+        return f"{what}{on}" + (f": {self.detail}" if self.detail else "")
+
+
 class MilestonePR(BaseModel):
     number: int | None = None
     url: str | None = None
     body_path: str | None = None
     """Offline: where the PR body was written instead."""
+    ci: CiStatus | None = None
+    """With ``--gh``: the PR's CI, read after the push and on ``recheck`` (I-141). None on a
+    checkpoint written before the field existed: the merge stop says it is unread."""
 
 
 class ReleaseRecord(BaseModel):
@@ -539,6 +566,8 @@ class ReleaseRecord(BaseModel):
     pr_number: int | None = None
     pr_url: str | None = None
     """With ``--gh``, the release PR the human merges before the tag (I-103)."""
+    pr_ci: CiStatus | None = None
+    """The release PR's CI, read like a milestone PR's (I-141)."""
 
 
 ProductBuildPhase = Literal[

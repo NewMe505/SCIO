@@ -89,6 +89,7 @@ never pushes `main`), then the merge commit is tagged and a GitHub Release carri
 ```bash
 uv run scio build --product ./todo [--gh you/todo]        # runs the next milestone, pauses at its PR
 uv run scio build --product ./todo --decision merged      # after you merged the PR (offline: "merge")
+uv run scio build --product ./todo --decision recheck     # with --gh: push the branch's new commits, read its CI again
 uv run scio build --product ./todo --decision release     # at the release gate (or "stop")
 uv run scio build --product ./todo --decision "merge and stop"   # record the milestone, end the thread
 uv run scio build --product ./todo --decision skip        # defer it; or retry / stop, when a feature halted
@@ -101,6 +102,10 @@ uv run scio upgrade --product ./todo                      # bring an older produ
 current scaffold for its own `PRODUCT.md`: the Dockerfile and `.dockerignore`, the README's run block,
 the coverage source for a python product, and the CI's README run step. Files the product made its own
 are kept and reported; the change is one commit, a clean tree is required, and a second run does nothing.
+It also replaces the old scaffold's python install line, which never installed the project, with
+`pip install -e . ruff pytest` (I-140). With `--gh`, every merge stop reads the PR's CI and calls it
+ready only when it is green. When a red CI comes from an old scaffold file, run `scio upgrade` at the stop,
+then answer `recheck`, which pushes the commit and reads the CI again.
 In GitHub mode a squash- or rebase-merged milestone PR is fine: SCIO drops only its own bookkeeping
 commits when it syncs `main`, and stops with `sync_failed` if a commit of yours exists only locally.
 

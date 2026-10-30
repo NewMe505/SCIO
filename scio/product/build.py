@@ -29,7 +29,7 @@ from langgraph.types import Command, interrupt
 
 from scio.aci.runtime import ToolContext, ensure_product_env
 from scio.aci.sandbox.base import Sandbox
-from scio.aci.tools import SCIO_GIT_IDENTITY, find_commit, git_push, head_sha
+from scio.aci.tools import SCIO_GIT_IDENTITY, ToolError, find_commit, git_push, head_sha
 from scio.context.artifacts import ArtifactStore
 from scio.graph.checkpointer import DURABILITY, open_checkpointer
 from scio.graph.effects import run_effect
@@ -42,6 +42,7 @@ from scio.harness.failures import BudgetExceeded, HarnessError
 from scio.harness.types import Message
 from scio.loop.exits import LoopLimits
 from scio.product.acceptance import run_acceptance
+from scio.product.pr_ci import wait_for_ci
 from scio.product.progress import (
     PRODUCT_MD,
     PROGRESS_PATH,
@@ -61,6 +62,7 @@ from scio.product.release import (
 from scio.product.release_checks import release_report
 from scio.state.models import (
     Budget,
+    CiStatus,
     ExitReason,
     FeatureRun,
     GateOutput,
@@ -85,6 +87,9 @@ ISSUES_DIR = ".scio/product/issues"
 MILESTONES_DIR = ".scio/product/milestones"
 MERGE_ANSWERS = ("merge", "merged", "approve", "approved", "yes", "ok")
 STOP_ANSWERS = ("stop", "abort", "no", "halt")
+RECHECK_ANSWERS = ("recheck",)
+"""At a merge stop with GitHub: push the branch's new commits (a ``scio upgrade`` made at the
+stop) and read the PR's CI again (I-141)."""
 
 
 @dataclass
@@ -1196,8 +1201,9 @@ def milestone_pr(ctx: RunContext) -> Node:
                 intent=f"ready:{number}",
                 apply=lambda: gh.mark_ready(number),
             )
-            record = MilestonePR(number=number, url=str(pr["url"]))
-            entry = fact(f"milestone PR #{number} ready for review: {pr['url']}")
+            ci = wait_for_ci(gh, number, head=_git(ctx, "rev-parse", plan.branch))
+            record = MilestonePR(number=number, url=str(pr["url"]), ci=ci)
+            entry = fact(_pr_ci_line(f"milestone PR #{number}", str(pr["url"]), ci))
         else:
             rel = f"{MILESTONES_DIR}/{plan.id}-pr.md"
             run_effect(
@@ -1213,6 +1219,52 @@ def milestone_pr(ctx: RunContext) -> Node:
         return {"pr": record, "phase": "merge_wait", "ledger": [entry]}
 
     return node
+
+
+def _pr_ci_line(what: str, url: str, ci: CiStatus) -> str:
+    """The ledger line once a PR's CI is read: "ready" only over a green CI (I-141)."""
+    if ci.state == "passed":
+        return f"{what} ready for review, {ci.line()}: {url}"
+    return f"{what} not ready, {ci.line()}: {url}"
+
+
+def push_and_read_ci(ctx: RunContext, *, node: str, branch: str, number: int) -> CiStatus:
+    """``recheck`` at a merge stop (I-141): push what the branch gained since its last push
+    (a ``scio upgrade`` commit made at the stop; once per head, never forced), then read the
+    PR's CI on that head. A refused push or a ``gh`` failure is a status the stop shows; it
+    never crashes the paused thread."""
+    gh = ctx.github
+    assert gh is not None
+    sb = ctx.sandbox
+    try:
+        head = _git(ctx, "rev-parse", branch)
+        default = gh.default_branch()
+        run_effect(
+            ctx.effects,
+            thread_id=ctx.thread_id,
+            node=node,
+            intent=f"push:{branch}:{head}",
+            apply=lambda: git_push(sb, branch, default_branch=default),
+        )
+    except (ToolError, RuntimeError) as exc:  # RuntimeError: _git's and GitHubError
+        return CiStatus(state="unread", detail=f"push of {branch} failed: {str(exc)[:300]}")
+    return wait_for_ci(gh, number, head=head)
+
+
+def _ci_question(subject: str, number: int, branch: str, ci: CiStatus | None) -> str:
+    """A merge stop's question with GitHub: "ready" only when the PR's CI passed (I-141)."""
+    if ci is not None and ci.state == "passed":
+        return f"{subject} is ready; {ci.line()}. Merge PR #{number} on GitHub, then reply 'merged'"
+    if ci is not None and ci.state == "failed":
+        return (
+            f"{subject}: PR #{number}'s {ci.line()}. Do not merge it red: push a fix to "
+            f"{branch} (`scio upgrade` for a scaffold file), then reply 'recheck'"
+        )
+    status = ci.line() if ci is not None else "CI not read yet"
+    return (
+        f"{subject}: PR #{number}, {status}. Reply 'recheck' to read it again; once it is "
+        "green, merge it on GitHub and reply 'merged'"
+    )
 
 
 BOOKKEEPING_MARKERS = ("[scio:progress:", "[scio:release:")
@@ -1276,14 +1328,16 @@ def merge_wait(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         spec, plan, pr = state.spec, state.milestone, state.pr
         assert spec is not None and plan is not None and pr is not None
+        subject = f"Milestone {plan.id} ({plan.title})"
+        github = ctx.github is not None and pr.number is not None
         answer = str(
             interrupt(
                 {
-                    "question": f"Milestone {plan.id} ({plan.title}) is ready. "
-                    + (
-                        f"Merge PR #{pr.number} on GitHub, then reply 'merged'"
-                        if pr.number
-                        else "Reply 'merge' to merge the milestone branch into main locally"
+                    "question": (
+                        _ci_question(subject, int(pr.number or 0), plan.branch, pr.ci)
+                        if github
+                        else f"{subject} is ready. Reply 'merge' to merge the milestone branch "
+                        "into main locally"
                     )
                     + "; reply 'stop' to end the build.",
                     "pr": pr.model_dump(),
@@ -1293,7 +1347,9 @@ def merge_wait(ctx: RunContext) -> Node:
                         for mf in plan.features
                     ],
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<merged|stop>"',
+                    "resume": 'scio build --product <dir> --decision "<merged|recheck|stop>"'
+                    if github
+                    else 'scio build --product <dir> --decision "<merge|stop>"',
                 }
             )
         )
@@ -1304,6 +1360,15 @@ def merge_wait(ctx: RunContext) -> Node:
                 "phase": "halted",
                 "human_notes": [f"{plan.id} merge: {answer.strip()[:120]}"],
                 "ledger": [decision(f"build stopped at {plan.id} merge", source=Role.HUMAN)],
+            }
+        if github and choice.startswith(RECHECK_ANSWERS):
+            number = int(pr.number or 0)
+            ci = push_and_read_ci(ctx, node="merge_wait", branch=plan.branch, number=number)
+            return {
+                "pr": pr.model_copy(update={"ci": ci}),
+                "phase": "merge_wait",
+                "human_notes": [f"{plan.id} merge: {answer.strip()[:120]}"],
+                "ledger": [fact(f"PR #{number}: {ci.line()}")],
             }
         if not choice.startswith(MERGE_ANSWERS):
             return {
@@ -1632,7 +1697,7 @@ def release(ctx: RunContext) -> Node:
         marker = f"[scio:release:{rel.tag}]"
         changelog = f"{sb.root}/CHANGELOG.md"
         gh = ctx.github
-        branch = f"release/{rel.tag}"
+        branch = release_branch(rel.tag)
 
         def cut() -> str:
             _git(ctx, "checkout", "-q", "main")
@@ -1691,13 +1756,21 @@ def release(ctx: RunContext) -> Node:
             intent=f"ready:{number}",
             apply=lambda: gh.mark_ready(number),
         )
+        ci = wait_for_ci(gh, number, head=_git(ctx, "rev-parse", branch))
         return {
-            "release": rel.model_copy(update={"pr_number": number, "pr_url": str(pr["url"])}),
+            "release": rel.model_copy(
+                update={"pr_number": number, "pr_url": str(pr["url"]), "pr_ci": ci}
+            ),
             "phase": "release_merge_wait",
-            **_fact(f"release PR #{number} for {rel.tag} is ready: {pr['url']}"),
+            **_fact(_pr_ci_line(f"release PR #{number} for {rel.tag}", str(pr["url"]), ci)),
         }
 
     return node
+
+
+def release_branch(tag: str) -> str:
+    """The branch the release PR comes from (CONTRIBUTING step 6)."""
+    return f"release/{tag}"
 
 
 def after_release(state: ProductBuildState) -> Literal["publish", "merge_wait"]:
@@ -1712,15 +1785,17 @@ def release_merge_wait(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         rel = state.release
         assert rel is not None and rel.pr_number is not None
+        branch = release_branch(rel.tag)
         answer = str(
             interrupt(
                 {
-                    "question": f"Merge release PR #{rel.pr_number} ({rel.tag}) on GitHub, then "
-                    "reply 'merged'; reply 'stop' to end the build without tagging.",
+                    "question": _ci_question(f"Release {rel.tag}", rel.pr_number, branch, rel.pr_ci)
+                    + "; reply 'stop' to end the build without tagging.",
                     "pr": rel.pr_url,
                     "tag": rel.tag,
+                    "ci": rel.pr_ci.model_dump() if rel.pr_ci else None,
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<merged|stop>"',
+                    "resume": 'scio build --product <dir> --decision "<merged|recheck|stop>"',
                 }
             )
         )
@@ -1733,6 +1808,15 @@ def release_merge_wait(ctx: RunContext) -> Node:
                 "ledger": [decision(f"{rel.tag} release PR not merged", source=Role.HUMAN)],
             }
         gh = ctx.github
+        if gh is not None and choice.startswith(RECHECK_ANSWERS):
+            number = rel.pr_number
+            ci = push_and_read_ci(ctx, node="release_merge_wait", branch=branch, number=number)
+            return {
+                "release": rel.model_copy(update={"pr_ci": ci}),
+                "phase": "release_merge_wait",
+                "human_notes": note,
+                "ledger": [fact(f"release PR #{number}: {ci.line()}")],
+            }
         if not choice.startswith(MERGE_ANSWERS) or gh is None or not gh.pr_merged(rel.pr_number):
             return {
                 "phase": "release_merge_wait",
