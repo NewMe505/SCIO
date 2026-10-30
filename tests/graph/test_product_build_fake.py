@@ -371,9 +371,19 @@ def test_github_mode_survives_squash_merged_milestone_prs(tmp_path: Path) -> Non
         assert out.state.milestones_done == ["M1", "M2"]
         assert _git(repo, "rev-parse", "main~1") == squash2  # origin's squash + M2's record
         # the release PR, squash-merged too: M2's record and the cut reach origin main in it,
-        # and the tag lands on origin main's history (I-103)
+        # and the tag lands on origin main's history (I-103). Its CI is red first: the
+        # release stop says so, and `recheck` reads it again once it is green (I-141)
+        fake.ci_default = "fail"
         out = resume_build(ctx, "release")
         assert out.paused and out.state.release and out.state.release.pr_number
+        question = str(out.interrupt["question"])
+        assert "CI failed" in question and "is ready" not in question and "'recheck'" in question
+        assert out.interrupt["ci"]["state"] == "failed"
+        fake.ci_default = "pass"
+        out = resume_build(ctx, "recheck")
+        assert out.paused and out.state.phase == "release_merge_wait" and out.state.release
+        assert "Release v0.1.0 is ready; CI passed" in str(out.interrupt["question"])
+        assert out.state.release.pr_number
         squash3 = _squash_merge(origin, fake, "release/v0.1.0", out.state.release.pr_number)
         out = resume_build(ctx, "merged")
         assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
