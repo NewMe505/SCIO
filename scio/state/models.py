@@ -509,6 +509,10 @@ class FeatureRun(BaseModel):
     escalations: int = 0
     escalations_resolved: int = 0
     human_notes: list[str] = Field(default_factory=list)
+    milestone: str | None = None
+    """The milestone this run belongs to (``M2``). A build thread keeps its runs across
+    milestones, and a skip defers a feature to the next one (I-116), so "finished" and "this
+    milestone's cost" are per milestone. None on a run recorded before the field existed."""
 
 
 class MilestonePR(BaseModel):
@@ -595,14 +599,48 @@ class ProductBuildState(BaseModel):
         return next((r for r in reversed(self.feature_runs) if r.feature_id == feature_id), None)
 
     def next_feature(self) -> MilestoneFeatureOutput | None:
-        """The first feature of the milestone without a passed or skipped run."""
+        """The first feature of the milestone that no run has finished: a passed run finishes
+        it, and so does a run skipped in this milestone. A skip defers the feature to the next
+        milestone (I-116), so a run skipped in an earlier one does not finish it here, and the
+        feature runs again with its next attempt. A run recorded before runs carried their
+        milestone (``milestone`` None) keeps the old rule: skipped finishes."""
         if self.milestone is None:
             return None
+        mid = self.milestone.id
         for f in self.milestone.features:
             run = self.latest_run(f.id)
-            if run is None or run.status not in ("passed", "skipped"):
+            if run is None:
                 return f
+            if run.status == "passed":
+                continue
+            if run.status == "skipped" and run.milestone in (None, mid):
+                continue
+            return f
         return None
+
+    def milestone_runs(self) -> list[FeatureRun]:
+        """Every run of the current milestone, oldest first: its cost, attempts and record
+        (I-116). A run without a milestone (recorded before the field) is matched by feature
+        id, as before; it may then belong to an earlier milestone of the same thread."""
+        if self.milestone is None:
+            return []
+        ids, mid = set(self.milestone.feature_ids()), self.milestone.id
+        return [
+            r
+            for r in self.feature_runs
+            if r.feature_id in ids and (r.milestone is None or r.milestone == mid)
+        ]
+
+    def runs_stamped(self, milestone_id: str) -> list[FeatureRun]:
+        """``feature_runs`` with every run that has no milestone (recorded before the field)
+        stamped ``milestone_id``, the milestone that is closing: such a run belongs to it or
+        to an earlier one, so later milestones read it exactly. Without this, a skip
+        recorded by older code finished its feature in every later milestone and the loop
+        planned it, passed it over and escalated, milestone after milestone (I-116 review)."""
+        return [
+            r if r.milestone is not None else r.model_copy(update={"milestone": milestone_id})
+            for r in self.feature_runs
+        ]
 
 
 # ---------- the graph state ----------

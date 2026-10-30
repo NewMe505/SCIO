@@ -13,13 +13,15 @@ Shape of a turn:
 
 Verify stays SCIO's ground truth; the ACI's per-edit lint gate does not apply inside a
 Claude Code turn. Cost is Claude Code's own estimate, folded into the harness ledger and
-budget through :meth:`scio.harness.core.Harness.account`.
+budget through :meth:`scio.harness.core.Harness.account`. Both calls run with
+:func:`worker_env`, so the turn's Bash commands find the product's interpreter first (I-114).
 """
 
 from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from scio.aci.sandbox.base import Sandbox
+from scio.aci.sandbox.local import with_interpreter_first
 from scio.harness.core import Harness
 from scio.harness.failures import FatalError
 from scio.harness.providers.claude_code import (
@@ -36,6 +39,7 @@ from scio.harness.providers.claude_code import (
     claude_runner,
     parse_result,
     served_model,
+    subprocess_env,
     usage_from_result,
 )
 from scio.harness.types import Message, Part, TextPart, ToolResultPart, ToolUsePart, Usage
@@ -59,9 +63,25 @@ BACKEND_NOTE = (
     "Grep and Glob for repo_search, Read for view_file, Edit and Write for edit_file, and "
     "Bash for run_tests ({test_cmd}). Dependencies are installed by the orchestrator from the "
     "product's approved list before your turn; never install packages yourself, ask for a "
-    "design decision instead. Keep every path inside the repository root, never run git "
+    "design decision instead. When the product has an interpreter of its own, `python` "
+    "already runs the product's environment with its approved dependencies installed; never "
+    "look for another interpreter. Keep every path inside the repository root, never run git "
     "commands that change history, and stop when the tests you were asked for pass."
 )
+"""Appended to the role's system prompt. The interpreter sentence is I-114: a live coder spent
+36 tool calls hunting for an interpreter that could import a product dependency."""
+
+
+def worker_env(sandbox: Sandbox, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment of a worker turn's ``claude -p`` process (I-114).
+
+    :func:`subprocess_env`, plus the product interpreter's directory first on PATH and
+    ``VIRTUAL_ENV`` at that interpreter's environment root, so the turn's Bash commands run
+    the product's interpreter with its approved dependencies, not SCIO's own (which is first
+    on SCIO's PATH under ``uv run``). SCIO's directories stay on PATH after it for the
+    profile's other tools. Unchanged when the sandbox has no interpreter of its own.
+    """
+    return with_interpreter_first(subprocess_env(base), getattr(sandbox, "python", None))
 
 
 def allowed_tools_for(tool_names: tuple[str, ...], toolchain: Toolchain) -> list[str]:
@@ -223,6 +243,9 @@ class ClaudeCodeWorker:
         system = self.prompts.get(self.role).render() + BACKEND_NOTE.format(test_cmd=test_cmd)
         snap = self.harness.budget.snapshot()
         remaining = snap.usd_max - snap.usd_used
+        # Built per turn, not in __init__: the install phase sets ``sandbox.python`` after the
+        # worker exists (a resumed build, a lazy install_deps).
+        env = worker_env(self.sandbox)
         with tempfile.TemporaryDirectory(prefix="scio-claude-") as tmp:
             system_path = Path(tmp) / "system.md"
             system_path.write_text(system, encoding="utf-8", newline="\n")
@@ -250,7 +273,7 @@ class ClaudeCodeWorker:
             ]
             self.calls.append(list(argv))
             res = self._run(
-                argv, cwd=self.sandbox.root, stdin=user_message, timeout_s=self.timeout_s
+                argv, cwd=self.sandbox.root, stdin=user_message, timeout_s=self.timeout_s, env=env
             )
         turn = parse_stream(res.stdout)
         if not turn.result:
@@ -270,7 +293,7 @@ class ClaudeCodeWorker:
         # The typed closing output: one more turn on the same session, no tools.
         schema = wire_schema(output_model)
         output, summary_text, calls = self._summary(
-            session_id, schema, output_model, summary_prompt, model, tags
+            session_id, schema, output_model, summary_prompt, model, tags, env
         )
         messages.append(Message.assistant(summary_text))
         return LoopResult(
@@ -289,6 +312,7 @@ class ClaudeCodeWorker:
         prompt: str,
         model: str,
         tags: dict[str, str] | None,
+        env: Mapping[str, str],
     ) -> tuple[T, str, int]:
         last_error = ""
         for attempt in range(1, 3):
@@ -313,7 +337,9 @@ class ClaudeCodeWorker:
                 json.dumps(schema),
             ]
             self.calls.append(list(argv))
-            res = self._run(argv, cwd=self.sandbox.root, stdin=ask, timeout_s=self.timeout_s)
+            res = self._run(
+                argv, cwd=self.sandbox.root, stdin=ask, timeout_s=self.timeout_s, env=env
+            )
             try:
                 data = parse_result(res)
             except FatalError as exc:

@@ -57,6 +57,7 @@ class ClaudeActor:
         cwd: str | Path | None = None,
         stdin: str | None = None,
         timeout_s: float = 0.0,
+        env: Any = None,  # the worker passes the product's environment (I-114)
     ) -> ClaudeRunResult:
         self.calls.append(list(argv))
         root = Path(str(cwd))

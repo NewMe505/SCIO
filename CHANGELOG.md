@@ -5,7 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-10-28
+## [0.9.0] - 2026-10-30
 ### Added
 - `scio dashboard [--root DIR ...] [--port 8765]` (issue #68, ADR 0017): a live, read-only web view of every SCIO thread across workspaces, on 127.0.0.1 only. A threads list with the stop waiting for you and crashed threads; the build view (the milestone graph with the current step lit, feature runs with tier, status, iterations, escalations, cost and links to their threads, integration lines, the PR, the timeline, cost by role and by feature); the feature and bootstrap views. It reads the checkpoint DB with `mode=ro` connections, the cost ledgers and `progress.json`, reuses the `scio report` builders, and pushes changes over a WebSocket. Plain HTML/JS with no build step; the optional `dashboard` extra (FastAPI, uvicorn) installs it.
 - `docs/OBSERVABILITY.md`: the ways to watch SCIO (GitHub, an OpenTelemetry trace viewer with `SCIO_OTEL_EXPORTER=otlp`, the dashboard, the CLI views).
@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - CLAUDE.md and CONTRIBUTING protocols 4 and 5: Always/Never rules each backed by a guard, and a bottleneck audit after every pass (issue #61).
 
 ### Fixed
+- On the Claude Code worker backend a feature's `python` is the product's environment, with its approved dependencies, not SCIO's own: the worker turn's PATH starts with the product interpreter's directory (I-114).
+- The advisor-cap halt names the cap that fired: the feature's total, or the one call per step (I-115).
+- `skip` at a halted feature defers it to the next milestone instead of dropping it, and the release refuses while a feature in `PRODUCT.md` is not done; removing a feature from `PRODUCT.md` drops it (I-116, the owner's decision).
 - `scio report` on a thread whose run is still going no longer dies on the cost ledger's half-written last line: `CostLedger.load_entries` reads only complete lines (a complete line that does not parse still raises), and a worker transcript caught mid-write is read with its broken character replaced (I-127).
 - `scio build --gh` no longer fails at its first issue on a repository without the `product-mode` label: the GitHub client creates a missing label before it names it (an existing one is left as it is), and a GitHub refusal stops `scio build` with the error and how to resume instead of a traceback (I-113).
 - A hand edit of `PRODUCT.md` is no longer lost: the milestone's sync commit records it, a fresh feature attempt commits one made while the build waited, SCIO's own checkouts and resets carry it, and the next milestone of the same thread re-reads it (I-109).
