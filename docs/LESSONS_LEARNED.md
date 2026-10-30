@@ -22,9 +22,24 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 14. **Always** read a checkpoint with the model of the graph that wrote it; every kind of thread (task, `scio new`, `scio build`) has a report (I-108). Guard: `symbol:load_product_state`, `test:test_cli_build_status_and_report`
 15. **Always** record a thread's spend across processes: a resume carries the checkpoint's spend into the new process, and the guard still caps each process (I-110). Guard: `symbol:carry_spend`, `test:test_a_thread_records_the_spend_of_every_invocation`
 16. **Always** match a Python definition by name with its generic form too (`def name[T](`), not only `def name(` (I-111). Guard: `test:test_guard_exists_looks_in_the_repository`
-17. **Always** make an edit whose text contains a backslash with the Edit or Write tool, never through a shell-embedded script; a script edit asserts its anchor count before it writes, and a parallel agent's brief repeats this rule in its first lines (I-071, I-072, I-112, I-117). Guard: `manual:` a hook cannot tell a mangled backslash from an intended `\n` escape; the anchor assert turns a miss into a loud failure, never a silent wrong edit
+17. **Always** make an edit whose text contains a backslash with the Edit or Write tool, never through a shell-embedded script; a script edit asserts its anchor count before it writes; a read-only one-liner with a regex counts too; a parallel agent's brief repeats this rule in its first lines (I-071, I-072, I-112, I-117, I-131). Guard: `manual:` a hook cannot tell a mangled backslash from an intended `\n` escape; the anchor assert turns a miss into a loud failure, never a silent wrong edit
 18. **Never** let a test fake accept what the real service refuses; a fake GitHub refuses a missing label or milestone, and SCIO creates a resource before it names it (I-113). Guard: `symbol:ensure_label`, `test:test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone`
 19. **Never** end a CLI command with a traceback when an external service refuses a step; say what failed and how to resume from the checkpoint (I-100, I-113). Guard: `test:test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback`
+20. **Always** count a thread's pending writes when detecting that it changed: a stop, a crash or a parallel task's result lands on an existing checkpoint, so the checkpoint id alone never moves (I-120). Guard: `test:test_a_stop_arriving_changes_the_writes_count_not_the_checkpoint`, `test:test_ws_pushes_a_stop_that_adds_no_checkpoint`
+21. **Never** tell a user to run `uv sync --extra X` alone; it uninstalls every extra it does not name, so say `--all-extras` or add the extra to their usual sync (I-124). Guard: `test:test_the_dashboard_without_the_extra_says_how_to_install_it`
+22. **Always** check a third-party tool's ports, paths and versions against its docs or its installed code before writing them into a brief or a doc (I-125). Guard: `manual:` prose about another project has nothing in this repository to check it against; each brief tells its agent to verify such facts at the source
+23. **Always** pass `newline=` to every text write (`Path.write_text` with an encoding, `open(..., "w")`) in the code directories, or Windows writes CRLF (I-006, I-126). Guard: `test:test_every_text_write_in_the_code_directories_passes_newline`
+24. **Always** read a file a live run appends to as complete lines only: a reader racing the writer sees the last line half written (I-127). Guard: `test:test_a_torn_last_ledger_line_is_left_out_and_a_corrupt_one_still_raises`
+25. **Always** give Starlette's `TestClient.websocket_connect` an absolute `ws://127.0.0.1/...` URL; it ignores `base_url`, so a relative one sends `Host: testserver` (I-128). Guard: `test:test_ws_says_hello_first_with_nothing_in_it`
+26. **Never** use Playwright's `wait_for_function` with a string predicate on a page whose CSP forbids eval; wait on a selector the page sets, or poll with `page.evaluate` (I-129). Guard: `test:test_the_page_never_writes_html_from_data_or_evaluates_code`
+27. **Always** have a WebSocket handler read the socket as well as write it, so a closed tab ends it and the server can stop (I-130). Guard: `test:test_the_real_app_serves_the_page_live_and_stops_cleanly`
+28. **Always** bound a server's graceful shutdown (`timeout_graceful_shutdown` for uvicorn); on Windows a reset connection can hold `asyncio.Server.wait_closed` open forever (I-132). Guard: `test:test_the_dashboard_binds_loopback_only_and_lists_its_roots`, `test:test_the_real_app_serves_the_page_live_and_stops_cleanly`
+29. **Always** read a stop as answered when a `__resume__` write sits beside its `__interrupt__`, and never let a node interrupt twice in one run, which would make that rule ambiguous (I-134, I-065). Guard: `test:test_an_answered_stop_reads_in_progress_while_its_node_runs`, `test:test_every_node_interrupts_at_most_once`
+30. **Never** let one unreadable source fail an aggregate view; skip it, log it once per streak, and answer its own request with the reason (I-135). Guard: `test:test_an_unreadable_root_hides_no_other_root`
+31. **Always** read a checkpoint's next nodes from its `Send` packets (`__pregel_tasks`) as well as its `branch:to:` channels (I-136). Guard: `test:test_next_nodes_include_pending_send_packets`
+32. **Always** show a running node's spend from its cost ledger, not its checkpoint: a checkpoint is written only when the node returns (I-137). Guard: `test:test_a_feature_attempt_in_progress_is_linked_and_counted`
+33. **Always** accept a WebSocket only from the server's own origin (the Origin's host and port equal the request's Host), and deny framing on every response (I-138). Guard: `test:test_ws_refuses_a_foreign_origin`, `test:test_no_site_can_frame_the_page_or_the_api`
+34. **Never** write a stack's command word (`node`, `npm`, `pytest` ...) as a string literal outside `scio/toolchain/`, even when it names something else; use attribute access (I-139). Guard: `test:test_no_stack_specific_command_outside_the_toolchain_package`
 35. **Always** run a product's commands, and a worker turn, with the product's interpreter first on PATH, never with SCIO's inherited environment (I-114). Guard: `symbol:with_interpreter_first`, `test:test_worker_turn_runs_with_the_product_interpreter_first_on_path`, `test:test_every_local_command_runs_with_the_product_interpreter_first_on_path`
 36. **Always** name the cap that stopped a run (the run's total or one advisor call per step), never a counter that hides it (I-115). Guard: `test:test_halt_reason_names_the_per_step_cap_when_the_total_has_headroom`
 37. **Never** let a human decision silently drop a feature from the product: `skip` defers it, a skip finishes a feature only in its own milestone, and the release refuses while any feature in PRODUCT.md is not done (I-116). Guard: `test:test_a_skipped_feature_is_deferred_to_the_next_milestone_not_dropped`, `test:test_the_release_gate_refuses_while_a_feature_is_not_done`, `test:test_a_skip_finishes_a_feature_only_in_the_milestone_it_was_skipped_in`
@@ -615,3 +630,46 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - The env-conditional skip of the Node docker-live test (I-105).
 - CONTRIBUTING, "Tests and the environment": the CI-like git rule, check the previous push's CI before the next push, and the Docker-in-both-jobs rule (I-104, I-105).
 - pytest-xdist in the dev group and `pytest -n` in CI (I-094 follow-up); ADR 0016; ledger I-101 to I-105.
+
+## The dashboard (2026-10-27, issue #68, ADR 0017)
+
+### Lessons applied
+- Measure before designing (pre-flight 8): two probes ran before the contract was written. One opened a `mode=ro` connection under LangGraph's `SqliteSaver` on a WAL checkpoint DB, with a writer open and closed. The other dumped a Fake build's checkpoint channels, pending writes and interrupts. The data layer's whole read-only design, and the `branch:to:<node>` rule for the current step, rest on them.
+- Contract first, then a parallel wave with owned files (the owner's orchestration rules): `scio/dashboard/contract.py`, the fixtures from a real Fake build, and a fixture-backed `DataSource` came first, so the data, API, page and docs agents never waited on each other. The page and the API were written by different agents against the same JSON and met for the first time in `test_the_real_app_serves_the_page_live_and_stops_cleanly`, which passed on its first run.
+- Read a checkpoint with its own kind's model, classified by channels (I-066, I-108): the dashboard reuses `scio report`'s builders, so its costs equal `scio report`'s to the cent on the live graphcalc build ($9.0983, every feature row and role identical).
+- One live check before claiming done (M5): the live run found two things no Fake test could, the attempt in progress missing from the build view and its stopped status.
+
+### What succeeded
+- The plan's 3 to 3.5 hours held: wave 0 (probes, contract, fixtures) about 40 minutes; wave 1's four agents in parallel in 6 (docs), 15 (API), 19 (data) and 35 (page) minutes against an estimate of 90; integration, the live checks and the fixes about 70 minutes.
+- Reviewing the contract against the probes before fan-out caught I-120 (a stop never moves the checkpoint id) when it was a docstring change, not a cross-agent rewrite.
+- Each agent's sweep found something outside its own file: a torn ledger line that would crash `scio report` on a live run (I-127), worker turns with no trace spans (I-122), an install hint that would uninstall extras (I-124).
+- Mutation checks made the new guards honest: the WebSocket diff, the Origin check and the MIME pin (agent B), the shutdown test against a send-only handler (I-130), the torn-line test against the old loader (I-127).
+
+### What failed
+- The plan's change detection was wrong (I-120): it polled checkpoint ids, and a stop is a pending write on an existing checkpoint.
+- My briefs carried two mistakes that agents corrected: Phoenix's OTLP port (I-125) and a bare `uv sync --extra` (I-124). One prediction of mine was refuted by a test (I-121).
+- A shutdown hang appeared only under the full parallel run (I-132): uvicorn's last step waits on `asyncio.Server.wait_closed`, which on Windows can wait forever for a reset connection. Three reproductions and a task dump found it; the fix is one argument.
+- My first live-check script orphaned its server: `terminate()` stopped the `uv run` wrapper, not the Python child holding the pipe. The script for the second check runs the interpreter directly.
+- Agent C ran one read-only `git config` against "never run git", and a shell one-liner with a regex was mangled again (I-131).
+- The fresh-context review found five things every test and both live checks had passed, each confirmed by a probe:
+  - an answered stop still read "waiting" until its node returned (I-134);
+  - a resumed crash still reads "crashed", which the DB cannot tell apart, so it is documented (I-133);
+  - one unreadable root emptied the whole list (I-135);
+  - T2's explorers lit no step (I-136);
+  - a running attempt's spend lagged its ledger (I-137);
+  - any local page could watch the WebSocket (I-138).
+
+  Two of the tests it named passed by construction: an empty `next_nodes` satisfied a subset check, and a test set the checkpoint and ledger spend equal. A reviewer that is handed the code and not my conclusions is worth its 20 minutes.
+
+### Actions
+- `scio/dashboard/` (contract, data, app, static) and `scio dashboard` with `DASHBOARD_HOST` and `DASHBOARD_SHUTDOWN_S`; the `dashboard` extra.
+- Tests: `test_dashboard_contract.py`, `test_dashboard_data.py`, `test_dashboard_app.py`, `test_dashboard_cli.py`, `tests/live/test_dashboard_page.py`, `tests/live/test_dashboard_server.py`, `test_lf_writes.py`, the torn-line test in `test_m5_observability.py`, `test_report_reads_a_build_that_stopped_before_its_first_feature`.
+- `CostLedger.load_entries` reads complete lines only; `_read_artifact` replaces a broken character (I-127).
+- The review's fixes: the answered-stop rule and `test_every_node_interrupts_at_most_once`, `Send` packets in `next_nodes`, the running spend from the ledger, `FailureStreaks` and the 503 for an unreadable root, `is_same_origin`, `FrameDenyMiddleware`.
+- ADR 0017, `docs/OBSERVABILITY.md`, README, CHANGELOG, PRODUCT_MODE, ARCHITECTURE's tree; ledger I-120 to I-139; guardrails 20 to 34.
+
+### Bottleneck audit
+- Slowest steps: the page agent (35 minutes, most of it Playwright waits and screenshots), diagnosing I-132 (about 15 minutes: three full runs and an instrumented one), and agent D's second round, which waited on the other agents' facts.
+- Ran one after another but could have run in parallel: the live check waited for the running-feature fix; the snapshot-based check could have started as soon as the API and page were committed. The docs agent's second round could have been briefed with placeholders in its first.
+- Repeated friction: lint findings on first drafts in every agent (E501, SIM105, SIM117, RUF100), all fixed before a commit; Windows-only behaviour once more (CRLF, the proactor's reset connection).
+- Improvements: (1) the `_Server` helper in `tests/live/test_dashboard_server.py` runs uvicorn exactly as the CLI does, so a future server test starts from it; (2) run the full parallel test set at each gate, not only the new files: I-132 showed only under load, and I-139 only in a repository-wide scan.

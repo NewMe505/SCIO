@@ -1060,3 +1060,180 @@ Template:
 - Fix: the fake accepts `path`
 - Sweep: every fake of `shutil.which` in the tests (`grep -rn "shutil.which\|\"which\"" tests`): `test_sandbox.py:252` (fixed) and `test_aci_tools.py:111`, which patches `repo_search`'s own call (unchanged signature). Guard: the test itself, now with `path`, plus guardrail 38: before changing how a callable is called, grep for its fakes and monkeypatches
 - Resolved: 2026-10-28 · Status: resolved
+
+### I-120 · The dashboard plan's change detection could never show a thread starting to wait
+- Found: 2026-10-27 · issue #68, wave 0, reviewing the contract against a Fake build's checkpoints before dispatching wave 1 · the approved plan polled "the latest `checkpoint_id` of each thread and the ledger files' sizes"
+- Symptom: none shipped; read in the probe. The build paused at `merge_wait` has its latest checkpoint with `branch:to:merge_wait`, and the stop is a pending `__interrupt__` write on that checkpoint. The live graphcalc DB showed the same for a crash: a pending `__error__` write, no new checkpoint.
+- Root cause: LangGraph writes the checkpoint before a node runs. What the node does next (interrupt, raise, a parallel task's result) lands as a row in `writes` against that checkpoint, so the id does not move. Ledger size does not move either, because a stop makes no model call. The plan treated "a new checkpoint" as "something changed".
+- Fix: `ThreadVersion.writes` (the thread's rows in `writes`) in `scio/dashboard/contract.py` (commit `08dfc5f`), counted in the same grouped query by `CheckpointDataSource.versions`. Also a `crashed` status from a pending `__error__` write, and a fixture source whose `bump(checkpoint=False)` models a stop arriving.
+- Sweep: every place SCIO decides whether a thread changed or started (`grep -rn "checkpoint_id\|get_state(" scio`): outside the dashboard only `thread_started` (`scio/graph/run.py`), which asks whether a checkpoint exists, not whether it changed. Unaffected.
+- Guard: `test_a_stop_arriving_changes_the_writes_count_not_the_checkpoint` (a tiny graph paused at an interrupt; with the `__interrupt__` row removed from a copy, the checkpoint id is the same and the writes count differs), `test_ws_pushes_a_stop_that_adds_no_checkpoint` (the WebSocket pushes a stop-only change), and guardrail 20
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-121 · Predicted: a build that died before its first feature would not classify as a build (refuted)
+- Found: 2026-10-27 · issue #68, wave 0 · reading `_is_build_thread` in `scio/cli.py` (`"feature_runs" in values`) while fixing the dashboard's classification rule
+- Symptom: predicted from the source, not observed. A build that crashed at `issues` (graphcalc S4) might have no `feature_runs` channel yet, so `scio report` would hand it to the task model and raise a ValidationError.
+- Root cause: the prediction was wrong. `initial_build_state` writes every `ProductBuildState` field, `feature_runs=[]` included, into the first checkpoint. So the channel exists from the start, and the CLI's rule holds.
+- Fix: none needed. The dashboard accepts `product_dir` too, which is also written by `initial_build_state`, so neither rule depends on a node having run.
+- Sweep: the other readers that classify a thread by its channels (`grep -rn '"feature_runs" in\|"target_dir"\|values.get("target_dir")' scio`): `_is_build_thread` and `load_product_state`, both written from the first checkpoint.
+- Guard: `test_report_reads_a_build_that_stopped_before_its_first_feature` (a build whose milestone planner dies reports as a build); it passed before and after, which is what refuted the prediction
+- Resolved: 2026-10-27 · Status: wontfix (not a defect)
+
+### I-122 · Worker turns on the Claude Code backend emit no OpenTelemetry spans
+- Found: 2026-10-27 · issue #68, wave 1 (agent D, writing `docs/OBSERVABILITY.md` from `scio/harness/telemetry.py`) · `ClaudeCodeWorker` (`scio/loop/claude_code_worker.py`) records cost through `Harness.account()`, which opens no span, and its tools run inside the `claude` binary
+- Symptom: with `SCIO_OTEL_EXPORTER=otlp`, a trace viewer shows the tool-less roles (router, planners, advisor, gates, reviewer) but no coder, debugger, documenter or explorer turn and no `execute_tool` span when `SCIO_WORKER_BACKEND=claude_code`. Those turns are in the cost ledger only.
+- Root cause: ADR 0012 added the worker seam with accounting and no tracing; `Harness._call` is where spans open, and the backend never goes through it.
+- Fix: not in issue #68's scope. `docs/OBSERVABILITY.md` states the gap.
+- Sweep: the other paths that charge cost without `_call` (`grep -rn "\.account(" scio`): the Claude Code worker only.
+- Resolved: - · Status: open
+
+### I-123 · `telemetry.SCIO_THREAD_ID` is defined but never set
+- Found: 2026-10-27 · issue #68, wave 1 (agent D) · `scio/harness/telemetry.py` defines the attribute name `scio.thread_id`; no span sets it
+- Symptom: a trace viewer can group spans by thread only through the tag attribute `scio.tag.thread`
+- Root cause: the constant was declared for a planned attribute that no call site adopted
+- Fix: not in issue #68's scope; the doc names `scio.tag.thread` only.
+- Sweep: the other attribute constants in `telemetry.py` against their uses (`grep -rn "SCIO_[A-Z_]* = \"scio\." scio/harness/telemetry.py`, then each name across `scio`): only this one is unused.
+- Resolved: - · Status: open
+
+### I-124 · A `uv sync --extra dashboard` install hint would uninstall the user's other extras
+- Found: 2026-10-27 · issue #68, wave 1 (agent D's report) · the CLI's missing-extra message and the README block I wrote said `uv sync --extra dashboard`
+- Symptom: none shipped. `uv sync` removes every extra it is not told to install, so following the hint drops `otlp`, `postgres` and `e2b`, and a later `SCIO_OTEL_EXPORTER=otlp` fails on import
+- Root cause: I wrote the hint as an install command, but `uv sync` makes the environment match exactly what it was told
+- Fix: the CLI says `uv sync --all-extras` (or add `--extra dashboard` to the usual `uv sync`) and the README uses `--all-extras`; agent D's docs name the combined form
+- Sweep: every `uv sync --extra` in the docs and code (`grep -rn "uv sync --extra" --include=*.md --include=*.py .`): the README and CLI (fixed), ADR 0017's decision 3 and two lines of `docs/OBSERVABILITY.md`, the dashboard install and the trace viewer's `uv sync --extra otlp` (fixed by agent D; my first pass had called the second one fine). The only remaining matches are the warnings that name the bare form.
+- Guard: `test_the_dashboard_without_the_extra_says_how_to_install_it` asserts `--all-extras`; guardrail 21
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-125 · My wave 1 brief gave Phoenix's OTLP endpoint as port 4318
+- Found: 2026-10-27 · issue #68, wave 1 (agent D) · the brief listed "Arize Phoenix and Jaeger all-in-one (OTLP HTTP on 4318)"
+- Symptom: none shipped. Phoenix takes OTLP over HTTP on its UI port 6006 (`/v1/traces`); only Jaeger listens on 4318
+- Root cause: I wrote a third-party port from memory into a brief
+- Fix: D checked each viewer and the installed exporter's endpoint handling (`OTEL_EXPORTER_OTLP_ENDPOINT` is a base URL; the exporter appends `/v1/traces`), and the doc gives each viewer its own port
+- Sweep: the other third-party facts in the four wave 1 briefs (cdnjs paths, FastAPI and Starlette APIs, uvicorn's server API): each brief told its agent to verify them against the installed source or the live site, and the agents did
+- Guard: guardrail 22, `manual:` with its reason
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-126 · A new test wrote its static fixture with CRLF and its byte comparison failed
+- Found: 2026-10-27 · issue #68, wave 1 (agent B) · `tests/unit/test_dashboard_app.py`, the `/static/app.js` assertion compared `\r\n` with `\n`
+- Symptom: a failing assertion on the served file's text, before the test was finished
+- Root cause: `Path.write_text` without `newline=` translates `\n` to `\r\n` on Windows (I-006); the test then compared bytes
+- Fix: `newline="\n"` on every `write_text` in the new test
+- Sweep: every text write in the code directories (`grep -rn "write_text(\|open(" scio evals scripts`, then an AST scan): none without `newline=`. The sandboxes' own `write_text` always writes LF, the multi-line report writes pass it on their next line, and the `evals/product_scripts*.py` hits are inside Fake product source strings. `tests/` has 68 such writes of temporary inputs that are read back with universal newlines; they are left as they are.
+- Guard: `test_every_text_write_in_the_code_directories_passes_newline` (an AST scan of `scio`, `evals` and `scripts`; its self-test shows it finds a write without `newline=`) and guardrail 23
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-127 · `scio report` on a live run can die on the ledger's half-written last line
+- Found: 2026-10-27 · issue #68, wave 1 (agent A's sweep while writing the dashboard's ledger reader) · `CostLedger.load_entries` (`scio/harness/accounting.py`), called by `scio report`
+- Symptom: shown by a regression test: a last line cut inside a UTF-8 character raises `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 ... unexpected end of data`, and one cut elsewhere raises a ValidationError. Either ends `scio report` in a traceback.
+- Root cause: the run appends one `<json>\n` per model call while `scio report` (and now the dashboard) can read the file at the same moment. The loader decoded and validated every line, including a last one that has no newline yet.
+- Fix: `load_entries` reads bytes and keeps only the complete lines (up to the last `\n`); a complete line that does not parse still raises. `_read_artifact` in `scio/graph/report.py` reads transcripts with `errors="replace"`, since a transcript caught mid-write can also end inside a character. The dashboard's own reader also skips a corrupt complete line, because a page must never fail on a ledger.
+- Sweep: every reader of a file a live run appends to or rewrites (`grep -rn "load_entries(\|read_text(encoding=\"utf-8\")" scio`, restricted to ledger, artifact and progress paths): `load_entries` (fixed), `_read_artifact` (fixed), `ArtifactStore.get` (reads its own run's artifacts in-process, after they are written, so it is unaffected), and `ProgressFile` reads (the file is rewritten whole by `write_text`; the dashboard catches any error there)
+- Guard: `test_a_torn_last_ledger_line_is_left_out_and_a_corrupt_one_still_raises`, which fails on the old loader with the `UnicodeDecodeError` above; also `test_a_torn_last_ledger_line_is_skipped` (dashboard); guardrail 24
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-128 · Starlette's `TestClient.websocket_connect` ignores `base_url`, so the Host check refused every test socket
+- Found: 2026-10-27 · issue #68, wave 1 (agent B), found by reading the installed source before writing the test · `starlette/testclient.py` joins a relative URL onto `ws://testserver`
+- Symptom: a relative `/ws` sends `Host: testserver`, which `TrustedHostMiddleware` (127.0.0.1 and localhost only) refuses
+- Root cause: the HTTP client honours `base_url`; the WebSocket helper builds its own URL
+- Fix: the tests use the absolute `ws://127.0.0.1/ws`, with a comment. The handshake refusal raises when the session's context is entered, so the refusal tests wrap the call in `with`
+- Sweep: every `websocket_connect(` in the tests (`grep -rn "websocket_connect(" tests`): only `tests/unit/test_dashboard_app.py`, all absolute
+- Guard: `test_ws_says_hello_first_with_nothing_in_it` fails with a relative URL (the Host check refuses it); guardrail 25
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-129 · Playwright's `wait_for_function` with a string predicate fails under the page's CSP
+- Found: 2026-10-27 · issue #68, wave 1 (agent C) · `tests/live/test_dashboard_page.py`, intermittently (2 of 3 runs)
+- Symptom: `EvalError` from Playwright whenever the predicate's first check was false
+- Root cause: the page's Content-Security-Policy forbids `eval` (`script-src 'self' https://cdnjs.cloudflare.com`, no `'unsafe-eval'`), and Playwright evaluates a string predicate's later polls as code inside the page; the first check runs through another path, so a predicate already true passed
+- Fix: the tests wait on selectors (`html[data-refresh="idle"]`, `.head[data-thread=...]`) or poll from Python with `page.evaluate`; the page sets `data-refresh` when a refresh ends so there is something to wait on
+- Sweep: every `wait_for_function` in the code and tests (`grep -rln "wait_for_function" evals scio tests`): only a comment in `tests/live/test_dashboard_page.py` that says why it is not used
+- Guard: guardrail 26; `test_the_page_never_writes_html_from_data_or_evaluates_code` keeps the CSP's premise (no eval in `app.js`) true
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-130 · uvicorn could not stop while a send-only WebSocket handler held a connection
+- Found: 2026-10-27 · issue #68, wave 1 (agent C's test server) · uvicorn 0.54 with the websockets-sansio protocol
+- Symptom: in C's first test server, `Server.run` raised `InvalidState('connection is closing')` at shutdown after a tab closed. A send-only mutant of the real `/ws` handler made uvicorn hang past 10 s instead.
+- Root cause: a handler that only sends never reads the browser's close frame, so the connection stays half-closed; shutdown then sends its own close (1012) on a connection already closing, or waits on a handler that never returns
+- Fix: C's server reads the socket concurrently; the real handler (`_push_changes` in `scio/dashboard/app.py`) already waits on `websocket.receive()` between polls, so a closed tab ends it at once
+- Sweep: every WebSocket handler (`grep -rn "websocket" scio tests --include=*.py -l`): the app's `/ws` and C's test hub, both reading now
+- Guard: `test_the_real_app_serves_the_page_live_and_stops_cleanly` (the real `create_app` under uvicorn with Chromium: one tab closed, one open, then `should_exit`), which fails with "uvicorn did not stop" when the receive loop is replaced by a sleep; guardrail 27
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-131 · A shell-embedded `python -c` with a `\\u` regex was mangled on its way through bash (I-071, I-072, I-112 again)
+- Found: 2026-10-27 · issue #68, wave 2 (agent C, checking `app.js` for escapes) · `re.error: incomplete escape` from a one-off `python -c` check
+- Symptom: the check failed loudly; nothing was written
+- Root cause: the standing rule (guardrail 17) says text with a backslash goes through the file tools; the brief did not repeat it for read-only checks, and a regex in a one-liner is still text with a backslash
+- Fix: the check was rewritten as a script file with the Write tool and ran
+- Sweep: the other shell-embedded scripts of this session, mine and the agents' (`python - <<` and `python -c` uses in the four agents' reports and my own commands): the only other one with a backslash was my `app.py` mutation, whose anchor held no backslash and which asserted its anchor count before writing
+- Guard: guardrail 17 (`manual:`, its reason stands), now citing I-131
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-132 · A stopping dashboard can hang forever on Windows once a browser connection was reset
+- Found: 2026-10-27 · issue #68, wave 2, the gate · `test_the_real_app_serves_the_page_live_and_stops_cleanly` failed in the full parallel run (`-n 6`, three times out of three) and passed alone and in any pair: `AssertionError: uvicorn did not stop`, still alive after 60 s, next to `ConnectionResetError: [WinError 10054]`
+- Symptom: a task dump of the hung server loop showed no uvicorn connections and no tasks (`server_state.connections` and `.tasks` empty), the lifespan task still pending, and `serve()` awaiting a future
+- Root cause: uvicorn 0.54's `_wait_tasks_to_complete` ends with `await server.wait_closed()`. On Python 3.12, that waits until asyncio's server has detached every client transport. On Windows' proactor loop, a connection the browser reset under load can stay attached, so the wait never ends. A second Ctrl+C does not help, since that loop never reads `force_exit`. Only `timeout_graceful_shutdown`, which wraps the whole wait, bounds it, and `scio dashboard` passed none. The send-only handler of I-130 was a different cause with the same symptom.
+- Fix: `scio dashboard` passes `timeout_graceful_shutdown=DASHBOARD_SHUTDOWN_S` (3 s) to uvicorn, so a stop takes at most that long; the server test runs uvicorn with the same constant
+- Sweep: every place SCIO starts a server (`grep -rn "uvicorn\.\|serve_forever\|HTTPServer(" scio evals tests --include=*.py`): the CLI (fixed); the page test's tiny server (agent C's, already waits for its handlers and stops in bounded time); the products' own HTTP servers are the products' code, started and killed by `scio/aci/apps.py`, not stopped gracefully
+- Guard: `test_the_dashboard_binds_loopback_only_and_lists_its_roots` asserts the bound is passed; `test_the_real_app_serves_the_page_live_and_stops_cleanly` hung in the full run before the fix and passes three runs out of three after it; guardrail 28
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-133 · A resumed crashed thread reads "crashed" until the resumed node returns
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_resume.py`) · a crash leaves a pending `__error__` write; `invoke(None)` re-runs the node and writes nothing to the DB before it returns
+- Symptom: a build that crashed in `feature` and was resumed with `scio build` reads `crashed`, with the old exception, for as long as the resumed feature attempt runs, which can be an hour. Its version also does not change, so no event is pushed until a model call grows the ledger.
+- Root cause: unlike a stop's answer, resuming after a crash leaves no record in the checkpoint DB: no `__resume__` write, no new checkpoint, until the node returns
+- Fix: none possible from the DB alone. The contract (`ThreadStatus`), ADR 0017 decision 7 and `docs/OBSERVABILITY.md` now say that a resume clears `crashed` only when the resumed node returns, instead of "a resume clears it". A resumed run's ledger still grows with each model call, so the costs on the page move.
+- Sweep: every other status that depends on a pending write (`waiting`, I-134): fixed there, because an answer does leave a write
+- Resolved: 2026-10-27 · Status: wontfix (the DB carries no signal; documented)
+
+### I-134 · An answered stop kept reading "waiting for you" until its node returned
+- Found: 2026-10-27 · issue #68, wave 3 (the fresh-context review, `review/probe_resume.py`) · `scio/dashboard/data.py` read any pending `__interrupt__` write as a pending stop
+- Symptom: after `invoke(Command(resume="approved"))`, while the resumed node was still running, the thread read `status=waiting`, still asking 'Ship it?'. The owner could answer the same stop twice; the build's feature decision re-runs a whole prelude before its node returns.
+- Root cause: LangGraph never removes the `__interrupt__` row on resume. `Command(resume=v)` adds a `__resume__` pending write (the null task's, then the resumed task's own), and a new checkpoint appears only when the node returns. The data layer looked for the interrupt and not for its answer.
+- Fix: a pending `__interrupt__` with a `__resume__` write on the same checkpoint is an answered stop (`in_progress`, no `StopInfo`), for threads and for a build's linked attempts. Exact because both asks of a node that interrupted twice would share one interrupt id, and no SCIO node interrupts twice.
+- Sweep: every reader of `__interrupt__` writes (`grep -rn "__interrupt__\|INTERRUPT" scio`): the dashboard's `_stop` (fixed) and the graph runners' `raw.pop("__interrupt__")` on `invoke`'s own return value, which LangGraph computes after the resume and so is current
+- Guard: `test_an_answered_stop_reads_in_progress_while_its_node_runs` (a real `Command(resume=...)` while the node blocks: mid-run the pending writes are the `__interrupt__` and the `__resume__`, the checkpoint id is unchanged, and the thread reads `in_progress`); `test_every_node_interrupts_at_most_once` (an AST scan of `scio/`: no function calls `interrupt()` twice), which keeps the rule exact; guardrail 29
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-135 · One unreadable root made the threads list fail for every root
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_roots.py` case a) · `scio/dashboard/app.py`, `GET /api/threads`
+- Symptom: with one good root and one whose `checkpoints.sqlite` is not a database, `GET /api/threads` answered 500 (`sqlite3.DatabaseError: file is not a database`). The page always calls it without `?root=`, so it listed nothing from any root.
+- Root cause: the WebSocket's poll isolated a failing root, but the list endpoint aggregated the roots with no guard; the data layer swallows only "no such table"
+- Fix: the aggregate skips a root whose read fails and logs it once per streak (`FailureStreaks`, shared with the WebSocket); `?root=` for that root, and its thread details, answer 503 with the root and the reason
+- Sweep: every endpoint that calls a reading `DataSource` method (agent B): the list (fixed) and the thread detail (fixed, same 503); `roots()` and `graphs()` read no DB
+- Guard: `test_an_unreadable_root_hides_no_other_root`; guardrail 30
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-136 · The current step was empty while T2's parallel explorers ran
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/probe_send.py`) · `scio/dashboard/data.py` read `next_nodes` from `branch:to:*` channels only
+- Symptom: while explorers ran, the dashboard gave `next_nodes=[]` where LangGraph gives `next=('explore', 'explore')`, so the page said the thread had ended or not started and lit nothing
+- Root cause: a `Send` fan-out schedules its tasks as packets in the `__pregel_tasks` channel, not as `branch:to:` channels
+- Fix: `next_nodes` is the sorted set of both
+- Sweep: the other readers of the next node (`grep -rn "branch:to:" scio tests`): the dashboard only
+- Guard: `test_next_nodes_include_pending_send_packets`, and `test_next_nodes_light_nodes_of_the_threads_own_graph` now asserts a non-empty list where one is expected (it passed on an empty one); guardrail 31
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-137 · An attempt in progress showed the spend of its last checkpoint, not its live spend
+- Found: 2026-10-27 · issue #68, wave 3 (the review, `review/test_probe_running_usd.py`) · `running_usd` and `cost_by_feature` used the child checkpoint's `budgets.usd_used`
+- Symptom: with $0.10 in the checkpoint and $0.50 in the ledger, `running_usd` was 0.1 while `cost_by_role` grew by 0.5; during a long worker turn the headline plus the running spend never matched the by-role total
+- Root cause: a checkpoint is written only when a node returns, and a worker turn is one node; the ledger is appended on every model call. The test hid it by setting both figures equal.
+- Fix: the running spend is the attempt's ledger sum, and the checkpoint's figure only when the ledger has no entries
+- Sweep: every figure on the page read from a checkpoint while a node may be running (summary `usd`, `cost_by_feature` for finished runs, `running_usd`): only `running_usd` and its share of `cost_by_feature` describe a running node; the others are finished runs or `scio report`'s own figure
+- Guard: `test_a_feature_attempt_in_progress_is_linked_and_counted` (checkpoint and ledger now differ in the test); guardrail 32
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-138 · Any local page could watch the dashboard's WebSocket, and any site could frame the page
+- Found: 2026-10-27 · issue #68, wave 3 (the review) · `scio/dashboard/app.py`: `is_local_origin` accepted any loopback origin and port; the page's meta CSP cannot set `frame-ancestors`
+- Symptom: a page on `localhost:3000` (a dev server) could open `/ws` and read root names and thread ids; HTTP reads were already blocked by the browser's same-origin rule. Any site could frame the page (view-only, so nothing to click-jack).
+- Root cause: "local" was taken to mean "same origin"; framing was never decided
+- Fix: `/ws` accepts an `Origin` only when its host and port equal the request's `Host` (`is_same_origin`); every HTTP response carries `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (`FrameDenyMiddleware`)
+- Sweep: every place the server trusts a request header (`grep -n "headers" scio/dashboard/app.py`): the Origin check (fixed) and the Host check (`TrustedHostMiddleware`, already exact)
+- Guard: `test_ws_refuses_a_foreign_origin`, `test_any_other_origin_is_foreign`, `test_no_site_can_frame_the_page_or_the_api`; guardrail 33
+- Resolved: 2026-10-27 · Status: resolved
+
+### I-139 · The Send fix spelled `"node"` as a string literal, which the toolchain boundary forbids
+- Found: 2026-10-27 · issue #68, the full CI-equivalent before the push · `test_no_stack_specific_command_outside_the_toolchain_package` failed: `scio\dashboard\data.py:270: node = getattr(packet, "node", None)`
+- Symptom: one failure in the full suite (481 passed); the dashboard test set at the wave gate had passed
+- Root cause: two parts. The code read LangGraph's `Send.node` with `getattr(..., "node")`, and `"node"` is the Node.js command word the M6 scan keeps inside `scio/toolchain/`. And my wave gates ran only the dashboard tests, so a repository-wide scan first ran at the full check, the same lesson as I-132.
+- Fix: plain attribute access on `langgraph.types.Send`, no string literal; the scan is unchanged
+- Sweep: the boundary scan covers all of `scio/`, and passes after the fix; the other repository-wide scans (`test_lf_writes.py`, `test_every_node_interrupts_at_most_once`, `test_budget_guards.py`, `check_docs.py`) passed in the same full run
+- Guard: `test_no_stack_specific_command_outside_the_toolchain_package` (it caught this); guardrail 34. The retrospective's bottleneck audit makes the full parallel suite the wave gate.
+- Resolved: 2026-10-27 · Status: resolved

@@ -762,6 +762,9 @@ scio/
 │   ├── toolchain/               # ADR 0009, 0014: the Toolchain protocol, the data-driven profile, python and node-ts parsers, detection (configs/profiles/)
 │   ├── product/                 # Product Mode: graph.py (scio new), build.py (the milestone loop),
 │   │                            #   progress.py (PRODUCT.md and progress.json), spec.py, scaffold.py, report.py
+│   ├── dashboard/               # ADR 0017, `scio dashboard`: contract.py (the JSON every layer speaks),
+│   │                            #   data.py (read-only checkpoint, ledger and progress.json reader), app.py
+│   │                            #   (FastAPI, /ws), static/ (the plain HTML/JS page); the `dashboard` extra
 │   └── graph/                   # Layer 5
 │       ├── build.py             # compile StateGraph for a tier; checkpointer wiring
 │       ├── checkpointer.py      # Postgres (prod) / SQLite (dev)
