@@ -63,6 +63,14 @@ class Crash(RuntimeError):
     pass
 
 
+@pytest.fixture(autouse=True)
+def _no_ci_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake GitHub answers at once; a status that is not final must not make a test
+    poll for the real wait (15 minutes)."""
+    monkeypatch.setattr("scio.product.pr_ci.CI_WAIT_S", 0.0)
+    monkeypatch.setattr("scio.product.pr_ci.CI_POLL_S", 0.0)
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         provider_override="fake",
@@ -326,6 +334,7 @@ def _github_product(tmp_path: Path) -> tuple[RunContext, FakeGh, Path, Path]:
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "-u", "origin", "main")
     fake = FakeGh()
+    fake.origin = origin
     ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT), github=GitHubClient("o/r", runner=fake))
     return ctx, fake, repo, origin
 
@@ -362,9 +371,19 @@ def test_github_mode_survives_squash_merged_milestone_prs(tmp_path: Path) -> Non
         assert out.state.milestones_done == ["M1", "M2"]
         assert _git(repo, "rev-parse", "main~1") == squash2  # origin's squash + M2's record
         # the release PR, squash-merged too: M2's record and the cut reach origin main in it,
-        # and the tag lands on origin main's history (I-103)
+        # and the tag lands on origin main's history (I-103). Its CI is red first: the
+        # release stop says so, and `recheck` reads it again once it is green (I-141)
+        fake.ci_default = "fail"
         out = resume_build(ctx, "release")
         assert out.paused and out.state.release and out.state.release.pr_number
+        question = str(out.interrupt["question"])
+        assert "CI failed" in question and "is ready" not in question and "'recheck'" in question
+        assert out.interrupt["ci"]["state"] == "failed"
+        fake.ci_default = "pass"
+        out = resume_build(ctx, "recheck")
+        assert out.paused and out.state.phase == "release_merge_wait" and out.state.release
+        assert "Release v0.1.0 is ready; CI passed" in str(out.interrupt["question"])
+        assert out.state.release.pr_number
         squash3 = _squash_merge(origin, fake, "release/v0.1.0", out.state.release.pr_number)
         out = resume_build(ctx, "merged")
         assert not out.paused and out.state.phase == "done", out.state.ledger[-3:]
@@ -400,6 +419,92 @@ def test_github_mode_never_drops_a_human_commit_on_local_main(tmp_path: Path) ->
     assert _git(repo, "log", "-1", "--format=%s", "main") == "docs: note"
 
 
+def test_a_red_ci_is_never_called_ready_and_recheck_pushes_the_upgrade_made_at_the_stop(
+    tmp_path: Path,
+) -> None:
+    """I-141, I-142 (the graphcalc run's S6): a product from the 0.9.0 scaffold, whose CI never
+    installed the project, gets a red PR. The merge stop says so instead of "ready";
+    ``scio upgrade`` at the stop commits the current install line on the milestone branch;
+    ``recheck`` pushes it once, reads the new head's CI, and only then asks for the merge."""
+    from scio.aci.sandbox.local import LocalSandbox
+    from scio.product.scaffold import PYTHON_INSTALL
+    from scio.product.upgrade import upgrade_product
+
+    ctx, fake, repo, origin = _github_product(tmp_path)
+    for rel in (".github/workflows/ci.yml", "README.md"):
+        p = repo / rel
+        old = p.read_text(encoding="utf-8").replace(PYTHON_INSTALL, "pip install ruff pytest")
+        p.write_text(old, encoding="utf-8", newline="\n")
+    scio_id = ("-c", "user.name=scio", "-c", "user.email=scio@users.noreply.github.com")
+    _git(repo, *scio_id, "commit", "-q", "-am", "chore: the 0.9.0 scaffold's install line")
+    _git(repo, "push", "-q", "origin", "main")
+    fake.ci_default = "fail"
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.paused and out.state.phase == "merge_wait" and out.state.pr
+        number = int(out.state.pr.number or 0)
+        red = out.state.pr.ci
+        assert red and red.state == "failed" and "ci/checks (https://" in red.detail
+        question = str(out.interrupt["question"])
+        assert "is ready" not in question and "CI failed" in question and "'recheck'" in question
+        assert out.interrupt["pr"]["ci"]["state"] == "failed"
+        texts = [e.text for e in out.state.ledger]
+        assert any(f"milestone PR #{number} not ready, CI failed" in t for t in texts)
+        assert not any("ready for review" in t for t in texts)
+
+        # at the stop, as the graphcalc session would: the upgrade lands on milestone/1
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "milestone/1"
+        report = upgrade_product(LocalSandbox(repo))
+        assert any(a.startswith(".github/workflows/ci.yml: ") for a in report.added)
+        fixed = _git(repo, "rev-parse", "milestone/1")
+        assert report.commit == fixed
+        assert _git(origin, "rev-parse", "refs/heads/milestone/1") != fixed  # not pushed yet
+        fake.ci[fixed] = "pass"
+
+        out = resume_build(ctx, "recheck")
+        assert out.paused and out.state.phase == "merge_wait" and out.state.pr
+        assert _git(origin, "rev-parse", "refs/heads/milestone/1") == fixed
+        green = out.state.pr.ci
+        assert green and green.state == "passed" and green.head == fixed
+        assert f"is ready; CI passed on {fixed[:12]}" in str(out.interrupt["question"])
+        from scio.graph.effects import effect_key
+
+        key = effect_key(ctx.thread_id, "merge_wait", f"push:milestone/1:{fixed}")
+        pushed = ctx.effects.get(key)
+        assert pushed is not None and pushed.status == "done"
+        reads = sum(1 for a, _ in fake.calls if a[:2] == ["pr", "checks"])
+        again = resume_build(ctx, "recheck")  # the same head: read again, pushed once only
+        assert again.paused and again.state.pr and again.state.pr.ci == green
+        assert sum(1 for a, _ in fake.calls if a[:2] == ["pr", "checks"]) == reads + 1
+        assert ctx.effects.get(key) == pushed
+
+        subprocess.run(
+            ["git", "update-ref", "refs/heads/main", "refs/heads/milestone/1"],
+            cwd=origin,
+            check=True,
+        )
+        fake.merged.add(number)
+        out = resume_build(ctx, "merged")
+        assert out.paused and out.state.milestone and out.state.milestone.id == "M2"
+    finally:
+        ctx.close()
+    assert f"- run: {PYTHON_INSTALL}\n" in _git(origin, "show", "main:.github/workflows/ci.yml")
+
+
+def test_a_merge_stop_without_a_ci_reading_asks_for_recheck() -> None:
+    """I-141: a checkpoint from before the field (the graphcalc thread, paused on 0.9.0) has
+    no CI reading; its stop says so and offers ``recheck``, never "ready"."""
+    from scio.product.build import _ci_question
+    from scio.state.models import CiStatus
+
+    unread = _ci_question("Milestone M1 (x)", 6, "milestone/1", None)
+    assert "CI not read yet" in unread and "'recheck'" in unread and "is ready" not in unread
+    pending = _ci_question("Milestone M1 (x)", 6, "milestone/1", CiStatus(state="pending"))
+    assert "CI is still running" in pending and "is ready" not in pending
+    none = _ci_question("Release v0.1.0", 9, "release/v0.1.0", CiStatus(state="none"))
+    assert "no CI checks reported" in none and "is ready" not in none
+
+
 def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> None:
     """Milestone, issues and the PR go through the GitHub client (a canned ``gh``); the branch
     is pushed to a bare origin; a resume after the PR re-applies no write; the merge is read
@@ -411,6 +516,7 @@ def test_github_mode_crash_after_the_pr_duplicates_nothing(tmp_path: Path) -> No
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "push", "-q", "-u", "origin", "main")
     fake = FakeGh()
+    fake.origin = origin
     client = GitHubClient("o/r", runner=fake)
     ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT), github=client)
     try:

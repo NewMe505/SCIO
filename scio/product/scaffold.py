@@ -122,6 +122,24 @@ def dockerfile(spec: ProductSpec, tc: Toolchain) -> str:
 
 # ---------- python ----------
 
+PYTHON_INSTALL = "pip install -e . ruff pytest"
+"""The install line of a python product's CI and README Develop block: the project itself,
+so every dependency ``pyproject.toml`` declares reaches the tests, then the lint and test
+tools (I-140). SCIO's own checks run in its sandbox venv, where the install phase put the
+dependencies, so only the product's CI sees a missing install."""
+OLD_PYTHON_INSTALLS = ("pip install ruff pytest",)
+"""Install lines older scaffolds wrote; ``scio upgrade`` replaces exactly these (I-142)."""
+PYTHON_BUILD_SYSTEM = (
+    '[build-system]\nrequires = ["setuptools>=68"]\nbuild-backend = "setuptools.build_meta"\n'
+)
+"""What makes ``pip install -e .`` work whatever directories the product adds: without it,
+setuptools guesses the packages and refuses a second top-level directory (I-140)."""
+
+
+def python_packages_find(pkg: str) -> str:
+    """The package list for setuptools: the product's package and its subpackages only."""
+    return f'[tool.setuptools.packages.find]\ninclude = ["{pkg}", "{pkg}.*"]\n'
+
 
 def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str, str]:
     tc: Toolchain = get_toolchain("python")
@@ -130,12 +148,17 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
     lint_cmd = " ".join(tc.lint_argv("."))
     files = {
         "pyproject.toml": (
+            PYTHON_BUILD_SYSTEM + "\n"
             "[project]\n"
             f'name = "{pkg}"\n'
             'version = "0.1.0"\n'
             f'description = "{spec.title}"\n'
             'requires-python = ">=3.12"\n'
-            "dependencies = [" + ", ".join(f'"{d}"' for d in spec.dependencies) + "]\n\n"
+            "dependencies = ["
+            + ", ".join(f'"{d}"' for d in spec.dependencies)
+            + "]\n\n"
+            + python_packages_find(pkg)
+            + "\n"
             '[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = ["E", "F", "I"]\n\n'
             # the coverage floor measures the product's own code, not its tests, and not the
             # two-line `python -m` entry that only a subprocess runs (M11)
@@ -181,7 +204,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             "      - uses: actions/setup-python@v5\n"
             "        with:\n"
             '          python-version: "3.12"\n'
-            "      - run: pip install ruff pytest\n"
+            f"      - run: {PYTHON_INSTALL}\n"
             f"      - run: {lint_cmd}\n"
             f"      - run: {test_cmd}\n" + README_RUN_STEP
         ),
@@ -192,7 +215,7 @@ def python_scaffold(spec: ProductSpec, *, owner: str = "the author") -> dict[str
             tc,
             owner=owner,
             run_cmd=tc.skeleton_command(pkg),
-            develop_cmds=["pip install ruff pytest", lint_cmd, test_cmd],
+            develop_cmds=[PYTHON_INSTALL, lint_cmd, test_cmd],
             skeleton_summary="package, `--version`, smoke test",
         )
     )

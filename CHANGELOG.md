@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `scio build --gh` reads the PR's CI on GitHub after it pushes a milestone or release PR (up to 15 minutes, ending at the first failing check) and stores it in the checkpoint (`MilestonePR.ci`, `ReleaseRecord.pr_ci`). A merge stop says "ready" only over a green CI: red names the failing checks with their links, and unread, still running or no checks say so (I-141).
+- `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
+
+### Fixed
+- A python product's CI and README Develop block install the project (`pip install -e . ruff pytest`), so the dependencies `pyproject.toml` declares reach the tests; before, CI installed only ruff and pytest, and the first feature importing an approved dependency failed the PR's CI at collection while every SCIO check passed in its sandbox venv (I-140, the graphcalc run's S6). The scaffold's `pyproject.toml` now has a setuptools `[build-system]` and lists its package, so the install works whatever directories the product adds.
+- `scio upgrade` brings an existing product's CI along: it replaces exactly the old scaffold's install line in `ci.yml` and the README, and gives a `pyproject.toml` without a build system the scaffold's one; a line the product changed is kept (I-142).
 
 ## [0.9.0] - 2026-10-30
 ### Added

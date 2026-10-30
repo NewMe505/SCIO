@@ -1237,3 +1237,48 @@ Template:
 - Sweep: the boundary scan covers all of `scio/`, and passes after the fix; the other repository-wide scans (`test_lf_writes.py`, `test_every_node_interrupts_at_most_once`, `test_budget_guards.py`, `check_docs.py`) passed in the same full run
 - Guard: `test_no_stack_specific_command_outside_the_toolchain_package` (it caught this); guardrail 34. The retrospective's bottleneck audit makes the full parallel suite the wave gate.
 - Resolved: 2026-10-27 · Status: resolved
+
+### I-140 · A python product's CI never installed the project, so its approved dependencies never reached CI
+- Found: 2026-10-30 · issue #75, the graphcalc live run (its RUN_LOG S6), merge stop 1, 17:38 UTC · PR NewMe505/graphcalc#6, CI runs 41099199616 (`pull_request`) and 41099185745 (`push`)
+- Symptom: the PR's CI failed in 8 s at collection: `graphcalc/calc.py:10: in <module> from sympy import (` / `E   ModuleNotFoundError: No module named 'sympy'`, `Interrupted: 3 errors during collection`, exit 2. Every check SCIO ran had passed: `[tests] passed` (56 passed, 1 skipped), `[acceptance] passed`, `[readme] passed`.
+- Root cause: `python_scaffold` wrote `- run: pip install ruff pytest` into `ci.yml` and the README's Develop block: the tools, never the project, so `[project].dependencies` never reached a CI runner. Bootstrap CI on `main` was green only because nothing imported the dependency yet. SCIO's checks run in `.scio/sandbox/venv`, where the install phase puts the approved dependencies, so none of them sees the CI's environment. A second gap behind it: the scaffold's `pyproject.toml` had no `[build-system]`, so `pip install -e .` would depend on setuptools guessing the packages, and it refuses a flat layout with a second top-level directory.
+- Fix: `PYTHON_INSTALL = "pip install -e . ruff pytest"` is the CI's install step and the Develop block's first line; the scaffold's `pyproject.toml` starts with `PYTHON_BUILD_SYSTEM` (setuptools) and lists the package with `[tool.setuptools.packages.find]` (`python_packages_find`). Existing products: I-142. Clean-venv proof (a scratch script that writes a fresh scaffold declaring `six`, adds a test importing it, and runs the scaffold's own CI steps in a new `venv`): the current scaffold gives `4 passed`; the 0.9.0 line gives `E   ModuleNotFoundError: No module named 'six'`, exit 2 (S6 reproduced); no build system beside a `static/` directory gives `error: Multiple top-level packages discovered in a flat-layout: ['static', 'parity_app']`.
+- Sweep: `grep -rn "pip install" scio configs`: the two scaffold sites (now the one constant) and `scio/product/spec.py:118` (a parsing regex, unrelated). The node scaffold's `npm install` installs `package.json`'s dependencies; the Dockerfile installs `[project].dependencies` (`release_image`). `evals/tasks/t007_red_ci` and `t009_verify_only_lint` keep `pip install ruff pytest`: fixture repositories that declare no dependency (`grep -n dependencies evals/tasks/t00{7,9}*/repo/pyproject.toml` finds none).
+- Guard: `test_a_python_products_ci_and_develop_block_install_the_project` (fails on the old scaffold: the constant and the build system do not exist); guardrail 39
+- Resolved: 2026-10-30 · Status: resolved
+
+### I-141 · The merge stop called a PR with red CI "ready for review" without reading its checks
+- Found: 2026-10-30 · issue #75, the graphcalc run's S6 (b) · `milestone PR #6 ready for review` in the build's ledger while PR #6's CI was red; only the run's own GUARDRAILS rule 4 caught it
+- Symptom: `merge_wait` asked "Milestone M1 (...) is ready. Merge PR #6 on GitHub, then reply 'merged'" over a failing CI; `release_merge_wait` had the same shape for the release PR
+- Root cause: nothing in SCIO read a PR's checks: `grep -rn "gh pr checks\|statusCheckRollup\|check_runs" scio` found nothing. "Ready" meant SCIO's own checks passed, which (I-140) is not what CI runs.
+- Fix: `GitHubClient.pr_checks` (`gh pr checks --json name,bucket,link,workflow`; with `--json` it exits 0 whatever the checks say, and a head with no checks is an error, read as `[]`) and `pr_head`; `scio/product/pr_ci.py` `wait_for_ci` polls up to 15 minutes, ends at the first failing check, never counts checks of an older head than the one pushed, and turns a `gh` failure into an `unread` status instead of an exception. `milestone_pr` and the release step read the PR's CI after the push and store it (`MilestonePR.ci`, `ReleaseRecord.pr_ci`, optional fields, so a checkpoint from 0.9.0 still loads). Both merge stops say "is ready" only over a green CI; red names the failing checks with their links; unread, still running or none offer `recheck` (I-142). The ledger line reads "not ready, CI failed ..." instead of "ready for review".
+- Sweep: every stop that asks a human to merge a PR (`grep -n "def .*merge_wait\|pr_merged" scio/product/build.py`): `merge_wait` and `release_merge_wait`, both fixed; `sync_main` reads `pr_merged` only after the human's answer. The fake GitHub's new `pr checks` refuses like the real one (no checks is exit 1) and takes the PR head from the bare origin (guardrail 18).
+- Guard: `test_a_red_ci_is_never_called_ready_and_recheck_pushes_the_upgrade_made_at_the_stop` (failed on the old code: `AttributeError: 'MilestonePR' object has no attribute 'ci'`, and its question said "is ready"), `test_a_merge_stop_without_a_ci_reading_asks_for_recheck`, `test_pr_checks_reads_the_head_commits_checks_and_none_is_empty`, `test_wait_for_ci_says_failed_passed_pending_or_unread`; guardrail 40
+- Resolved: 2026-10-30 · Status: resolved
+
+### I-142 · A fix to a product's CI could not reach a milestone branch paused at the merge stop
+- Found: 2026-10-30 · issue #75, the graphcalc run's S6 (c) · its question: "how does a SCIO-authored commit that fixes `ci.yml` reach `milestone/1`, so PR #6's CI re-runs?"
+- Symptom: the run forbids hand edits of the product (every commit authored by `scio`), so graphcalc stayed held at merge stop 1 with no path forward but merging red
+- Root cause: two parts. `scio upgrade` left the CI file alone once it had the README run step (its one CI rule), so it could not replace an old scaffold line; and `scio upgrade` only commits, while the paused build's `merge_wait` accepted only `merged` or `stop`, so nothing pushed a commit made at the stop.
+- Fix: `scio upgrade` replaces exactly an old scaffold install line (`OLD_PYTHON_INSTALLS`) with `PYTHON_INSTALL` in `ci.yml` (`      - run: ` prefix) and the README, line for line (`replace_install_lines`); a line the product changed is its own. It gives a `pyproject.toml` with neither `[build-system]` nor `[tool.setuptools]` the scaffold's build system and package list, so `pip install -e .` works. The commit lands on the checked-out branch, the milestone branch at a merge stop. Both merge stops take `recheck`: `push_and_read_ci` pushes the branch (an effect keyed by its head SHA, so each head is pushed once, never forced), reads that head's CI and asks again with it; a refused push is an `unread` status, not a crash.
+- Sweep: every `scio upgrade` rule that keys on a whole file (`grep -n "kept.append" scio/product/upgrade.py`): the Dockerfile, `.dockerignore`, the README block and coverage are additive and fine; the CI README step stays keyed on the old last step; the install line is now its own rule. Every node that pushes (`grep -n "git_push" scio/product/build.py`): `milestone_pr` and `release` push once per branch (`push:<branch>`), `recheck` once per head.
+- Guard: `test_upgrade_makes_an_old_python_products_ci_install_the_project`, `test_upgrade_keeps_an_install_line_and_build_system_the_product_changed`, `test_a_red_ci_is_never_called_ready_and_recheck_pushes_the_upgrade_made_at_the_stop` (it runs `upgrade_product` at the stop and checks the push reached origin once); guardrail 41
+- Resolved: 2026-10-30 · Status: resolved
+
+### I-143 · Git Bash rewrote a `ref:path` argument into a Windows path
+- Found: 2026-10-30 · issue #75, orientation · `git show milestone/1:.github/workflows/ci.yml` in the Bash tool
+- Symptom: `fatal: ambiguous argument 'milestone\1;.github\workflows\ci.yml': unknown revision or path not in the working tree`
+- Root cause: MSYS converts an argument that looks like a POSIX path list (`a/b:c/d`) to Windows form before git sees it
+- Fix: `MSYS_NO_PATHCONV=1` for that command (or the PowerShell tool); SCIO's own `git show ref:path` calls go through `subprocess` with an argv list, which MSYS never touches
+- Sweep: `grep -rn '"show"' scio` finds SCIO's `git show <ref>:<path>` calls (`sync_main`'s `origin/main:{PROGRESS_PATH}` among them); all pass argv lists from Python, so only commands typed into the Git Bash tool are affected
+- Guard: guardrail 42 (`manual:`)
+- Resolved: 2026-10-30 · Status: resolved
+
+### I-144 · Two Bash tool calls sent together ran in one call's directory
+- Found: 2026-10-30 · issue #75, orientation · three pairs of parallel Bash calls, each starting with its own `cd`
+- Symptom: the second call of each pair ran where the first had gone: `fatal: not a git repository` from `cd .../SCIO && git status`, and `grep: scio/aci/tools.py: No such file or directory` from `cd .../SCIO && grep ... scio/aci/tools.py`
+- Root cause: not verified; the tool's shell carries `cd` between calls (the environment note moved the primary directory each time), and parallel calls race on it. Sequential calls never failed.
+- Fix: send Bash calls that change directory one at a time, or use absolute paths (`git -C`, `gh -R`)
+- Sweep: none in the repository (a property of the agent's tooling)
+- Guard: guardrail 43 (`manual:`)
+- Resolved: 2026-10-30 · Status: resolved
