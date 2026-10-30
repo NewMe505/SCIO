@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Sequence
+from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
@@ -24,6 +26,11 @@ class FakeGh:
         self.labels: set[str] = set()  # a new repository has none of SCIO's (I-113)
         self.fail_next_release = False
         """Make the next ``release create`` fail once (a crash between tag and Release)."""
+        self.origin: Path | None = None
+        """A bare repository standing in for GitHub's: a PR's head is its branch tip there."""
+        self.ci: dict[str, str | None] = {}
+        """head SHA -> the bucket of its one ``ci/checks`` run; None: no checks reported."""
+        self.ci_default: str | None = "pass"
         self.next_id = 100
 
     def __call__(self, argv: Sequence[str], *, stdin: str | None = None) -> RunResult:
@@ -163,10 +170,29 @@ class FakeGh:
                         "isDraft": pr["isDraft"],
                         "state": "MERGED" if merged else "OPEN",
                         "mergedAt": "2026-10-12T00:00:00Z" if merged else None,
+                        "headRefOid": self.head_of(str(pr["headRefName"])),
                     }
                 ),
                 "",
             )
+        if a[:2] == ["pr", "checks"]:
+            # as gh 2.103 does: with --json it exits 0 whatever the checks say, and a head
+            # with no checks is an error (I-141)
+            n = int(a[2])
+            pr = next(p for p in self.prs.values() if p["number"] == n)
+            head = str(pr["headRefName"])
+            bucket = self.ci.get(self.head_of(head), self.ci_default)
+            if bucket is None:
+                return RunResult(1, "", f"no checks reported on the '{head}' branch")
+            run = {"pass": "SUCCESS", "fail": "FAILURE", "pending": "IN_PROGRESS"}[bucket]
+            row = {
+                "name": "checks",
+                "bucket": bucket,
+                "state": run,
+                "workflow": "ci",
+                "link": f"https://github.com/o/r/actions/runs/{n}/job/{n}",
+            }
+            return RunResult(0, json.dumps([row]), "")
         if a[:2] == ["pr", "ready"]:
             n = int(a[2])
             next(p for p in self.prs.values() if p["number"] == n)["isDraft"] = False
@@ -174,6 +200,18 @@ class FakeGh:
         if a[:2] == ["pr", "edit"]:
             return RunResult(0, "", "")
         return RunResult(1, "", f"unhandled: {a}")
+
+    def head_of(self, branch: str) -> str:
+        """The branch tip on the fake GitHub: the bare origin's ref, else a made-up SHA."""
+        if self.origin is None:
+            return f"sha-of-{branch}"
+        r = subprocess.run(
+            ["git", "rev-parse", f"refs/heads/{branch}"],
+            cwd=self.origin,
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout.strip()
 
 
 @pytest.fixture
@@ -326,3 +364,53 @@ def test_ensure_release_creates_once_with_its_assets(gh: tuple[GitHubClient, Fak
     creates = [a for a, _ in fake.calls if a[:2] == ["release", "create"]]
     assert len(creates) == 1 and "--verify-tag" in creates[0]
     assert [(w.op, w.noop) for w in client.writes] == [("release", False), ("release", True)]
+
+
+def test_pr_checks_reads_the_head_commits_checks_and_none_is_empty(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-141: the merge stop's only window on the product's CI. ``--json`` exits 0 for a red
+    check, so the bucket decides; a head with no checks is ``[]``, not an error."""
+    client, fake = gh
+    pr = client.ensure_draft_pr(head="milestone/1", base="main", title="M1", body="b")
+    assert [(c.name, c.bucket, c.workflow) for c in client.pr_checks(pr.number)] == [
+        ("checks", "pass", "ci")
+    ]
+    fake.ci[fake.head_of("milestone/1")] = "fail"
+    (check,) = client.pr_checks(pr.number)
+    assert check.bucket == "fail" and check.link.startswith("https://github.com/o/r/actions/")
+    fake.ci_default, fake.ci = None, {}
+    assert client.pr_checks(pr.number) == []
+    assert client.pr_head(pr.number) == "sha-of-milestone/1"
+    broken = GitHubClient("o/r", runner=lambda argv, stdin=None: RunResult(4, "", "auth"))
+    with pytest.raises(GitHubError, match="auth"):
+        broken.pr_checks(1)
+
+
+def test_wait_for_ci_says_failed_passed_pending_or_unread(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-141: a failing check ends the wait at once; checks of an older head than the one
+    pushed never count for it; the wait is bounded; a ``gh`` failure is a status."""
+    from scio.product.pr_ci import wait_for_ci
+
+    client, fake = gh
+    pr = client.ensure_draft_pr(head="milestone/1", base="main", title="M1", body="b")
+    head = fake.head_of("milestone/1")
+    assert wait_for_ci(client, pr.number, head=head).state == "passed"
+    fake.ci[head] = "fail"
+    red = wait_for_ci(client, pr.number, head=head)
+    assert red.state == "failed" and red.line().startswith(f"CI failed on {head[:12]}: ci/checks")
+    sleeps: list[float] = []
+    clock = iter(range(0, 10_000, 15))
+    stale = wait_for_ci(
+        client, pr.number, head="new-sha", wait_s=60, poll_s=15,
+        sleep=sleeps.append, clock=lambda: float(next(clock)),
+    )  # fmt: skip
+    assert stale.state == "pending" and "GitHub still shows" in stale.detail
+    assert sleeps == [15.0] * 3  # read at 15, 30, 45 s; at 60 s the wait is over
+    fake.ci[head] = "pending"
+    assert wait_for_ci(client, pr.number, head=head, wait_s=0).state == "pending"
+    broken = GitHubClient("o/r", runner=lambda argv, stdin=None: RunResult(1, "", "HTTP 502"))
+    unread = wait_for_ci(broken, 1, head=head, wait_s=0)
+    assert unread.state == "unread" and "HTTP 502" in unread.detail

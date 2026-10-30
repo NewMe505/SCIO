@@ -80,6 +80,17 @@ class PullRequestInfo:
     base: str
 
 
+@dataclass(frozen=True)
+class CheckInfo:
+    """One check run on a PR's head commit, as ``gh pr checks --json`` reports it."""
+
+    name: str
+    bucket: str
+    """``pass``, ``fail``, ``pending``, ``skipping`` or ``cancel`` (gh's own grouping)."""
+    link: str
+    workflow: str = ""
+
+
 class GitHubClient:
     def __init__(self, repo: str, *, runner: Runner = GhRunner) -> None:
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
@@ -179,6 +190,32 @@ class GitHubClient:
     def pr_merged(self, number: int) -> bool:
         d = self._json("pr", "view", str(number), "-R", self.repo, "--json", "state,mergedAt")
         return str(d.get("state", "")).upper() == "MERGED" or bool(d.get("mergedAt"))
+
+    def pr_head(self, number: int) -> str:
+        """The SHA GitHub has as the PR's head (it lags a push by a moment)."""
+        d = self._json("pr", "view", str(number), "-R", self.repo, "--json", "headRefOid")
+        return str(d.get("headRefOid") or "")
+
+    def pr_checks(self, number: int) -> list[CheckInfo]:
+        """The checks on the PR's head commit (I-141). ``--json`` exits 0 whatever the checks
+        say (8 is gh's code for pending without it); a head with no checks yet is ``[]``."""
+        r = self._run(
+            ["pr", "checks", str(number), "-R", self.repo, "--json", "name,bucket,link,workflow"]
+        )
+        if r.code != 0 and "no checks reported" in r.stderr:
+            return []
+        if r.code not in (0, 8):
+            raise GitHubError(f"gh pr checks {number} failed ({r.code}): {r.stderr.strip()[:400]}")
+        rows = json.loads(r.stdout) if r.stdout.strip() else []
+        return [
+            CheckInfo(
+                name=str(c.get("name") or ""),
+                bucket=str(c.get("bucket") or ""),
+                link=str(c.get("link") or ""),
+                workflow=str(c.get("workflow") or ""),
+            )
+            for c in rows
+        ]
 
     def find_comment(self, issue: int, marker: str) -> int | None:
         rows = self._json("api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments") or []
