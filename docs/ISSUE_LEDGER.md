@@ -1282,3 +1282,11 @@ Template:
 - Sweep: none in the repository (a property of the agent's tooling)
 - Guard: guardrail 43 (`manual:`)
 - Resolved: 2026-10-30 · Status: resolved
+
+### I-145 · Two tests failed in one parallel run and passed alone
+- Found: 2026-10-31 · issue #73, the local CI-equivalent on `chore/73-pytest-n8` after `main` (PR #76) was merged in · `uv run python -m pytest -n 8`
+- Symptom: `FAILED tests/graph/test_product_evals_fake.py::test_the_web_product_is_graded_in_a_real_browser` (`exit=load_failed phase=halted milestones= features=0/0`, `latency_s=908.5` against about 42 s alone) and `FAILED tests/graph/test_product_build_fake.py::test_github_mode_crash_after_the_pr_duplicates_nothing` (`assert out.paused and out.state.phase == "merge_wait"`: not paused). Both ran together (gw2, gw0). Each passed alone by node id (41.6 s and 33.7 s), and both passed in the two earlier local runs of the same code and in PR #76's CI.
+- Root cause: not found. The two halt reasons are not in the output (the eval's notes and the test's assertion print no halt message), and pytest's numbered temp dirs, shared with the other sessions on this machine, were cleaned up before they could be read (the counter went from 13431 to 13717 within about 40 minutes). Neither product has dependencies, so its install phase only creates the environment (`python -m venv`, 300 s timeout in `scio/aci/runtime.py`); `load_failed` with no feature run points at that step or the load checks before it, under the machine's load. Not verified.
+- Fix: none yet; the next step is to put the halt reason in both failures' messages, so a recurrence names its cause.
+- Sweep: the tests that assert a build outcome without printing its halt reason (`grep -rn "assert out.paused" tests/graph`)
+- Resolved: - · Status: open
