@@ -9,7 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
 
 ### Changed
-- The local pre-push check runs the tests on 8 workers (`uv run python -m pytest -n 8`), as CI runs them in parallel; a serial run took 14 to 28 minutes per push (issue #73, the owner's decision).
+- The local pre-push check runs the tests on 8 workers (`uv run python -m pytest -n 8`), as CI runs them in parallel; a serial run took 14 to 28 minutes per push (issue #73, the owner's decision). Its type check runs `uv run python -m mypy`, since the dev machine's Application Control now blocks the `mypy.exe` launcher too (I-146).
 
 ### Fixed
 - A python product's CI and README Develop block install the project (`pip install -e . ruff pytest`), so the dependencies `pyproject.toml` declares reach the tests; before, CI installed only ruff and pytest, and the first feature importing an approved dependency failed the PR's CI at collection while every SCIO check passed in its sandbox venv (I-140, the graphcalc run's S6). The scaffold's `pyproject.toml` now has a setuptools `[build-system]` and lists its package, so the install works whatever directories the product adds.
