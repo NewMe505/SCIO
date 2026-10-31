@@ -49,6 +49,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 41. **Always** give a paused stop a way to take a fix made while it waits: `scio upgrade` rewrites exactly the old scaffold's lines, and `recheck` pushes the branch's new head once and reads its CI (I-142). Guard: `symbol:push_and_read_ci`, `test:test_upgrade_makes_an_old_python_products_ci_install_the_project`, `test:test_upgrade_keeps_an_install_line_and_build_system_the_product_changed`
 42. **Always** set `MSYS_NO_PATHCONV=1` (or use PowerShell) for a Git Bash command with a `ref:path` argument; MSYS rewrites it into a Windows path (I-143). Guard: `manual:` a property of the agent's shell, not of the repository; SCIO's own git calls pass argv lists and are not affected
 43. **Never** send two Bash tool calls that change directory at the same time; one runs in the other's directory (I-144). Guard: `manual:` a property of the agent's tooling, which no check in the repository can see; use absolute paths (`git -C`, `gh -R`) instead
+44. **Always** run a Python tool in the local CI-equivalent as `uv run python -m <tool>`, never through the venv's launcher `.exe`: Application Control on the dev machine blocks those launchers one by one, without warning (I-075, I-146). Guard: `test:test_the_local_ci_line_runs_python_tools_as_modules`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 

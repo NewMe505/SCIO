@@ -88,3 +88,17 @@ def test_python_m_scio_is_the_console_entry_point() -> None:
     )
     assert r.returncode == 0, r.stderr
     assert "usage: scio" in r.stdout and "build" in r.stdout
+
+
+def test_the_local_ci_line_runs_python_tools_as_modules() -> None:
+    """CLAUDE.md's CI-equivalent runs every Python tool as ``python -m``: Application Control
+    blocks the venv's launchers on the dev machine (``pytest.exe``, ``scio.exe``, and
+    ``mypy.exe`` since 2026-10-31; I-075, I-146). ``ruff.exe`` is ruff's own binary."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "CLAUDE.md").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.startswith("- Run the CI-equivalent locally"))
+    chain = next(c for c in re.findall(r"`([^`]+)`", line) if "&&" in c)
+    tools = [part.split()[2] for part in chain.split("&&")]
+    assert len(tools) == 6 and set(tools) <= {"python", "ruff"}, tools

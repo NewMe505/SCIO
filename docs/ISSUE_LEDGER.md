@@ -1282,3 +1282,20 @@ Template:
 - Sweep: none in the repository (a property of the agent's tooling)
 - Guard: guardrail 43 (`manual:`)
 - Resolved: 2026-10-30 · Status: resolved
+
+### I-145 · Two tests failed in one parallel run and passed alone
+- Found: 2026-10-31 · issue #73, the local CI-equivalent on `chore/73-pytest-n8` after `main` (PR #76) was merged in · `uv run python -m pytest -n 8`
+- Symptom: `FAILED tests/graph/test_product_evals_fake.py::test_the_web_product_is_graded_in_a_real_browser` (`exit=load_failed phase=halted milestones= features=0/0`, `latency_s=908.5` against about 42 s alone) and `FAILED tests/graph/test_product_build_fake.py::test_github_mode_crash_after_the_pr_duplicates_nothing` (`assert out.paused and out.state.phase == "merge_wait"`: not paused). Both ran together (gw2, gw0). Each passed alone by node id (41.6 s and 33.7 s), and both passed in the two earlier local runs of the same code and in PR #76's CI.
+- Root cause: not found. The two halt reasons are not in the output (the eval's notes and the test's assertion print no halt message), and pytest's numbered temp dirs, shared with the other sessions on this machine, were cleaned up before they could be read (the counter went from 13431 to 13717 within about 40 minutes). Neither product has dependencies, so its install phase only creates the environment (`python -m venv`, 300 s timeout in `scio/aci/runtime.py`); `load_failed` with no feature run points at that step or the load checks before it, under the machine's load. Not verified.
+- Fix: none yet; the next step is to put the halt reason in both failures' messages, so a recurrence names its cause.
+- Sweep: the tests that assert a build outcome without printing its halt reason (`grep -rn "assert out.paused" tests/graph`)
+- Resolved: - · Status: open
+
+### I-146 · Windows Application Control began blocking the venv's `mypy.exe` launcher
+- Found: 2026-10-31 · issue #73, the second local CI-equivalent run on `chore/73-pytest-n8` · `uv run mypy`
+- Symptom: `error: Failed to spawn: mypy` / `Caused by: An Application Control policy has blocked this file. (os error 4551)`; the same command had run about an hour before
+- Root cause: `mypy.exe` is the same 46 KB uv trampoline launcher as `pytest.exe` and `scio.exe` (I-075), unchanged since 2026-10-09; the policy's verdict on it changed, not the file. I-075 had recorded mypy as allowed and so kept the launcher form.
+- Fix: CLAUDE.md's CI-equivalent and its wave gate, and CONTRIBUTING, run `uv run python -m mypy` (it passes: `Success: no issues found in 134 source files`). `ruff.exe` is ruff's own 26 MB binary, which `python -m ruff` starts anyway, so it stays. CI (Linux) keeps `uv run mypy`.
+- Sweep: `grep -rnoE "uv run [a-z][a-z0-9_-]*" CLAUDE.md CONTRIBUTING.md README.md docs scripts .github/PULL_REQUEST_TEMPLATE.md .claude`: CLAUDE.md's two `uv run mypy` (fixed); the ledger's history (left); README's `uv run scio` and `uv run pytest` examples (left for ordinary machines, as I-075 decided)
+- Guard: `test_the_local_ci_line_runs_python_tools_as_modules` (every step of CLAUDE.md's CI-equivalent runs `python` or `ruff`); guardrail 44
+- Resolved: 2026-10-31 · Status: resolved
