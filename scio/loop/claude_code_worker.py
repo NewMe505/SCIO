@@ -5,9 +5,11 @@ Shape of a turn:
 
 1. ``claude -p`` in the sandbox root with the role's static system prompt (plus a note that
    Claude Code's own tools replace SCIO's), the task projection on stdin, the role's allowed
-   tools, ``acceptEdits`` permissions with nobody to answer prompts, a turn cap from the loop
-   limits and a dollar cap from the remaining budget; ``stream-json`` output is rendered into
-   the same transcript shape ``AgentLoop`` produces, so ``scio report`` reads it unchanged.
+   tools, ``acceptEdits`` permissions with nobody to answer prompts, a turn cap in Claude
+   Code's own unit (:func:`scio.loop.backends.claude_code_max_turns`; never SCIO's tool-call
+   cap, I-153) and a dollar cap from the remaining budget; ``stream-json`` output is
+   rendered into the same transcript shape ``AgentLoop`` produces, so ``scio report`` reads
+   it unchanged.
 2. One ``--resume`` call on that session, one turn, no tools, ``--json-schema`` for the
    typed closing output (``WorkerOutput`` by default).
 
@@ -52,6 +54,9 @@ from scio.toolchain import Toolchain
 READ_TOOLS = ("Read", "Glob", "Grep")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 DEFAULT_MAX_TURNS = 30
+"""Claude Code turns when no cap is given (T1 and T2 coder and debugger). A turn is one
+assistant API message: ``num_turns`` in the ``result`` line, and Claude Code's
+``max_turns_reached`` fires after ``max_turns`` of them (I-153)."""
 SUMMARY_MAX_TURNS = 3
 """Turns for the typed summary on ``--resume``. Claude Code delivers ``--json-schema`` output
 through a ``StructuredOutput`` tool call and answers a payload that misses the schema with a
