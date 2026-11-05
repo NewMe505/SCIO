@@ -7,6 +7,7 @@ from scio.context.assembler import (
     PYTHON_SELECTOR_HELP,
     PYTHON_TEST_DIR,
     feature_block,
+    previous_session_block,
     tag_context,
     task_block,
 )
@@ -17,6 +18,7 @@ from scio.state.models import (
     PlanStep,
     ReviewerOutput,
     TaskSpec,
+    WorkerOutput,
 )
 
 
@@ -52,9 +54,13 @@ def localize_question(step: PlanStep | None, task: TaskSpec) -> str:
     if step is None:
         return f"Where in this repository should '{task.title}' be implemented and tested?"
     files = ", ".join(step.files_expected) or "the files the plan expects"
+    # The plan was written before any exploration (T1), so its files are guesses; the files
+    # named here join the step's files_expected (I-151).
     return (
         f"For plan step {step.id} ({step.description}): what do {files} currently contain, "
-        "how are tests run, and what conventions must new code follow?"
+        "how are tests run, and what conventions must new code follow? If a planned file "
+        "does not exist, say so and put the existing files that hold that logic in "
+        "relevant_files."
     )
 
 
@@ -122,7 +128,11 @@ def step_message(
     last_verify: str | None,
     selector_help: str = PYTHON_SELECTOR_HELP,
     test_dir: str = PYTHON_TEST_DIR,
+    previous: WorkerOutput | None = None,
+    tree: str | None = None,
 ) -> str:
+    """A T1/T2 coder's message for one plan step. ``previous``: the last session's report on
+    this same step, carried into this fresh session (I-154)."""
     parts = [
         task_block(task),
         "",
@@ -136,6 +146,8 @@ def step_message(
         f"Plan step to execute: {step.id}",
         f"Attempt: {attempt}",
     ]
+    if previous is not None:
+        parts += ["", previous_session_block(previous, attempt=attempt, tree=tree)]
     if summaries:
         parts += ["", _summaries_block(summaries)]
     if guidance:
@@ -159,7 +171,12 @@ def debug_message(
     signature: str | None,
     attempts: int,
     guidance: str | None,
+    previous: WorkerOutput | None = None,
+    tree: str | None = None,
+    attempt: int = 2,
 ) -> str:
+    """The debugger's message. ``previous``: the last session's report on this step (the
+    coder's, or an earlier debugger's), carried into this fresh session (I-154)."""
     parts = [
         f"Plan step: {step.id if step else 'S1'}" + (f" ({step.description})" if step else ""),
         f"Repository root: {repo_root}",
@@ -168,6 +185,8 @@ def debug_message(
         "",
         tag_context("verify", f"Failing checks:\n{failing_output}"),
     ]
+    if previous is not None:
+        parts += ["", previous_session_block(previous, attempt=attempt, tree=tree)]
     if guidance:
         parts += ["", tag_context("advisor", guidance)]
     parts += [

@@ -48,7 +48,11 @@ def _norm(path: str, root: str | None) -> str:
         r = root.replace("\\", "/").rstrip("/") + "/"
         if p.startswith(r):
             p = p[len(r) :]
-    return p.lstrip("./")
+    # a leading "./" or "/" goes, never the dot of a dot-directory (I-160: `lstrip("./")`
+    # turned `.github/workflows/ci.yml` into `github/workflows/ci.yml`)
+    while p.startswith(("./", "/")):
+        p = p[2:] if p.startswith("./") else p[1:]
+    return p
 
 
 def drifted_files(

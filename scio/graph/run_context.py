@@ -28,6 +28,35 @@ from scio.state.models import Budget
 from scio.toolchain import Toolchain, detect_toolchain, get_toolchain
 
 T0_TOOL_CAP = 10
+"""SCIO's own loop (``AgentLoop``): tool calls per T0 iteration, enforced by
+``ToolBox(max_calls=...)``. Not a Claude Code turn cap; that is ``T0_TURN_CAP`` (I-153)."""
+
+T0_TURN_CAP = 20
+"""The claude_code backend's T0 cap per iteration, in Claude Code turns (``--max-turns``). A
+turn is one assistant API message and may carry several tool calls, so it is not
+``T0_TOOL_CAP``, which ``make_worker`` had passed through as ``--max-turns 10`` (I-153).
+
+Measured in the graphcalc live run (M1 and M2, 2026-10-27 to 11-01; SCIO's cost ledgers
+joined by session id to Claude Code's own session logs):
+
+- At 10 turns, 8 of 9 T0 coder sessions hit the cap, at 1.6 tool calls per turn (135 in 84).
+  Five of the 8 edited nothing, and the 3 that edited first did so at turns 7, 8 and 10. The
+  ninth (P1's second, after the edits) ended at 4. Every T0 session that worked was censored
+  at 10, so the need is read from whole features: P1 took 14 turns (10 capped, then 4 to
+  finish), and P8 attempt 2 took 20 in two sessions, the second redoing 7 turns of
+  reconnaissance before editing at turns 8 to 10. One fresh session needs 14 to 16.
+- T1 coder sessions that ended on their own (n=17) used 11 to 29 turns, median 19, with a
+  plan and a localize summary that T0 does not have.
+- Cost in ledger dollars: a 17 to 22-turn coder session had a median of $0.52 (max $0.77); a
+  23 to 30-turn one $0.91 (max $1.45); a 12-turn documenter $0.45. Billable tokens: 218k per
+  17 to 22-turn session at the median (291k max).
+
+20 is the single-session estimate (16) plus 25%, about the T1 median. Two full-cap coder
+sessions plus the documenter (about $1.6 at the median, 650k tokens) fit under T0's
+claude_code caps ($0.50 x budget factor 4 = $2.00; 1,000,000 tokens). At the maximum
+session costs, the second session or the documenter can end on budget rather than on stall.
+At 25 turns, one session would take about half of T0's dollars. Measure again after the
+next live run that exercises T0 on this backend."""
 
 
 def product_sandbox_backend(

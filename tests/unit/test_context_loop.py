@@ -48,6 +48,37 @@ def test_assembler_projections() -> None:
     assert tag_context("explorer", " hi ") == "[context from explorer]\nhi"
 
 
+def test_coder_message_names_the_files_the_previous_session_changed() -> None:
+    """I-154: a session that edited says which files, and the tree's diff stat follows; with
+    no previous output (the first iteration) the message carries no coder context."""
+    from scio.state.models import WorkerOutput
+
+    prev = WorkerOutput(
+        step_id="S1",
+        summary="Added the six element ids to index.html; app.js not started.",
+        files_touched=["graphcalc/static/index.html"],
+        confidence="medium",
+        next_action="continue",
+    )
+    features = [FeatureItem(id="F1", description="slugify lowercases")]
+    msg = coder_message(
+        TASK,
+        features,
+        repo_root="/w",
+        attempt=3,
+        last_verify="FAILED x",
+        previous=prev,
+        tree=" graphcalc/static/index.html | 11 +++++++++++",
+    )
+    assert "Report from the previous session (attempt 2)" in msg
+    assert "app.js not started" in msg
+    assert "Files that session changed: graphcalc/static/index.html" in msg
+    assert "none; it only investigated" not in msg
+    assert "index.html | 11" in msg.split("Changes in the working tree since the base commit")[1]
+    first = coder_message(TASK, features, repo_root="/w", attempt=1, last_verify=None)
+    assert "[context from coder]" not in first
+
+
 def test_trim_shortens_old_tool_results_only() -> None:
     msgs = [Message.user("start")]
     for i in range(6):

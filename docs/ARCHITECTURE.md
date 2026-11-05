@@ -31,7 +31,7 @@ flowchart LR
 
 ### T0: trivial
 
-One Sonnet loop, at most 10 tool calls, no planner. Failure never calls the Advisor. It re-routes to T1, which is cheaper than consulting Opus on a task that was mis-tiered.
+One Sonnet loop, at most 10 tool calls per iteration (on the Claude Code backend, 20 Claude Code turns per session, measured: I-153), no planner. From its second iteration a session gets the previous one's report and the tree's diff (I-154). Failure never calls the Advisor. It re-routes to T1, which is cheaper than consulting Opus on a task that was mis-tiered.
 
 ```mermaid
 flowchart TD
@@ -109,7 +109,7 @@ Opus plans, Sonnet implements and verifies one feature at a time, Opus gates. Th
 flowchart TD
   P[prepare_repo] --> plan["plan<br/>Opus Planner → Plan(steps) mapped to feature_list"]
   plan --> post["post_plan @task<br/>issue comment with checklist"]
-  post --> loc["localize<br/>Sonnet Explorer ×1, read-only → summary ≤1.5k tokens"]
+  post --> loc["localize<br/>Sonnet Explorer ×1, read-only → summary ≤1.5k tokens;<br/>its files join the plan's files_expected (I-151)"]
   loc --> impl["implement<br/>Sonnet Coder, must cite plan step id"]
   impl --> ver{"verify<br/>run_tests(filter) + lint + types"}
   ver -->|pass| cp["git_checkpoint @task<br/>one commit per passing feature"]
@@ -692,7 +692,7 @@ Per-node prompt inputs are *projections* of this state (the Context layer builds
 | Scoper | Opus 5.5 | `scope` (T2 only) | task, repo map (concise `repo_search`) | `ScopeOutput` | none | 400–700 tokens |
 | Planner | Opus 5.5 | `plan` | task, feature_list, explorer summaries, previous plan + revision reason (on replan) | `PlannerOutput` | none | Fixed touchpoint (a). Writes plan to state; `post_plan` mirrors it to the issue |
 | Explorer | Sonnet 5 | `localize`, `explore` | one question, repo | `ExplorerSummary` (≤1.5k tokens) | `repo_search`, `view_file` | Read-only. Runs in parallel in T2 (2–4) |
-| Coder | Sonnet 5 | `implement`, `t0_loop` | task, current step, feature, localize summary, last verify output (ref), ledgers | `WorkerOutput` + diff artifact | `repo_search`, `view_file`, `edit_file`, `run_tests` | The only writer. Must cite `step_id`. T0: ≤10 tool calls |
+| Coder | Sonnet 5 | `implement`, `t0_loop` | task, current step, feature, localize summary, last verify output (ref), ledgers | `WorkerOutput` + diff artifact | `repo_search`, `view_file`, `edit_file`, `run_tests` | The only writer. Must cite `step_id`. T0: ≤10 tool calls in SCIO's loop, ≤20 Claude Code turns on the claude_code backend (I-153). A session on the same step gets the previous session's report (I-154) |
 | Tester | Sonnet 5 | `implement` (sub-step when a feature has no test yet) | feature, acceptance line, diff | `WorkerOutput` | `view_file`, `edit_file` (tests/ only), `run_tests` | Writes the failing test before the Coder writes code when the repo lacks one |
 | Debugger | Sonnet 5 | `debug` | failures only (ref), error_signature, attempts, diff summary | `WorkerOutput` | `repo_search`, `view_file`, `edit_file`, `run_tests` | Never escalates lint/format/clear tracebacks |
 | Reviewer | Sonnet 5 | `review` | **fresh context**: task + diff + test output only | `ReviewerOutput` | `view_file` only | Advisory. Blockers are written to the ledger and passed to the Documenter's risk notes; they never override passing checks |
@@ -874,7 +874,7 @@ Assumptions are numbered F‑n and referenced above. Change one by PR; record th
 - `GitHubClient` (`scio/harness/github/client.py`) wraps the `gh` CLI through an injectable runner. Every write looks up existing state first (`ensure_branch`, `upsert_issue_comment` by marker, `ensure_draft_pr` by head branch, `mark_ready`), refuses the default branch, and is appended to `client.writes`.
 
 ### M3: the T0 run
-- `scio/loop/agent_loop.py` is one worker turn: static system prompt → task projection → tool calls until the model stops, the tool cap (10 in T0) or the model-call cap is hit → one structured call for the typed `WorkerOutput`. The message list is append-only; old tool results are shortened by size (`scio/context/trim.py`), never deleted.
+- `scio/loop/agent_loop.py` is one worker turn: static system prompt → task projection → tool calls until the model stops, the tool cap (10 in T0; on the Claude Code backend the cap is counted in its turns instead, `claude_code_max_turns`, I-153) or the model-call cap is hit → one structured call for the typed `WorkerOutput`. The message list is append-only; old tool results are shortened by size (`scio/context/trim.py`), never deleted.
 - `verify` is the only place that decides a feature's status, in this order: the tree differs from the base commit; feature tests exist (from `test_filter` or the worker's `tests_added`) and pass; the whole suite passes; lint is clean. The gate is called afterwards and is overridden in code if any check is failing (ADR 0004).
 - Exits: `success` only via `merge_wait`; `max_iters`, `stall`, `budget` from `check_exit` after a failing verify (or a `BudgetExceeded` inside a worker node); `escalate_human` from a gate `escalate_human` verdict, a gate `replan` on T0 or a second gate `replan` on T1/T2 (the first returns to `plan` with the gate's reasons as the revision reason, I-043), a worker's `needs_design_decision`, or a non-T0 routing in M3. `halt` interrupts only for `escalate_human`.
 - Every side-effecting node (`prepare_repo`, `git_checkpoint`, `document`'s docs commit / push / draft PR, `pr_ready`) goes through `run_effect` with an intent and, where visible in the world, a probe. Commit subjects carry `[scio:<key>]`.

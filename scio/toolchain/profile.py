@@ -126,7 +126,9 @@ class ProfileToolchain:
         return path.endswith(self.source_suffixes)
 
     def is_test_path(self, path: str) -> bool:
-        p = path.replace("\\", "/").lstrip("./")
+        p = path.replace("\\", "/")
+        while p.startswith(("./", "/")):  # a prefix, not the dot of `.github/` (I-160)
+            p = p[2:] if p.startswith("./") else p[1:]
         if any(p.startswith(d) for d in self.test_dirs):
             return True
         if any(f"/{d}" in f"/{p}" for d in self.test_dirs):

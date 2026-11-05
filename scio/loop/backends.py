@@ -13,11 +13,40 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 from scio.aci.toolbox import ToolBox
-from scio.graph.run_context import RunContext
+from scio.graph.run_context import T0_TOOL_CAP, T0_TURN_CAP, RunContext
 from scio.loop.agent_loop import SUMMARY_PROMPT, AgentLoop, LoopResult
 
 RUNNER_OVERRIDE: Any = None
 """Tests inject a canned ``claude`` runner here; None runs the real binary."""
+
+DOCUMENTER_TURN_CAP = 20
+"""The documenter's cap on the claude_code backend, in Claude Code turns (I-153). Its tool cap
+(``max_calls=12`` in ``document``, SCIO's own loop) had been passed through as
+``--max-turns 12``. In the graphcalc run all 8 documenter sessions hit that cap, and 2 edited
+nothing ("Stopped mid-investigation, before making any documentation edits", P1 and P4).
+The 6 that edited made their first edit at turns 6 to 12 (median 8.5) and their last at 9 to
+12. 20 = the latest first edit (12) + the longest edit span (7 turns) + the closing turn.
+A 12-turn session cost a median of $0.45; about $0.52 is expected at 20 (the median of the
+coder's 17 to 22-turn sessions). Censored at 12: measure again after the next live run."""
+
+
+def claude_code_max_turns(
+    role: str, toolbox: ToolBox, max_model_calls: int | None = None
+) -> int | None:
+    """``--max-turns`` for a Claude Code worker turn, in Claude Code's own unit (I-153).
+
+    Claude Code counts agentic turns: one assistant API message each, which can carry
+    several tool calls. SCIO's ``ToolBox`` counts tool calls. So where a measured turn cap
+    exists, a tool cap is converted here and never passed through. The T0 tool cap maps to
+    ``T0_TURN_CAP``, and the documenter gets ``DOCUMENTER_TURN_CAP``. The explorer's tool cap
+    (8) still passes through: every explorer session delivered its summary, so it is left
+    as it was. None gives the worker's default (30 turns: T1 and T2 coder and debugger).
+    """
+    if toolbox.max_calls == T0_TOOL_CAP:
+        return T0_TURN_CAP
+    if role == "documenter":
+        return DOCUMENTER_TURN_CAP
+    return toolbox.max_calls or max_model_calls
 
 
 class Worker(Protocol):
@@ -54,7 +83,7 @@ def make_worker(
             role,
             toolchain=ctx.toolchain,
             tool_names=tuple(toolbox.tools),
-            max_turns=toolbox.max_calls or max_model_calls,
+            max_turns=claude_code_max_turns(role, toolbox, max_model_calls),
             binary=ctx.settings.claude_code_bin,
             runner=RUNNER_OVERRIDE,
             timeout_s=max(ctx.settings.request_timeout_s, 600.0) * 3,

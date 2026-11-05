@@ -24,7 +24,7 @@ from evals.fake_scripts import (
 from evals.solvers import make_origin
 from scio.graph.nodes.common import acceptance_from_issue_body
 from scio.graph.run import resume_t0, run_t0
-from scio.graph.run_context import RunContext
+from scio.graph.run_context import T0_TURN_CAP, RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
@@ -209,12 +209,15 @@ def test_t0_runs_through_claude_code_turns_with_verify_as_ground_truth(
     assert s.progress.iterations == 1 and s.progress.tool_calls == 2  # the two Edit calls
     # the coder turn: stream run in the sandbox root, then the resume summary
     coder, summary = actor.calls[0], actor.calls[1]
-    assert _flag(coder, "--name") == "scio-coder" and _flag(coder, "--max-turns") == "10"  # T0 cap
+    # T0 counted in Claude Code turns, not SCIO's tool calls (I-153)
+    assert _flag(coder, "--name") == "scio-coder"
+    assert _flag(coder, "--max-turns") == str(T0_TURN_CAP)
     assert (
         "Edit" in (_flag(coder, "--allowedTools") or "") and _flag(summary, "--resume") == "sess-1"
     )
     documenter = next(a for a in actor.calls if _flag(a, "--name") == "scio-documenter")
     assert "Bash(" in (_flag(documenter, "--allowedTools") or "")
+    assert _flag(documenter, "--max-turns") == str(backends.DOCUMENTER_TURN_CAP)  # I-153
     # Claude Code's usage reached the ledger and the budget under the claude_code provider
     rows = ctx.harness.ledger.to_dict()["entries"]
     assert {r["provider"] for r in rows} == {"fake", "claude_code"}

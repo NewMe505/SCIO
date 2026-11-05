@@ -589,6 +589,71 @@ def test_claude_code_backend_requires_the_local_sandbox(tmp_path: Path) -> None:
         ctx.close()
 
 
+def test_claude_code_turn_caps_are_measured_turns_not_scios_tool_caps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I-153: ``make_worker`` handed T0's tool-call cap (10) to Claude Code as ``--max-turns
+    10``, and a Claude Code turn is one assistant message carrying 1.6 tool calls at T0. In
+    graphcalc S9 every T0 coder session hit the cap mid-reconnaissance and four of five edited
+    nothing; all 8 documenter sessions hit their 12. The claude_code backend now gets its own
+    measured turn caps, and SCIO's own loop keeps its tool cap of 10."""
+    from scio.aci.toolbox import ToolBox
+    from scio.graph.run_context import T0_TOOL_CAP, T0_TURN_CAP, RunContext
+    from scio.loop import backends
+    from scio.loop.agent_loop import AgentLoop
+    from scio.loop.claude_code_worker import DEFAULT_MAX_TURNS
+
+    summary = {
+        "step_id": "S1", "summary": "done", "files_touched": [], "confidence": "high",
+        "needs_design_decision": False, "design_question": None, "next_action": "verify",
+        "tests_added": [], "sweep": None,
+    }  # fmt: skip
+
+    def contexts(backend: str) -> RunContext:
+        settings = Settings(provider_override="fake", worker_backend=backend)
+        config = ModelsConfig.load(settings.models_path)
+        harness = Harness(config, ProviderRegistry(config, settings), settings=settings)
+        return RunContext.create(
+            thread_id="t",
+            sandbox_root=tmp_path,
+            settings=settings,
+            harness=harness,
+            sandbox=LocalSandbox(tmp_path),
+            work_dir=tmp_path / ".scio",
+        )
+
+    def max_turns_sent(ctx: RunContext, role: str, **kw: Any) -> str:
+        """The ``--max-turns`` the ``claude`` runner receives for one worker turn."""
+        max_calls = kw.pop("max_calls", None)
+        fake = FakeClaude([STREAM, _result(session_id="sess-w", structured_output=summary)])
+        monkeypatch.setattr(backends, "RUNNER_OVERRIDE", fake)
+        tb = ToolBox(ctx.sandbox, ("edit_file",), human_gate=False, max_calls=max_calls, role=role)
+        backends.make_worker(ctx, tb, role, **kw).run("task")
+        return _flag(fake.calls[0][0], "--max-turns")
+
+    cc = contexts("claude_code")
+    aci = contexts("aci")
+    try:
+        assert T0_TURN_CAP != T0_TOOL_CAP
+        # T0 coder: the toolbox carries the T0 tool cap; Claude Code gets the measured turns
+        assert max_turns_sent(cc, "coder", max_calls=T0_TOOL_CAP) == str(T0_TURN_CAP)
+        # the documenter's tool cap (12) is not its turn cap either
+        assert max_turns_sent(cc, "documenter", max_calls=12) == str(backends.DOCUMENTER_TURN_CAP)
+        # T1/T2 coder and debugger carry no tool cap: unchanged at the worker's default
+        assert max_turns_sent(cc, "coder") == max_turns_sent(cc, "debugger")
+        assert max_turns_sent(cc, "coder") == str(DEFAULT_MAX_TURNS)
+        # the explorer is unchanged (it delivered every summary; reported under I-153)
+        assert max_turns_sent(cc, "explorer", max_calls=8, max_model_calls=6) == "8"
+        # SCIO's own loop keeps the tool cap of 10 per T0 iteration
+        tb = ToolBox(aci.sandbox, ("edit_file",), human_gate=False, max_calls=T0_TOOL_CAP)
+        loop = backends.make_worker(aci, tb, "coder")
+        assert isinstance(loop, AgentLoop) and loop.toolbox.max_calls == T0_TOOL_CAP == 10
+        assert aci.limits.max_tool_calls_per_iter == T0_TOOL_CAP  # T0 limits are unchanged
+    finally:
+        cc.close()
+        aci.close()
+
+
 # ---------- the turn's environment (I-114) ----------
 
 

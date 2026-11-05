@@ -65,6 +65,14 @@ def test_lint_command_and_findings_match_the_pre_m6_literals() -> None:
     assert tc.lint_findings(2, "misconfigured", "") is None
 
 
+def test_a_test_path_keeps_the_dot_of_a_dot_directory() -> None:
+    """I-160's sweep: `is_test_path` used `lstrip("./")` too, so `.tests/x.py` read as
+    `tests/x.py`, a test file."""
+    tc = python_toolchain()
+    assert tc.is_test_path("./tests/test_x.py") and tc.is_test_path("/tests/x.py")
+    assert not tc.is_test_path(".tests/x.py")
+
+
 def test_file_rules_match_the_pre_m6_behaviour() -> None:
     tc = python_toolchain()
     assert tc.git_exclude_text() == OLD_EXCLUDES + M9_EXCLUDES

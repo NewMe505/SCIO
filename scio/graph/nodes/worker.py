@@ -58,12 +58,17 @@ def t0_loop(ctx: RunContext) -> Node:
             context=ctx.tool_context,
         )
         loop = make_worker(ctx, toolbox, "coder")
+        # I-154: each iteration is a fresh session; carry what the last one found and did,
+        # and the tree's real state, so a session that only investigated is not repeated.
+        previous = state.last_worker_output
         msg = coder_message(
             state.task,
             state.feature_list,
             repo_root=ctx.sandbox.root,
             attempt=attempt,
             last_verify=last_verify,
+            previous=previous,
+            tree=diff_stat(ctx.sandbox, state.github.base_sha) if previous is not None else None,
         )
         try:
             result = loop.run(msg, tags={"thread": ctx.thread_id, "attempt": str(attempt)})

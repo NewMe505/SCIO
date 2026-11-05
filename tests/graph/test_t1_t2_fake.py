@@ -3,24 +3,27 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from evals.fake_scripts import ScriptedResponder
+from evals.fake_scripts import Edit, ScriptedResponder, Step
 from evals.solvers import EvalTaskLike, make_origin, task_spec
+from scio.graph.nodes.planning import SUMMARY_MAX_CHARS
 from scio.graph.run import RunOutcome, resume_graph, run_graph
 from scio.graph.run_context import RunContext
 from scio.harness import telemetry as T
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
-from scio.harness.providers.fake import FakeProvider
+from scio.harness.providers.fake import FakeProvider, FakeReply
 from scio.harness.retry import RetryPolicy
 from scio.settings import REPO_ROOT, Settings
-from scio.state.models import EscalationTrigger, ExitReason, FeatureStatus, Tier, Verdict
+from scio.state.models import EscalationTrigger, ExitReason, FeatureStatus, Role, Tier, Verdict
 
 TASKS = REPO_ROOT / "evals" / "tasks"
 
@@ -201,6 +204,171 @@ def test_plan_drift_escalates(tmp_path: Path) -> None:
     adr_dir = tmp_path / "work" / "docs" / "adr"
     written = sorted(p.name for p in adr_dir.glob("0002-*.md"))
     assert written and "change_approach" in (adr_dir / written[0]).read_text(encoding="utf-8")
+
+
+# ---------- S8: the plan guesses a file, localize names the real one (I-151, I-152) ----------
+
+GUESSED = "pager/core.py"  # not in t002's repository
+REAL = "pager/__init__.py"
+
+
+class GuessedFileResponder(ScriptedResponder):
+    """The graphcalc run's S8 on t002. The planner names a file that does not exist; the
+    localize explorer says so and names the real one, in a summary over the 1.5k-token cap;
+    the coder's first try fails a test and the debugger fixes it. With ``unnamed`` the
+    coder also writes a source file nobody named, which must still be plan drift."""
+
+    def __init__(
+        self,
+        *,
+        unnamed: bool = False,
+        advisor_verdict: str = "change_approach",
+        revised_steps: bool = False,
+    ) -> None:
+        super().__init__(coder_mode="wrong_first", advisor_verdict=advisor_verdict)
+        self.unnamed = unnamed
+        self.revised_steps = revised_steps
+        self.planned_steps: list[dict[str, Any]] = []
+
+    def _structured(self, role: str, kind: str, text: str) -> FakeReply:
+        if kind == "advisor" and self.revised_steps and "Verify passed" not in text:
+            # the advisor's own replan: its revised steps name the planner's guess again
+            reply = json.loads(super()._structured(role, kind, text).text)
+            reply["revised_steps"] = self.planned_steps
+            return FakeReply(text=json.dumps(reply))
+        if kind == "planner":
+            plan = json.loads(super()._structured(role, kind, text).text)
+            for step in plan["steps"]:
+                step["files_expected"] = [GUESSED]
+            self.planned_steps = plan["steps"]
+            return FakeReply(text=json.dumps(plan))
+        if kind == "explorer":
+            padding = [f"fact {i} about the pager package: " + "x" * 300 for i in range(20)]
+            summary = {
+                "question": "localize",
+                "findings": [f"{GUESSED} does not exist; paginate lives in {REAL}", *padding],
+                "relevant_files": [f"{self.root}/{REAL}", f"{self.root}/README.md"],
+                "open_questions": ["Should the last partial page be kept?"],
+            }
+            return FakeReply(text=json.dumps(summary))
+        return super()._structured(role, kind, text)
+
+    def _edits_for(self, role: str, step: Step, text: str) -> list[Edit]:
+        if role == "debugger" and step.fix_edit is not None:
+            return [step.fix_edit]  # a debugger that fixes the clear test failure
+        edits = super()._edits_for(role, step, text)
+        if self.unnamed and role == "coder" and "[context from advisor]" not in text:
+            edits.append(Edit("pager/extra.py", "", "EXTRA = 1\n"))
+        return edits
+
+
+def test_t1_a_guessed_planned_file_does_not_drift_once_localize_names_the_real_one(
+    tmp_path: Path,
+) -> None:
+    """S8: the coder edits the file the explorer named, not the plan's guess. Verify fails
+    once on a clear test failure, so triage must debug; with no advisor call left (as in
+    the run) the old code halted on plan_drift."""
+    ctx, outcome = _run(
+        tmp_path, "t002_fix_failing_test", "T1", GuessedFileResponder(), advisor_calls_max=0
+    )
+    s = _finish(ctx, outcome).state
+    assert s.exit_reason is ExitReason.SUCCESS and s.plan is not None
+    assert s.plan.version == 1 and s.plan.steps[0].files_expected == [GUESSED, REAL]
+    texts = [e.text for e in s.task_ledger]
+    assert f"localize: files the explorer localized added to the plan: S1 += {REAL}" in texts
+    assert any("triage -> debug (no escalation signal" in t for t in texts), texts
+    assert not any("plan_drift" in t for t in texts)
+    assert s.escalations == [] and s.budgets.advisor_calls_used == 0
+    assert any(k.startswith("debugger:") for k in s.artifacts)
+    # I-152: the stored summary was over the cap; it is trimmed, valid, and keeps its files.
+    stored = Path(s.explorer_summaries[0].path).read_text(encoding="utf-8")
+    assert len(stored) <= SUMMARY_MAX_CHARS
+    data = json.loads(stored)
+    assert data["relevant_files"][0].endswith(REAL) and data["open_questions"]
+    assert "findings dropped" in data["findings"][-1]
+    assert _hidden_pass(ctx, "t002_fix_failing_test", "test_paginate_hidden.py")
+
+
+def test_t1_replan_keeps_the_localized_files_and_an_unnamed_file_still_drifts(
+    tmp_path: Path,
+) -> None:
+    """The coder also writes ``pager/extra.py``, which nobody named: plan drift. The advisor
+    replans; plan v2 is the planner's guess again, and localize does not run twice, so the
+    explorer's file must be merged back from the stored summary. The second drift then
+    meets the one-call-per-step cap and halts."""
+    _ctx_unused, outcome = _run(
+        tmp_path,
+        "t002_fix_failing_test",
+        "T1",
+        GuessedFileResponder(unnamed=True, advisor_verdict="replan"),
+    )
+    assert outcome.paused and outcome.interrupt is not None
+    assert outcome.interrupt["reason"] == "advisor_cap"
+    assert EscalationTrigger.PLAN_DRIFT in outcome.interrupt["triage"]["triggers"]
+    s = outcome.state
+    assert [(e.trigger, e.verdict) for e in s.escalations] == [
+        (EscalationTrigger.PLAN_DRIFT, Verdict.REPLAN)
+    ]
+    assert s.plan is not None and s.plan.version == 2
+    assert s.plan.steps[0].files_expected == [GUESSED, REAL]
+    texts = [e.text for e in s.task_ledger]
+    assert f"plan v2: files the explorer localized added to the plan: S1 += {REAL}" in texts
+
+
+def test_an_advisor_replan_with_revised_steps_keeps_the_localized_files(tmp_path: Path) -> None:
+    """I-151's sweep: the advisor's own replan (``revised_steps``) built plan v2 straight from
+    its steps, which name the planner's guess again, so the explorer's file dropped out and
+    the next diff drifted on it once more. It is merged back as in the planner's replan."""
+    _ctx_unused, outcome = _run(
+        tmp_path,
+        "t002_fix_failing_test",
+        "T1",
+        GuessedFileResponder(unnamed=True, advisor_verdict="replan", revised_steps=True),
+    )
+    s = outcome.state
+    assert [(e.trigger, e.verdict) for e in s.escalations][:1] == [
+        (EscalationTrigger.PLAN_DRIFT, Verdict.REPLAN)
+    ]
+    assert s.plan is not None and s.plan.version == 2 and s.plan.author is Role.ADVISOR
+    assert s.plan.steps[0].files_expected == [GUESSED, REAL]
+    texts = [e.text for e in s.task_ledger]
+    assert f"plan v2: files the explorer localized added to the plan: S1 += {REAL}" in texts
+
+
+class RecordingResponder(ScriptedResponder):
+    """A scripted responder that keeps every request it answered."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.requests: list[Any] = []
+
+    def __call__(self, req: Any) -> FakeReply:
+        self.requests.append(req)
+        return super().__call__(req)
+
+
+def test_a_t1_debugger_gets_the_coder_sessions_report_on_the_same_step(tmp_path: Path) -> None:
+    """I-154's sweep: T1's coder and debugger iterations are fresh sessions too, and their
+    messages carried the plan, the explorer summaries and the last verify, never what the
+    previous session on the step found (graphcalc P4 attempt 2: two 30-turn S1 sessions with
+    no edit). The debugger now starts from the coder session's own report."""
+    responder = RecordingResponder(coder_mode="wrong_first")
+    ctx, outcome = _run(tmp_path, "t002_fix_failing_test", "T1", responder)
+    _finish(ctx, outcome)
+
+    def first_message(role: str) -> str:  # a session's opening request (one per tool turn)
+        return next(
+            r.messages[0].text()
+            for r in responder.requests
+            if r.role == role and not r.output_schema
+        )
+
+    coder, debugger = first_message("coder"), first_message("debugger")
+    assert "[context from coder]" not in coder  # nothing to carry into the first session
+    assert "[context from coder]" in debugger
+    assert "Report from the previous session" in debugger
+    assert "Files that session changed: " in debugger
+    assert "Changes in the working tree since the base commit" in debugger
 
 
 def test_advisor_escalate_human_halts(tmp_path: Path) -> None:
