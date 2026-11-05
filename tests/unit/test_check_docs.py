@@ -41,6 +41,23 @@ def test_dotdotdot_is_never_an_existing_target(tmp_path: Path) -> None:
     assert cd.links_in(doc)  # Windows resolves '...' to a parent dir; the checker must not
 
 
+def test_the_link_check_never_reads_another_checkout_or_an_installed_package() -> None:
+    """I-155: the link check walked into `.claude/worktrees/<agent>/.venv/...`, the parallel
+    agents' checkouts of this repo, and failed on broken links inside installed packages'
+    READMEs. `.venv` and the caches were skipped only at the repository's root."""
+    cd = _load()
+    root = cd.ROOT
+    for rel in (
+        ".claude/worktrees/agent-1/README.md",
+        ".claude/worktrees/agent-1/.venv/Lib/site-packages/pdoc/templates/README.md",
+        "sub/project/.venv/lib/pkg/README.md",
+        "web/node_modules/pkg/README.md",
+    ):
+        assert cd._skip(root / rel), rel
+    for rel in ("README.md", "docs/ARCHITECTURE.md", ".claude/notes.md"):
+        assert not cd._skip(root / rel), rel
+
+
 def test_repo_docs_pass() -> None:
     cd = _load()
     assert cd.check_links() == []

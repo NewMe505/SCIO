@@ -42,3 +42,5 @@ uv.lock.bak
 
 # Personal Claude Code settings (permission rules), never committed
 .claude/settings.local.json
+# Parallel agents' git worktrees, whole checkouts of this repo with their own .venv (I-155)
+.claude/worktrees/

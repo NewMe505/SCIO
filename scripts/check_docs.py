@@ -33,11 +33,16 @@ SKIP_DIRS = {
     ".ruff_cache",
     ".mypy_cache",
     ".pytest_cache",
+    ".claude/worktrees",  # other checkouts of this repo (parallel agents, I-155): not ours
 }
+NEVER_OURS = {".venv", "node_modules", "__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"}
+"""Directory names whose contents are never this repository's docs, at any depth (I-155)."""
 
 
 def _skip(p: Path) -> bool:
     rel = p.relative_to(ROOT).as_posix()
+    if any(part in NEVER_OURS for part in rel.split("/")[:-1]):
+        return True
     return any(rel == s or rel.startswith(s + "/") for s in SKIP_DIRS)
 
 
