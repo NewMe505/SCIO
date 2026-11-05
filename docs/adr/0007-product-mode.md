@@ -18,6 +18,6 @@ SCIO's task graph (M0–M5) takes one task on one existing Python repository to 
 ## Consequences
 - This supersedes the PROMPT.md non-goal "No UI" for *products SCIO builds*; SCIO itself still has no UI. It also supersedes assumption F-8 (Python-only targets). Both docs are updated in M6.
 - **Upside:** the proven per-feature path is reused, and each milestone stays reviewable.
-- **Downside:** because there is one writer, a product build runs serially. A large product takes hours, not minutes.
+- **Downside:** because there is one writer, a product build runs serially. A large product takes hours, not minutes. Amended 2026-11-05: ADR 0018 lets a build opt in to running independent features at once, one writer per worktree and one integrator per milestone branch.
 - **New risk: dependency installation needs network access.** It is contained by the two-phase sandbox: an allowlisted install phase, then a test phase with the network off. Docker becomes the default backend for product builds.
 - **To validate:** the product eval suite (p001–p003, M11), measuring features passed, human interventions, $/feature and milestone pass^k.

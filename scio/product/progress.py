@@ -260,7 +260,21 @@ def normalise_milestone(
         if feat.id not in proposed:
             break
         p = proposed[feat.id]
-        chosen.append(MilestoneFeatureOutput(id=feat.id, tier=p.tier, notes=p.notes))
+        deps = p.depends_on
+        if deps is not None:
+            # only earlier features of this milestone; any other id is not this plan's to wait
+            # on, so it is dropped and said (ADR 0018)
+            earlier = {c.id for c in chosen}
+            kept = [d for d in dict.fromkeys(deps) if d in earlier]
+            if len(kept) != len(deps):
+                notes.append(
+                    f"{feat.id} depends_on {', '.join(d for d in deps if d not in kept)}: not "
+                    "an earlier feature of this milestone; dropped"
+                )
+            deps = kept
+        chosen.append(
+            MilestoneFeatureOutput(id=feat.id, tier=p.tier, notes=p.notes, depends_on=deps)
+        )
         if len(chosen) >= MAX_FEATURES_PER_MILESTONE:
             break
     skipped = [f.id for f in open_features[len(chosen) :] if f.id in proposed]

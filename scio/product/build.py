@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -43,6 +44,14 @@ from scio.harness.failures import BudgetExceeded, HarnessError
 from scio.harness.types import Message
 from scio.loop.exits import LoopLimits
 from scio.product.acceptance import run_acceptance
+from scio.product.parallel import (
+    ensure_worktree,
+    in_worktree,
+    merge_feature,
+    parallel_refused,
+    prepare_shared_git,
+    remove_worktree,
+)
 from scio.product.pr_ci import wait_for_ci
 from scio.product.progress import (
     PRODUCT_MD,
@@ -918,11 +927,17 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
         feat = state.next_feature()
         if feat is None:
             return {"phase": "integrate", **_fact("all milestone features passed or skipped")}
+        product_env(ctx, spec)  # a resumed process has no environment yet (M9)
+        # ADR 0018: features the plan marks independent build at once, each in its own
+        # worktree; with SCIO_PARALLEL_FEATURES=1 (the default) this is never taken.
+        if parallel_refused(ctx) is None:
+            batch = state.ready_batch(ctx.settings.parallel_features)
+            if len(batch) > 1:
+                return _run_batch(ctx, saver, state, spec, plan, batch)
         previous = state.latest_run(feat.id)
         attempt = previous.attempt + 1 if previous is not None else 1
         thread = f"{ctx.thread_id}-{feat.id.lower()}-a{attempt}"
         tier = feat.tier.value
-        product_env(ctx, spec)  # a resumed process has no environment yet (M9)
         fctx = feature_context(ctx, thread, tier)
         run = FeatureRun(
             feature_id=feat.id,
@@ -1029,69 +1044,245 @@ def feature(ctx: RunContext, saver: BaseCheckpointSaver | None) -> Node:
             }
 
         # A pause the orchestrator cannot answer, or a non-success exit: one human decision.
-        reason = final.exit_reason.value if final.exit_reason else "paused"
-        answer = str(
-            interrupt(
-                {
-                    # I-116: a skip defers, it never drops; the question says so plainly.
-                    "question": f"Feature {feat.id} ({reason}, attempt {attempt}) needs a "
-                    "decision: reply 'retry' to run it again; 'skip' to defer it: this "
-                    "milestone goes on without it, it stays open and the next milestone plans "
-                    "it again (the release waits for it; to drop it for good, remove it from "
-                    "PRODUCT.md); anything else to stop the build.",
-                    "feature": feat.id,
-                    "thread": thread,
-                    "exit_reason": reason,
-                    "inner": outcome.interrupt,
-                    "ledger_tail": [e.text for e in final.task_ledger[-5:]],
-                    "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<retry|skip|stop>"',
-                }
+        return _feature_decision(
+            ctx, saver, state, feat, attempt, fctx, run, outcome, entries, state.feature_runs
+        )
+
+    return node
+
+
+def _feature_decision(
+    ctx: RunContext,
+    saver: BaseCheckpointSaver | None,
+    state: ProductBuildState,
+    feat: MilestoneFeatureOutput,
+    attempt: int,
+    fctx: RunContext,
+    run: FeatureRun,
+    outcome: Any,
+    entries: list[Any],
+    before: list[FeatureRun],
+) -> dict[str, Any]:
+    """The one human decision on a feature that paused or exited without success:
+    ``retry``, ``skip`` (I-116) or stop. ``before`` is the run list its record joins: the
+    state's, plus the runs a batch finished in the same node (ADR 0018)."""
+    final = outcome.state
+    thread = fctx.thread_id
+    reason = final.exit_reason.value if final.exit_reason else "paused"
+    answer = str(
+        interrupt(
+            {
+                # I-116: a skip defers, it never drops; the question says so plainly.
+                "question": f"Feature {feat.id} ({reason}, attempt {attempt}) needs a "
+                "decision: reply 'retry' to run it again; 'skip' to defer it: this "
+                "milestone goes on without it, it stays open and the next milestone plans "
+                "it again (the release waits for it; to drop it for good, remove it from "
+                "PRODUCT.md); anything else to stop the build.",
+                "feature": feat.id,
+                "thread": thread,
+                "exit_reason": reason,
+                "inner": outcome.interrupt,
+                "ledger_tail": [e.text for e in final.task_ledger[-5:]],
+                "cost_usd": total_usd(state),
+                "resume": 'scio build --product <dir> --decision "<retry|skip|stop>"',
+            }
+        )
+    )
+    if outcome.paused:  # close the subgraph's own interrupt with the same answer
+        outcome = resume_graph(fctx, answer, saver=saver)
+        final = outcome.state
+    choice = answer.strip().lower()
+    notes = [f"{feat.id} attempt {attempt}: human said {answer.strip()[:120]!r}"]
+    if choice.startswith("retry"):
+        record = feature_run_from_state(run, final, status="failed")
+        entries.append(decision(f"{feat.id} failed ({reason}); retrying", source=Role.HUMAN))
+        return {
+            "feature_runs": [*before, record],
+            "human_notes": notes,
+            "phase": "feature",
+            "ledger": entries,
+            **ctx.budget_update(),
+        }
+    if choice.startswith("skip"):
+        record = feature_run_from_state(run, final, status="skipped")
+        entries.append(
+            decision(
+                f"{feat.id} skipped by human ({reason}): deferred to the next milestone, "
+                "still open (I-116)",
+                source=Role.HUMAN,
             )
         )
-        if outcome.paused:  # close the subgraph's own interrupt with the same answer
-            outcome = resume_graph(fctx, answer, saver=saver)
-            final = outcome.state
-        choice = answer.strip().lower()
-        notes = [f"{feat.id} attempt {attempt}: human said {answer.strip()[:120]!r}"]
-        if choice.startswith("retry"):
-            record = feature_run_from_state(run, final, status="failed")
-            entries.append(decision(f"{feat.id} failed ({reason}); retrying", source=Role.HUMAN))
-            return {
-                "feature_runs": [*state.feature_runs, record],
-                "human_notes": notes,
-                "phase": "feature",
-                "ledger": entries,
-                **ctx.budget_update(),
-            }
-        if choice.startswith("skip"):
-            record = feature_run_from_state(run, final, status="skipped")
+        return {
+            "feature_runs": [*before, record],
+            "human_notes": notes,
+            "phase": "feature",
+            "ledger": entries,
+            **ctx.budget_update(),
+        }
+    record = feature_run_from_state(run, final, status="failed")
+    entries.append(decision(f"{feat.id} failed ({reason}); build stopped", source=Role.HUMAN))
+    return {
+        "feature_runs": [*before, record],
+        "human_notes": notes,
+        "exit_reason": "feature_failed",
+        "phase": "halted",
+        "ledger": entries,
+        **ctx.budget_update(),
+    }
+
+
+@dataclass
+class _BatchJob:
+    feat: MilestoneFeatureOutput
+    attempt: int
+    tree: Path
+    fctx: RunContext
+    run: FeatureRun
+
+
+def _run_batch(
+    ctx: RunContext,
+    saver: BaseCheckpointSaver | None,
+    state: ProductBuildState,
+    spec: ProductSpec,
+    plan: MilestonePlan,
+    batch: list[MilestoneFeatureOutput],
+) -> dict[str, Any]:
+    """Build ``batch`` at once, each feature in its own worktree from the milestone head
+    (ADR 0018), then merge the ones that passed onto the milestone branch in PRODUCT.md order.
+    A merge that conflicts or turns the suite red is undone; that feature's next attempt runs
+    from the new head. A feature that halts gets the usual human decision, one per node run
+    (guardrail 29): every subgraph is checkpointed and every merge is an effect with a probe,
+    so the node re-run that the answer starts repeats neither. Worktrees are removed only
+    once the node returns."""
+    prepare_shared_git(ctx)
+
+    def clean_tree() -> None:  # the product tree: the milestone branch, nothing left over
+        _git(ctx, "checkout", "-q", plan.branch)
+        _git(ctx, "reset", "-q", "--hard")
+        _git(ctx, "clean", "-fdq")
+
+    carrying_product_md(ctx, clean_tree)  # a hand edit survives and is committed (I-109)
+    entries: list[Any] = []
+    edit = commit_product_md_edit(ctx, plan, f"batch-{'-'.join(f.id for f in batch)}")
+    if edit:
+        entries.append(fact(f"hand edit of PRODUCT.md committed at {edit[:12]}"))
+    base = git_out(ctx.sandbox, "rev-parse", plan.branch)
+    jobs: list[_BatchJob] = []
+    for f in batch:
+        previous = state.latest_run(f.id)
+        attempt = previous.attempt + 1 if previous is not None else 1
+        thread = f"{ctx.thread_id}-{f.id.lower()}-a{attempt}"
+        tree = ensure_worktree(ctx, thread, base)
+        fctx = in_worktree(feature_context(ctx, thread, f.tier.value), tree, ctx.sandbox.python)
+        run = FeatureRun(
+            feature_id=f.id,
+            thread_id=thread,
+            attempt=attempt,
+            tier=f.tier,
+            issue_number=state.issues.get(f.id),
+            milestone=plan.id,
+        )
+        jobs.append(_BatchJob(f, attempt, tree, fctx, run))
+    entries.append(
+        fact(
+            f"{len(jobs)} features at once from {plan.branch} at {base[:12]}: "
+            + ", ".join(f"{j.feat.id} ({j.fctx.thread_id})" for j in jobs)
+            + " (ADR 0018)"
+        )
+    )
+
+    def one(job: _BatchJob) -> Any:
+        try:
+            if thread_started(job.fctx, saver):
+                outcome = resume_graph(job.fctx, None, saver=saver)
+            else:
+                task = feature_task(
+                    spec, plan, job.feat, state.issues.get(job.feat.id), repo_dir=str(job.tree)
+                ).model_copy(update={"base_branch": base})  # a SHA: one branch, one worktree
+                outcome = run_graph(job.fctx, task, saver=saver)
+            while outcome.paused and outcome.state.phase == "merge_wait":
+                outcome = resume_graph(
+                    job.fctx, f"merged into {plan.branch} by scio build", saver=saver
+                )
+            return outcome
+        except HarnessError as exc:  # one feature's failure ends its attempt, not the batch
+            return exc
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        outcomes = list(pool.map(one, jobs))
+
+    done: list[FeatureRun] = []
+    failed_hard = False
+    halted: tuple[_BatchJob, Any] | None = None
+    for job, outcome in zip(jobs, outcomes, strict=True):
+        fid = job.feat.id
+        if isinstance(outcome, HarnessError):
+            tokens, usd = job.fctx.spent()
+            done.append(
+                job.run.model_copy(
+                    update={"status": "failed", "exit_reason": "error", "usd": round(usd, 4),
+                            "tokens": tokens}
+                )
+            )  # fmt: skip
             entries.append(
-                decision(
-                    f"{feat.id} skipped by human ({reason}): deferred to the next milestone, "
-                    "still open (I-116)",
-                    source=Role.HUMAN,
+                fact(
+                    f"{fid} attempt {job.attempt} failed: {type(outcome).__name__}: "
+                    f"{str(outcome)[:300]}; the next `scio build` starts attempt {job.attempt + 1}"
                 )
             )
-            return {
-                "feature_runs": [*state.feature_runs, record],
-                "human_notes": notes,
-                "phase": "feature",
-                "ledger": entries,
-                **ctx.budget_update(),
-            }
-        record = feature_run_from_state(run, final, status="failed")
-        entries.append(decision(f"{feat.id} failed ({reason}); build stopped", source=Role.HUMAN))
-        return {
-            "feature_runs": [*state.feature_runs, record],
-            "human_notes": notes,
+            failed_hard = True
+            continue
+        final = outcome.state
+        if outcome.paused or final.exit_reason is not ExitReason.SUCCESS:
+            halted = halted or (job, outcome)  # the first, in plan order; the rest wait
+            continue
+        head = final.github.head_sha or git_out(job.fctx.sandbox, "rev-parse", "HEAD")
+        merged = merge_feature(ctx, plan, fid, job.attempt, final.github.branch or "", head)
+        record = feature_run_from_state(job.run, final, status="passed")
+        if merged["ok"]:
+            done.append(record)
+            entries.append(
+                fact(
+                    f"{fid} passed at {job.feat.tier.value} in {record.iterations} "
+                    f"iteration(s), ${record.usd:.4f}; {plan.branch} {merged['how']}"
+                )
+            )
+        else:
+            done.append(record.model_copy(update={"status": "failed", "exit_reason": "merge"}))
+            entries.append(
+                fact(
+                    f"{fid} passed in its worktree; its merge onto {plan.branch}: "
+                    f"{merged['how']}. The merge is undone, and attempt {job.attempt + 1} runs "
+                    f"alone from the new head"
+                )
+            )
+    before = [*state.feature_runs, *done]
+    if failed_hard:
+        result: dict[str, Any] = {
+            "feature_runs": before,
             "exit_reason": "feature_failed",
             "phase": "halted",
             "ledger": entries,
             **ctx.budget_update(),
         }
-
-    return node
+    elif halted is not None:
+        job, outcome = halted
+        result = _feature_decision(
+            ctx, saver, state, job.feat, job.attempt, job.fctx, job.run, outcome, entries, before
+        )
+    else:
+        result = {
+            "feature_runs": before,
+            "phase": "feature",
+            "ledger": entries,
+            **ctx.budget_update(),
+        }
+    recorded = {r.thread_id for r in result["feature_runs"]}
+    for job in jobs:  # a halted feature not decided yet keeps its worktree for the next run
+        if job.fctx.thread_id in recorded and (left := remove_worktree(ctx, job.tree)):
+            result["ledger"] = [*result["ledger"], fact(left)]
+    return result
 
 
 def after_feature(state: ProductBuildState) -> Literal["feature", "integrate", "halt"]:

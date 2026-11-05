@@ -108,6 +108,10 @@ ready only when it is green. When a red CI comes from an old scaffold file, run 
 then answer `recheck`, which pushes the commit and reads the CI again.
 At a merge stop you may add features to `PRODUCT.md` (there is no feature cap); the next milestone plans
 from it. While the file does not parse, the stop refuses `merged` and its question says why.
+With `SCIO_PARALLEL_FEATURES=2` (up to 4; python products on a local sandbox), features the milestone
+planner marks independent (`depends_on: []`) build at once, each in its own git worktree outside the
+product tree; SCIO merges each onto the milestone branch, reruns the suite on the merged tree, and
+retries a feature whose merge conflicts or turns the suite red from the new head (ADR 0018).
 In GitHub mode a squash- or rebase-merged milestone PR is fine: SCIO drops only its own bookkeeping
 commits when it syncs `main`, and stops with `sync_failed` if a commit of yours exists only locally.
 
@@ -215,7 +219,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): how to watch SCIO: GitHub, an OpenTelemetry trace viewer, `scio dashboard`, the CLI views
-- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals, 0016 post-M11 follow-ups: GitHub-mode merges and releases, upgrade, sandbox image per stack, run_app in a container, 0017 a live read-only dashboard)
+- [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals, 0016 post-M11 follow-ups: GitHub-mode merges and releases, upgrade, sandbox image per stack, run_app in a container, 0017 a live read-only dashboard, 0018 parallel features in worktrees, merged by one integrator)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
 
@@ -238,3 +242,4 @@ Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on
 - M11 (done, 0.7.0): product-ready quality bar, release gate, product eval suite p001 to p003 passing live (ADR 0015)
 - post-M11 (done, 0.8.0): squash-safe `--gh` merges, a release PR, `scio upgrade`, Node in the Docker sandbox, `run_app` in a container, parallel CI tests (ADR 0016)
 - dashboard (done, 0.9.0): `scio dashboard`, a live read-only view of every thread across workspaces (ADR 0017)
+- parallel features (in review, [issue #82](https://github.com/NewMe505/SCIO/issues/82)): opt-in `SCIO_PARALLEL_FEATURES`, independent features in worktrees, merged and rechecked by one integrator (ADR 0018)

@@ -1423,3 +1423,21 @@ Template:
 - Sweep: `grep -rn 'lstrip("./")\|lstrip("/.")\|lstrip(".")' scio evals scripts`: a second site, `ProfileToolchain.is_test_path` (`scio/toolchain/profile.py:129`), read `.tests/x.py` as `tests/x.py` (fixed the same way); the other `lstrip("/")` and `lstrip("-")` calls strip one character on purpose
 - Guard: `test_drift_keeps_the_dot_of_a_dot_directory`, `test_a_test_path_keeps_the_dot_of_a_dot_directory` (each fails on the old code); guardrail 50
 - Resolved: 2026-11-04 · Status: resolved
+
+### I-161 · `prepare_repo` wrote `.git/info/exclude` by hand, which fails in a git worktree
+- Found: 2026-11-05 · issue #82, the pre-flight probe for parallel features (two task graphs in two worktrees of one repository)
+- Symptom: `FileExistsError: [WinError 183] Cannot create a file when that file already exists: '...\\wt-a\\.git'` from `LocalSandbox.write_text` in `prepare_repo`; after a first fix that asked git for the path, `PathEscapeError: path escapes the sandbox root ...wt-a: '.../repo/.git/info/exclude'`
+- Root cause: `prepare_repo` built the path `<root>/.git/info/exclude`. In a worktree `.git` is a file that points to the repository, and the excludes git reads live in the common directory, outside the worktree, where the sandbox (rightly) refuses to write.
+- Fix: `exclude_path(sandbox)` asks git (`git rev-parse --git-path info/exclude`). `prepare_repo` writes the file only when it lies under its own root. The orchestrator writes the common directory's excludes and merge attributes once, before it makes worktrees (`prepare_shared_git`).
+- Sweep: `grep -rn '\.git/\|"\.git"' scio evals`: `prepare_repo` was the only place a `.git/...` path is built to write. `tools.py`'s `.git` guards (never edit or delete inside `.git`) and `repo_search`'s skip read the path, so they stay correct in a worktree.
+- Guard: `test_a_worktrees_excludes_are_the_common_directorys_file`, and every parallel-features graph test, which runs `prepare_repo` in worktrees; guardrail 57
+- Resolved: 2026-11-05 · Status: resolved
+
+### I-162 · An edit script with `\n` escapes went through the shell again, an hour after I-157
+- Found: 2026-11-05 · issue #82, writing `scio/product/parallel.py`
+- Symptom: none in the file: every anchor assert held and ruff parsed the result. The script replaced five blocks whose new text held `\n` escapes inside a Python heredoc, which guardrail 17 forbids.
+- Root cause: the multi-site replacement was faster through one script, and the rule was read as covering "a backslash in the file's text", not a backslash in the script's own string literals. Both are covered.
+- Fix: every later edit in the session went through the Edit tool; the written file was linted, formatted and type-checked
+- Sweep: this session's other shell-embedded edit scripts after I-157: the graphcalc workspace runner's `--out` change (`\n` in the replacement text as well; that file was linted and run end to end afterwards) and the probe's title change (no backslash)
+- Guard: guardrail 17 (`manual:`, now citing I-162)
+- Resolved: 2026-11-05 · Status: resolved
