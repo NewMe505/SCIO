@@ -1421,6 +1421,48 @@ def test_a_milestone_planned_again_reuses_its_plan_github_milestone_and_issues(
     assert titles == issues_before and len(set(titles)) == len(titles)
 
 
+def test_a_stored_plan_is_not_reused_ahead_of_a_feature_inserted_before_it(
+    tmp_path: Path,
+) -> None:
+    """I-149 review: a stored plan must still be what the normaliser allows, the first open
+    features in PRODUCT.md order (I-046). graphcalc's bug workflow inserts fixes mid-file
+    (P23 to P26 went after P4), so a feature inserted ahead of a halted milestone's features
+    is planned first; the GitHub milestone is still the one M1 already has."""
+    responder = _RetitlingPlanner(coder_mode="idle")
+    ctx, fake, repo, _origin = _github_product(tmp_path, responder)
+    harness = ctx.harness
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.state.milestone and out.state.milestone.feature_ids() == ["P1", "P2"]
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.exit_reason == "feature_failed"
+    finally:
+        ctx.close()
+    md = repo / PRODUCT_MD
+    text = md.read_text(encoding="utf-8")
+    inserted = "### P4: Slugify todo titles first\n- [ ] `todo slug A` prints a\n\n"
+    edited = text.replace("### P1: ", inserted + "### P1: ", 1)
+    md.write_text(edited, encoding="utf-8", newline="\n")
+    again = _ctx(
+        tmp_path,
+        harness,
+        f"{build_thread_id(PRODUCT)}-r2",
+        github=GitHubClient("o/r", runner=fake),
+    )
+    try:
+        out = run_build(again, gh_repo="o/r")
+        s = out.state
+    finally:
+        again.close()
+    assert responder.planner_calls == 2, s.ledger[-4:]
+    assert s.milestone and s.milestone.feature_ids() == ["P4", "P1"]
+    assert out.paused and out.interrupt and out.interrupt["feature"] == "P4"
+    assert any("is no longer the first open features" in e.text for e in s.ledger)
+    assert list(fake.milestones) == ["M1: Milestone 1 (take 1)"]
+    stored = _git(repo, "show", f"milestone/1:{MILESTONES_DIR}/M1-plan.json")
+    assert '"P4"' in stored  # the new plan is committed, so a third thread reuses it
+
+
 def test_a_retitled_milestone_finds_its_github_milestone_by_its_id(tmp_path: Path) -> None:
     """I-149: a milestone branch from before plans were stored can still be planned again
     under another title; its issues go into the GitHub milestone that already carries its

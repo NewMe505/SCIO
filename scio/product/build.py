@@ -16,6 +16,7 @@ duplicated issue, commit or pull request (ADR 0003).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -608,10 +609,12 @@ def plan_milestone(ctx: RunContext) -> Node:
         number = progress.next_milestone_number()
         # A milestone planned before, by a thread that crashed or halted inside it, keeps its
         # plan: a second planner call retitled graphcalc's M2, which duplicated its GitHub
-        # milestone (S7, I-149). Reused while every feature it names is still open.
+        # milestone (S7, I-149). Reused only while it is still what the normaliser would
+        # allow, the first open features in PRODUCT.md order (I-046): a feature inserted
+        # ahead of them at a stop is planned first, not left for a later milestone.
         stored = stored_plan(ctx, number)
-        open_ids = {f.id for f in open_features}
-        if stored is not None and set(stored.feature_ids()) <= open_ids:
+        open_order = [f.id for f in open_features]
+        if stored is not None and stored.feature_ids() == open_order[: len(stored.features)]:
             return _start_milestone(
                 ctx,
                 spec,
@@ -630,8 +633,9 @@ def plan_milestone(ctx: RunContext) -> Node:
         if stored is not None:
             reread = [
                 *reread,
-                f"the {stored.id} plan on {stored.branch} names features no longer open "
-                f"({', '.join(sorted(set(stored.feature_ids()) - open_ids))}); planning again",
+                f"the {stored.id} plan on {stored.branch} ({', '.join(stored.feature_ids())}) "
+                "is no longer the first open features in PRODUCT.md order "
+                f"({', '.join(open_order[: len(stored.features)])}); planning again (I-149)",
             ]
         done_lines = [
             f"- {m.id} {m.title}: {m.status}, features {', '.join(m.features)}"
@@ -760,8 +764,15 @@ def _start_milestone(
     path = f"{ctx.sandbox.root}/{rel}"
     if not ctx.sandbox.exists(path) or ctx.sandbox.read_text(path) != text:
         _write(ctx.sandbox, rel, text)  # a reused plan is not rewritten (I-158)
+    # one marker per distinct plan: a reused plan finds its commit, a plan made again gets one
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
     recorded = _commit_changed(
-        ctx, plan, "plan_milestone", "plan", f"record the {plan.id} plan", lambda p: p == rel
+        ctx,
+        plan,
+        "plan_milestone",
+        f"plan-{digest}",
+        f"record the {plan.id} plan",
+        lambda p: p == rel,
     )
     if recorded:
         entries.append(fact(f"{plan.id} plan committed at {recorded[:12]} ({rel})"))
