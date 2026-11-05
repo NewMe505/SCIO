@@ -153,6 +153,16 @@ def test_plan_drift_flips_but_tests_are_allowed() -> None:
 # --- signal 5: sampled patches disagree ---
 
 
+def test_drift_keeps_the_dot_of_a_dot_directory() -> None:
+    """I-160: `_norm` used `lstrip("./")`, which strips the characters, not a prefix, so
+    a drift report named `github/workflows/ci.yml` for `.github/workflows/ci.yml`."""
+    touched = ["./.github/workflows/ci.yml", "/r/.scio/product/progress.json", "./src/a.py"]
+    assert drifted_files(touched, ["src/a.py"], root="/r", test_dirs=("tests/",)) == [
+        ".github/workflows/ci.yml",
+        ".scio/product/progress.json",
+    ]
+
+
 def test_sample_disagreement_flips() -> None:
     assert decide(_state(sample_disagreement=True), CFG).route == "advise"
     assert decide(_state(sample_disagreement=False), CFG).route == "debug"

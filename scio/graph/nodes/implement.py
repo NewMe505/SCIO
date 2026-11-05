@@ -10,7 +10,7 @@ from typing import Any, Literal
 from scio.aci.toolbox import ToolBox
 from scio.context.projections import advisor_brief, debug_message, review_message, step_message
 from scio.graph.nodes.common import decision, diff_stat, fact, git_out, untracked_files
-from scio.graph.nodes.planning import normalize_steps, summaries_text
+from scio.graph.nodes.planning import keep_localized_files, normalize_steps, summaries_text
 from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
@@ -110,6 +110,15 @@ def _after_worker(
     }
 
 
+def previous_on_step(state: SCIOState) -> WorkerOutput | None:
+    """The last worker session's report when it worked on the current step: each coder or
+    debugger iteration is a fresh session, so without it a session that only investigated
+    passes nothing on and the next repeats its reconnaissance (I-154). A report about an
+    earlier, committed step is not carried."""
+    w, step = state.last_worker_output, state.current_step()
+    return w if w is not None and step is not None and w.step_id == step.id else None
+
+
 def implement(ctx: RunContext) -> Node:
     def node(state: SCIOState) -> dict[str, Any]:
         step = state.current_step()
@@ -122,6 +131,7 @@ def implement(ctx: RunContext) -> Node:
             ctx.sandbox, WRITER_TOOLS, human_gate=False, role="coder", context=ctx.tool_context
         )
         loop = make_worker(ctx, toolbox, "coder")
+        previous = previous_on_step(state)
         msg = step_message(
             state.task,
             step,
@@ -131,6 +141,8 @@ def implement(ctx: RunContext) -> Node:
             summaries=summaries_text(ctx, state),
             guidance=state.advisor_guidance,
             last_verify=last_verify,
+            previous=previous,
+            tree=diff_stat(ctx.sandbox, "HEAD") if previous is not None else None,
         )
         try:
             result = loop.run(msg, tags={"thread": ctx.thread_id, "step": step.id})
@@ -158,6 +170,7 @@ def debug(ctx: RunContext) -> Node:
             ctx.sandbox, WRITER_TOOLS, human_gate=False, role="debugger", context=ctx.tool_context
         )
         loop = make_worker(ctx, toolbox, "debugger")
+        previous = previous_on_step(state)
         msg = debug_message(
             state.current_step(),
             repo_root=ctx.sandbox.root,
@@ -165,6 +178,9 @@ def debug(ctx: RunContext) -> Node:
             signature=state.progress.last_error_signature,
             attempts=state.progress.fix_attempts_on_error,
             guidance=state.advisor_guidance,
+            previous=previous,
+            tree=diff_stat(ctx.sandbox, "HEAD") if previous is not None else None,
+            attempt=state.progress.attempts_on_step + 1,
         )
         try:
             result = loop.run(
@@ -286,16 +302,22 @@ def advise(ctx: RunContext) -> Node:
             done_ids = {s.id for s in state.plan.steps if s.done}
             steps = [s.model_copy(update={"done": s.id in done_ids}) for s in out.revised_steps]
             steps, plan_notes = normalize_steps(steps, [f.id for f in state.feature_list])
-            patch["task_ledger"] = patch["task_ledger"] + [
-                fact(n, source=Role.SYSTEM) for n in plan_notes
-            ]
-            patch["plan"] = Plan(
-                version=state.plan.version + 1,
-                author=Role.ADVISOR,
-                steps=steps,
-                rationale=out.guidance,
-                revision_reason=f"advisor replan after {record.trigger.value}",
+            revised, localized = keep_localized_files(  # the advisor names files anew (I-151)
+                ctx,
+                state,
+                Plan(
+                    version=state.plan.version + 1,
+                    author=Role.ADVISOR,
+                    steps=steps,
+                    rationale=out.guidance,
+                    revision_reason=f"advisor replan after {record.trigger.value}",
+                ),
             )
+            steps = revised.steps
+            patch["task_ledger"] = patch["task_ledger"] + [
+                fact(n, source=Role.SYSTEM) for n in [*plan_notes, *localized]
+            ]
+            patch["plan"] = revised
             first_open = next((s.id for s in steps if not s.done), None)
             patch["progress"] = state.progress.model_copy(
                 update={

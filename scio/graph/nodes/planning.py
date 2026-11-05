@@ -3,13 +3,17 @@
 
 Explorers are read-only and run in parallel through LangGraph ``Send``; their results
 reduce into ``explorer_summaries`` as artifact references of at most ~1.5k tokens each.
+
+T1 plans before it explores, so the planner's ``files_expected`` are guesses. ``localize``
+adds the files its explorer found to every open step, so plan drift compares the diff with
+files that exist (I-151).
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from langgraph.types import Send
@@ -28,7 +32,11 @@ from scio.graph.run_context import RunContext
 from scio.harness.failures import BudgetExceeded
 from scio.harness.types import Message
 from scio.loop.backends import make_worker
+
+# The drift check's own normalization, so a path added here compares equal there.
+from scio.loop.escalation import _norm as drift_norm
 from scio.state.models import (
+    ArtifactRef,
     ExitReason,
     ExplorerSummary,
     FeatureItem,
@@ -38,11 +46,17 @@ from scio.state.models import (
     Role,
     SCIOState,
     ScopeOutput,
+    Tier,
 )
 
 Node = Callable[[SCIOState], dict[str, Any]]
 EXPLORER_TOOLS = ("repo_search", "view_file")
 SUMMARY_MAX_CHARS = 6000  # ~1.5k tokens
+_ELLIPSIS = "..."
+# A path with an extension, then ``:`` and a line number or a symbol (``calc.py:134``,
+# ``graphcalc/names.py:check_not_constant``); a Windows drive prefix is allowed (I-151).
+_CITATION_RE = re.compile(r"((?:[A-Za-z]:[\\/])?[\w./\\-]+\.[A-Za-z0-9]+):(?=:?\w)")
+_ENTRY_RE = re.compile(r"(?:[A-Za-z]:[\\/])?[^:\s]+")
 EXPLORE_SUMMARY_PROMPT = (
     "Stop exploring. Produce the JSON summary matching the schema: facts with file:line "
     "citations, the relevant files, and open questions. Be concise."
@@ -53,8 +67,14 @@ GENERIC_QUESTIONS = [
 ]
 
 
+def _tracked_files(ctx: RunContext) -> list[str]:
+    # git_out returns a "(git ... failed: ...)" line on failure, which is no file.
+    out = git_out(ctx.sandbox, "ls-files")
+    return [f for f in out.splitlines() if f and not f.startswith("(git ")]
+
+
 def _repo_stats(ctx: RunContext) -> tuple[str, str]:
-    files = [f for f in git_out(ctx.sandbox, "ls-files").splitlines() if f]
+    files = _tracked_files(ctx)
     src = sum(1 for f in files if ctx.toolchain.is_source(f))
     tree = "\n".join(files[:120]) + ("\n..." if len(files) > 120 else "")
     return f"{len(files)} tracked files, {src} {ctx.toolchain.name} source files", tree
@@ -107,7 +127,60 @@ def fan_out_explore(state: SCIOState) -> list[Send] | str:
     ]
 
 
-def _explore_once(ctx: RunContext, question: str, *, tag: str) -> Any:
+def _shorten(text: str, over: int) -> str:
+    """``text`` made at least ``over`` characters shorter in its JSON form ('' if it can't be)."""
+    keep = len(text) - over - len(_ELLIPSIS)
+    return text[:keep] + _ELLIPSIS if keep > 0 else ""
+
+
+def summary_text(summary: ExplorerSummary, max_chars: int = SUMMARY_MAX_CHARS) -> str:
+    """The summary as indented JSON of at most ``max_chars`` characters, always valid (I-152).
+
+    Cutting the serialized text cut ``relevant_files`` and ``open_questions`` off a long
+    summary and left invalid JSON. Over the cap, ``findings`` give way first: whole findings
+    drop from the end, then the one left is shortened, and a closing entry in ``findings``
+    says what was trimmed. The question (an echo of what was asked) is shortened next.
+    ``open_questions`` and ``relevant_files`` lose items, from the end, only when they alone
+    exceed the cap. Holds for any cap of at least 500 characters.
+    """
+    data: dict[str, Any] = summary.model_dump()
+    text = json.dumps(data, indent=1)
+    if len(text) <= max_chars:
+        return text
+    total = len(summary.findings)
+    findings = list(summary.findings)
+    notes: dict[str, str] = {}
+
+    def render() -> str:
+        dropped = total - len(findings)
+        said = [f"{dropped} of {total} findings dropped"] if dropped else []
+        note = f"[trimmed to the 1.5k-token cap: {'; '.join(said + list(notes.values()))}]"
+        return json.dumps({**data, "findings": [*findings, note]}, indent=1)
+
+    while len(findings) > 1 and len(render()) > max_chars:
+        findings.pop()
+    if findings and len(render()) > max_chars:
+        notes["finding"] = "the last finding kept was shortened"
+        findings[-1] = _shorten(findings[-1], len(render()) - max_chars)
+        if not findings[-1]:
+            findings.pop()
+            del notes["finding"]
+    if len(render()) > max_chars:
+        notes["question"] = "the question was shortened"
+        data["question"] = _shorten(str(data["question"]), len(render()) - max_chars)
+    for key in ("open_questions", "relevant_files"):
+        items, n = list(data[key]), len(data[key])
+        while items and len(render()) > max_chars:
+            items.pop()
+            data[key] = items
+            notes[key] = f"{n - len(items)} of {n} {key} dropped"
+    return render()
+
+
+def _explore_once(
+    ctx: RunContext, question: str, *, tag: str
+) -> tuple[ArtifactRef, ExplorerSummary]:
+    """One read-only explorer run: the stored summary's artifact and the summary itself."""
     # Read-only context gathering must stay cheap: every turn resends the transcript (I-033).
     toolbox = ToolBox(ctx.sandbox, EXPLORER_TOOLS, human_gate=False, max_calls=8, role="explorer")
     loop = make_worker(ctx, toolbox, "explorer", max_model_calls=6)
@@ -118,10 +191,91 @@ def _explore_once(ctx: RunContext, question: str, *, tag: str) -> Any:
         tags={"thread": ctx.thread_id, "explore": tag},
     )
     summary: ExplorerSummary = result.output
-    text = json.dumps(summary.model_dump(), indent=1)
-    if len(text) > SUMMARY_MAX_CHARS:
-        text = text[:SUMMARY_MAX_CHARS] + "\n[summary truncated to the 1.5k-token cap]"
-    return ctx.artifacts.put("summary", text, produced_by=Role.EXPLORER, name=f"explore-{tag}")
+    ref = ctx.artifacts.put(
+        "summary", summary_text(summary), produced_by=Role.EXPLORER, name=f"explore-{tag}"
+    )
+    return ref, summary
+
+
+def _resolve(raw: str, root: str | None, tracked: dict[str, str]) -> str | None:
+    """The tracked path ``raw`` names: the same path, or the one tracked path it ends."""
+    p = drift_norm(raw.strip("`'\" "), root)
+    if not p:
+        return None
+    if p in tracked:
+        return tracked[p]
+    hits = {t for n, t in tracked.items() if n.endswith("/" + p)}
+    return hits.pop() if len(hits) == 1 else None
+
+
+def localized_files(
+    summary: ExplorerSummary,
+    *,
+    tracked: Iterable[str],
+    is_source: Callable[[str], bool],
+    root: str | None = None,
+) -> list[str]:
+    """The files an explorer localized, as git spells them (I-151).
+
+    Its ``relevant_files`` and the files its ``findings`` cite as ``path:line`` or
+    ``path:symbol``; a bare file name counts when exactly one tracked path ends with it.
+    Only tracked files the toolchain calls source stay: a planned file that does not exist
+    is no evidence, and docs, configs and SCIO's own bookkeeping are not code to change.
+    """
+    by_norm = {drift_norm(t, None): t for t in tracked if t}
+    cited: list[str] = []
+    for entry in summary.relevant_files:
+        m = _ENTRY_RE.search(entry.strip("`'\" "))
+        if m:
+            cited.append(m.group(0))
+    cited += [m.group(1) for f in summary.findings for m in _CITATION_RE.finditer(f)]
+    out: list[str] = []
+    for raw in cited:
+        path = _resolve(raw, root, by_norm)
+        if path is not None and path not in out and is_source(path):
+            out.append(path)
+    return out
+
+
+def add_localized_files(
+    plan: Plan, files: list[str], *, root: str | None = None
+) -> tuple[Plan, dict[str, list[str]]]:
+    """``plan`` with ``files`` added to each open step's ``files_expected`` (I-151).
+
+    Planned files stay, even missing ones: a plan may name a file to create. A step that
+    names no files keeps none, since an empty ``files_expected`` turns the drift check off.
+    Returns the plan (same version) and the files added per step id.
+    """
+    added: dict[str, list[str]] = {}
+    steps: list[PlanStep] = []
+    for s in plan.steps:
+        if not s.done and s.files_expected:
+            have = {drift_norm(f, root) for f in s.files_expected}
+            new = [f for f in files if drift_norm(f, root) not in have]
+            if new:
+                added[s.id] = new
+                s = s.model_copy(update={"files_expected": [*s.files_expected, *new]})
+        steps.append(s)
+    return plan.model_copy(update={"steps": steps}), added
+
+
+def _localize_plan(ctx: RunContext, plan: Plan, summary: ExplorerSummary) -> tuple[Plan, str]:
+    files = localized_files(
+        summary,
+        tracked=_tracked_files(ctx),
+        is_source=ctx.toolchain.is_source,
+        root=ctx.sandbox.root,
+    )
+    new_plan, added = add_localized_files(plan, files, root=ctx.sandbox.root)
+    if not files:
+        return new_plan, "no files added to the plan (the explorer named no tracked source file)"
+    if not added:
+        return new_plan, (
+            f"no files added to the plan: the explorer localized {', '.join(files)}, but each "
+            "open step already lists them or names no files (drift check off)"
+        )
+    per_step = "; ".join(f"{sid} += {', '.join(fs)}" for sid, fs in added.items())
+    return new_plan, f"files the explorer localized added to the plan: {per_step}"
 
 
 def explore(ctx: RunContext) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -129,26 +283,32 @@ def explore(ctx: RunContext) -> Callable[[dict[str, Any]], dict[str, Any]]:
 
     def node(payload: dict[str, Any]) -> dict[str, Any]:
         question = str(payload["question"])
-        ref = _explore_once(ctx, question, tag=str(payload.get("index", 0)))
+        ref, _summary = _explore_once(ctx, question, tag=str(payload.get("index", 0)))
         return {"explorer_summaries": [ref]}
 
     return node
 
 
 def localize(ctx: RunContext) -> Node:
-    """T1: a single explorer answers where/how the first step should be implemented."""
+    """T1: a single explorer answers where/how the first step should be implemented, and
+    the files it found join every open step's ``files_expected`` (I-151)."""
 
     def node(state: SCIOState) -> dict[str, Any]:
         question = localize_question(state.current_step(), state.task)
         try:
-            ref = _explore_once(ctx, question, tag="localize")
+            ref, summary = _explore_once(ctx, question, tag="localize")
         except BudgetExceeded as exc:
             entry = fact(f"budget exhausted at localize: {exc.message}", source=Role.SYSTEM)
             return {"exit_reason": ExitReason.BUDGET, "task_ledger": [entry], **ctx.budget_update()}
-        entry = fact("localize: repository context gathered", source=Role.EXPLORER)
+        entries = [fact("localize: repository context gathered", source=Role.EXPLORER)]
+        update: dict[str, Any] = {}
+        if state.plan is not None:
+            update["plan"], note = _localize_plan(ctx, state.plan, summary)
+            entries.append(fact(f"localize: {note}", source=Role.SYSTEM))
         return {
+            **update,
             "explorer_summaries": [ref],
-            "task_ledger": [entry],
+            "task_ledger": entries,
             "phase": "implement",
             **ctx.budget_update(),
         }
@@ -208,7 +368,32 @@ def normalize_steps(
 
 
 def summaries_text(ctx: RunContext, state: SCIOState) -> list[str]:
+    # summary_text keeps every stored summary within SUMMARY_MAX_CHARS, so this never cuts.
     return [ctx.artifacts.head(ref, SUMMARY_MAX_CHARS) for ref in state.explorer_summaries]
+
+
+def _stored_summary(ctx: RunContext, ref: ArtifactRef) -> ExplorerSummary | None:
+    """A summary read back from its artifact; None for one the old character cut broke."""
+    try:
+        return ExplorerSummary.model_validate_json(ctx.artifacts.get(ref))
+    except (OSError, ValueError):
+        return None
+
+
+def keep_localized_files(ctx: RunContext, state: SCIOState, plan: Plan) -> tuple[Plan, list[str]]:
+    """``plan`` with the T1 localize explorer's files merged back into its open steps
+    (I-151). Every replan (the planner's, or the advisor's ``revised_steps``) names its files
+    again without exploring, and localize runs once per T1 run (build.py), so the files it
+    found would drop out and drift would fire on them again. Returns the notes to record."""
+    if state.routing is None or state.routing.tier is not Tier.T1:
+        return plan, []
+    notes: list[str] = []
+    for ref in state.explorer_summaries:
+        stored = _stored_summary(ctx, ref)
+        if stored is not None:
+            plan, note = _localize_plan(ctx, plan, stored)
+            notes.append(f"plan v{plan.version}: {note}")
+    return plan, notes
 
 
 def plan(ctx: RunContext) -> Node:
@@ -304,6 +489,8 @@ def plan(ctx: RunContext) -> Node:
                 source=Role.PLANNER,
             )
         ] + [fact(n, source=Role.SYSTEM) for n in plan_notes]
+        new_plan, notes = keep_localized_files(ctx, state, new_plan)
+        entries += [fact(n, source=Role.SYSTEM) for n in notes]
         return {
             "plan": new_plan,
             "feature_list": features,
