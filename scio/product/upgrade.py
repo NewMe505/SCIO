@@ -100,7 +100,10 @@ def upgrade_product(sb: Sandbox) -> UpgradeReport:
         raise UpgradeRefused(f"no {PRODUCT_MD} in {root}: not a SCIO product")
     if _git(sb, "status", "--porcelain"):
         raise UpgradeRefused("the working tree has uncommitted changes; commit or stash them first")
-    spec = parse_product_md(sb.read_text(f"{root}/{PRODUCT_MD}"))
+    try:
+        spec = parse_product_md(sb.read_text(f"{root}/{PRODUCT_MD}"))
+    except ValueError as exc:  # said, not a traceback (I-148's sweep)
+        raise UpgradeRefused(f"{PRODUCT_MD} does not parse; fix it first: {exc}") from exc
     tc = get_toolchain(spec.stack)
     fresh = scaffold_for(spec)
     report = UpgradeReport()

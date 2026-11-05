@@ -16,6 +16,7 @@ import pytest
 from evals.fake_scripts import ScriptedResponder
 from scio.graph.build import compile_graph
 from scio.graph.checkpointer import open_checkpointer
+from scio.graph.effects import effect_key
 from scio.graph.run_context import RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
@@ -325,9 +326,11 @@ def test_crash_between_features_resumes_without_duplicates(tmp_path: Path) -> No
         ctx.close()
 
 
-def _github_product(tmp_path: Path) -> tuple[RunContext, FakeGh, Path, Path]:
+def _github_product(
+    tmp_path: Path, responder: Responder | None = None
+) -> tuple[RunContext, FakeGh, Path, Path]:
     """A bootstrapped product with a bare origin and a canned ``gh`` (GitHub mode)."""
-    harness = _bootstrap(tmp_path)
+    harness = _bootstrap(tmp_path, responder)
     repo = tmp_path / "product"
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
@@ -467,8 +470,6 @@ def test_a_red_ci_is_never_called_ready_and_recheck_pushes_the_upgrade_made_at_t
         green = out.state.pr.ci
         assert green and green.state == "passed" and green.head == fixed
         assert f"is ready; CI passed on {fixed[:12]}" in str(out.interrupt["question"])
-        from scio.graph.effects import effect_key
-
         key = effect_key(ctx.thread_id, "merge_wait", f"push:milestone/1:{fixed}")
         pushed = ctx.effects.get(key)
         assert pushed is not None and pushed.status == "done"
@@ -1356,6 +1357,135 @@ def test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_r
     assert "P4" in [f.id for f in main_progress.features]
     assert "### P4: Slugify todo titles" in _git(repo, "show", f"main:{PRODUCT_MD}")
     assert _git(repo, "tag", "--list") == ""
+
+
+def _added_features(first: int, last: int, *, long_id: int | None = None) -> str:
+    """``### Pn`` sections for P``first``..P``last``; ``long_id``'s description is over the
+    400-character cap, so PRODUCT.md stops parsing (a realistic hand-edit slip)."""
+    out = []
+    for i in range(first, last + 1):
+        # "slugify" names a scripted Fake feature, so a planned one can run
+        desc = f"Slugify todo titles, fix {i}" + (" for every input" * 30 if i == long_id else "")
+        out.append(f"### P{i}: {desc}\n- [ ] `todo slug A` prints a ({i})\n\n")
+    return "".join(out)
+
+
+def test_a_merge_stop_refuses_merged_while_product_md_does_not_parse(tmp_path: Path) -> None:
+    """I-147, I-148, graphcalc S10: at merge stop 2 the owner added bug-fix features, taking
+    PRODUCT.md past SCIO's 24-feature cap, and `reread_product_md` kept the old spec without a
+    word, so `merged` would have planned M3 with none of the fixes. Now the file has no feature
+    cap, and while it does not parse the stop refuses `merged`, says why, and pulls nothing;
+    once it is fixed, the same answer goes through and the next milestone plans from it."""
+    responder = ScriptedResponder(milestone_size=4)  # M1 builds P1, P2 and P3
+    ctx, fake, repo, origin = _github_product(tmp_path, responder)
+    md = repo / PRODUCT_MD
+    bar = "## Quality bar (release gate)\n"
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.paused and out.state.phase == "merge_wait" and out.state.pr
+        assert "product_md_error" not in out.interrupt
+        # the live shape: the edit sits uncommitted on the milestone branch at the stop
+        assert _git(repo, "branch", "--show-current") == "milestone/1"
+        text = md.read_text(encoding="utf-8")
+        md.write_text(
+            text.replace(bar, _added_features(4, 30, long_id=17) + bar, 1),
+            encoding="utf-8",
+            newline="\n",
+        )
+        _squash_merge(origin, fake, "milestone/1", int(out.state.pr.number or 0))
+        main_before = _git(repo, "rev-parse", "main")
+        out = resume_build(ctx, "merged")
+        s = out.state
+        assert out.paused and s.phase == "merge_wait", s.ledger[-3:]
+        question = str(out.interrupt["question"])
+        assert "PRODUCT.md does not parse" in question and "reply 'merged' again" in question
+        assert "400" in str(out.interrupt["product_md_error"])  # the parser's own reason
+        assert any("'merged' refused: PRODUCT.md does not parse" in e.text for e in s.ledger)
+        assert s.milestones_done == [] and s.milestone and s.milestone.id == "M1"
+        assert _git(repo, "rev-parse", "main") == main_before  # nothing pulled or merged
+        assert ctx.effects.get(effect_key(ctx.thread_id, "merge_wait", "pull:M1")) is None
+        # fixed: 30 features, past the old cap of 24; the same answer goes through
+        md.write_text(
+            text.replace(bar, _added_features(4, 30) + bar, 1), encoding="utf-8", newline="\n"
+        )
+        responder.coder_mode = "idle"  # M2's first feature halts at once: this is about the plan
+        out = resume_build(ctx, "merged")
+        s = out.state
+        assert s.milestones_done == ["M1"], s.ledger[-3:]
+        assert s.spec and len(s.spec.features) == 30
+        assert s.milestone and s.milestone.id == "M2" and s.milestone.feature_ids()[0] == "P4"
+        assert any("P30 added from PRODUCT.md" in e.text for e in s.ledger)
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P4"
+    finally:
+        ctx.close()
+    recorded = ProgressFile.from_json(_git(repo, "show", f"milestone/2:{PROGRESS_PATH}"))
+    assert len(recorded.features) == 30
+
+
+def test_no_milestone_is_planned_from_the_old_spec_when_product_md_stops_parsing(
+    tmp_path: Path,
+) -> None:
+    """I-148's sweep: every reader of PRODUCT.md after `load` stops rather than goes on from
+    the spec loaded earlier. `plan_milestone` halts with the parser's reason (the merge stop
+    above is the usual gate; this is the one behind it, for an edit that lands after it)."""
+    from scio.product.build import initial_build_state, plan_milestone
+
+    harness = _bootstrap(tmp_path)
+    repo = tmp_path / "product"
+    md = repo / PRODUCT_MD
+    spec = parse_product_md(md.read_text(encoding="utf-8"))
+    bar = "## Quality bar (release gate)\n"
+    md.write_text(
+        md.read_text(encoding="utf-8").replace(bar, _added_features(4, 4, long_id=4) + bar, 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        state = initial_build_state(ctx, gh_repo=None).model_copy(
+            update={"spec": spec, "phase": "plan"}
+        )
+        update = plan_milestone(ctx)(state)
+    finally:
+        ctx.close()
+    assert update["exit_reason"] == "load_failed" and update["phase"] == "halted"
+    reason = update["ledger"][-1].text
+    assert "PRODUCT.md does not parse" in reason and "nothing was planned" in reason
+    assert "milestone" not in update
+    assert "milestone/1" not in _git(repo, "branch", "--list")
+
+
+def test_scio_build_reaches_the_merge_stop_refusal_when_product_md_does_not_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I-148 through the CLI (I-061): `scio build` parsed the whole PRODUCT.md for its stack
+    before the graph resumed, so the merge stop's refusal could never be reached; the command
+    ended in a ValidationError traceback. Now it reads the stack line only, and the paused
+    question says why the merge answer was refused."""
+    from scio.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
+    monkeypatch.setenv("SCIO_FAKE_SCRIPT", "1")
+    monkeypatch.setenv("SCIO_CHECKPOINT_DSN", f"sqlite:///{(tmp_path / 'ckpt.sqlite').as_posix()}")
+    target = tmp_path / "product"
+    assert main(["new", "--prompt", PROMPT, "--dir", str(target), "--thread", "new-cli"]) == 0
+    assert main(["new", "--thread", "new-cli", "--dir", str(target), "--decision", "answers"]) == 0
+    assert main(["new", "--thread", "new-cli", "--dir", str(target), "--decision", "approve"]) == 0
+    assert main(["build", "--product", str(target)]) == 0
+    assert "PAUSED for a human" in capsys.readouterr().out
+    md = target / PRODUCT_MD
+    bar = "## Quality bar (release gate)\n"
+    md.write_text(
+        md.read_text(encoding="utf-8").replace(bar, _added_features(9, 9, long_id=9) + bar, 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    assert main(["build", "--product", str(target), "--decision", "merge"]) == 0
+    out = capsys.readouterr().out
+    assert "PAUSED for a human" in out and "phase=merge_wait" in out
+    assert "PRODUCT.md does not parse" in out and "reply 'merge' again" in out
+    assert "Traceback" not in out
 
 
 def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(

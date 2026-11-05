@@ -394,7 +394,10 @@ class ProductSpec(BaseModel):
     title: str = Field(max_length=120)
     vision: str = Field(max_length=1200)
     users: list[str] = Field(min_length=1, max_length=6)
-    features: list[ProductFeature] = Field(min_length=1, max_length=24)
+    features: list[ProductFeature] = Field(min_length=1)
+    """No upper bound (I-147): the bug workflow adds a feature for every fix, so an existing
+    product's PRODUCT.md grows for its whole life. Only the interview's draft is bounded
+    (:class:`ProductSpecOutput`)."""
     quality_bar: list[str] = Field(min_length=1, max_length=12)
     stack: str = "python"
     """Toolchain profile name (ADR 0009)."""
@@ -419,6 +422,7 @@ class ProductSpecOutput(BaseModel):
     vision: str = Field(max_length=1200)
     users: list[str] = Field(min_length=1, max_length=6)
     features: list[ProductFeature] = Field(min_length=1, max_length=24)
+    """A first spec stays small; PRODUCT.md itself has no bound once approved (I-147)."""
     quality_bar: list[str] = Field(min_length=1, max_length=12)
     stack: str = Field(max_length=40)
     dependencies: list[str] = Field(default_factory=list, max_length=20)

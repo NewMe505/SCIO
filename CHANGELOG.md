@@ -14,6 +14,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ### Fixed
 - A python product's CI and README Develop block install the project (`pip install -e . ruff pytest`), so the dependencies `pyproject.toml` declares reach the tests; before, CI installed only ruff and pytest, and the first feature importing an approved dependency failed the PR's CI at collection while every SCIO check passed in its sandbox venv (I-140, the graphcalc run's S6). The scaffold's `pyproject.toml` now has a setuptools `[build-system]` and lists its package, so the install works whatever directories the product adds.
 - `scio upgrade` brings an existing product's CI along: it replaces exactly the old scaffold's install line in `ci.yml` and the README, and gives a `pyproject.toml` without a build system the scaffold's one; a line the product changed is kept (I-142).
+- An existing product's `PRODUCT.md` has no feature cap: it parsed at most 24 features, and the bug workflow adds a feature per fix for the product's whole life (I-147, the graphcalc run's S10, issue #77). The interview's first draft is still bounded at 24.
+- A merge stop refuses `merged` (offline `merge`) while `PRODUCT.md` does not parse: its question says why, nothing is pulled or merged, and the same answer goes through once the file is fixed. Before, the stop kept the spec loaded at the thread's start and would have planned the next milestone without the edit, saying so only in a ledger line. `scio build` reads only the stack line before the graph resumes, so such a file reaches the stop instead of a traceback. Planning and the post-merge route halt with the parser's reason, and `scio upgrade` refuses with it (I-148).
 
 ## [0.9.0] - 2026-10-30
 ### Added

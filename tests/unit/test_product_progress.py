@@ -15,6 +15,7 @@ from scio.product.build import (
 from scio.product.progress import (
     MAX_FEATURES_PER_MILESTONE,
     ProgressFile,
+    declared_stack,
     normalise_milestone,
     parse_product_md,
 )
@@ -25,6 +26,7 @@ from scio.state.models import (
     MilestonePlanOutput,
     ProductFeature,
     ProductSpec,
+    ProductSpecOutput,
     Tier,
 )
 
@@ -48,6 +50,36 @@ def test_product_md_round_trips_through_render_and_parse() -> None:
     spec = _spec()
     parsed = parse_product_md(render_product_md(spec))
     assert parsed == spec
+
+
+def test_an_existing_products_product_md_has_no_feature_cap() -> None:
+    """I-147: graphcalc's PRODUCT.md went from 22 approved features to 26 when the bug-fix
+    features were added, and the parser refused it (``at most 24 items``). The bug workflow
+    adds a feature per fix for the product's whole life; only the interview draft is bounded."""
+    spec = _spec(120)
+    parsed = parse_product_md(render_product_md(spec))
+    assert parsed == spec and len(parsed.features) == 120
+    draft = {
+        "product_name": "todo_cli",
+        "title": "Todo CLI",
+        "vision": "v",
+        "users": ["u"],
+        "quality_bar": ["tests pass"],
+        "stack": "python",
+    }
+    feats = [ProductFeature(id=f"P{i}", description="d", acceptance=["a"]) for i in range(30)]
+    with pytest.raises(ValueError, match="at most 24"):
+        ProductSpecOutput(**draft, features=feats)
+
+
+def test_the_stack_line_reads_without_validating_the_rest_of_product_md() -> None:
+    """I-148: ``scio build`` read the stack by parsing the whole file, so a PRODUCT.md that no
+    longer parsed ended the command in a traceback before the merge stop could say why."""
+    text = render_product_md(_spec(2)).replace("Feature 2", "x" * 500)  # over the 400 cap
+    with pytest.raises(ValueError):
+        parse_product_md(text)
+    assert declared_stack(text) == "python"
+    assert declared_stack("# no meta line\n") is None
 
 
 def test_product_md_edited_by_hand_still_parses() -> None:
