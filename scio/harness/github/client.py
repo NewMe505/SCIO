@@ -163,29 +163,50 @@ class GitHubClient:
             str(d["baseRefName"]),
         )
 
+    def _milestones(self) -> list[dict[str, Any]]:
+        rows = self._json("api", "--paginate", f"repos/{self.repo}/milestones?state=all")
+        return list(rows or [])
+
     def find_milestone(self, title: str) -> int | None:
-        rows = self._json("api", "--paginate", f"repos/{self.repo}/milestones?state=all") or []
-        for m in rows:
+        for m in self._milestones():
             if str(m.get("title")) == title:
                 return int(m["number"])
         return None
 
+    def find_milestone_by_prefix(self, prefix: str) -> tuple[int, str] | None:
+        """``(number, title)`` of the open or closed milestone whose title starts with
+        ``prefix`` (``"M2: "``), the lowest number of several. A re-plan may retitle a
+        milestone; its id prefix still finds the GitHub milestone (graphcalc S7, I-150)."""
+        if not prefix:
+            raise ValueError("an empty prefix matches every milestone")
+        found = [
+            (int(m["number"]), str(m["title"]))
+            for m in self._milestones()
+            if str(m.get("title") or "").startswith(prefix)
+        ]
+        return min(found) if found else None
+
     def find_issue(self, title: str) -> IssueInfo | None:
-        """The open or closed issue with exactly this title, if any."""
-        rows = self._json(
-            "issue", "list", "-R", self.repo, "--state", "all", "--limit", "200",
-            "--search", f'in:title "{title}"', "--json", "number,title,body,labels,url",
-        )  # fmt: skip
-        for d in rows or []:
-            if str(d.get("title")) == title:
-                return IssueInfo(
-                    number=int(d["number"]),
-                    title=str(d["title"]),
-                    body=str(d.get("body") or ""),
-                    labels=[str(lb["name"]) for lb in d.get("labels", [])],
-                    url=str(d["url"]),
-                )
-        return None
+        """The open or closed issue with exactly this title, the lowest number of several.
+
+        It lists the repository's issues, never searches them (I-150): a ``"`` in the title
+        ends a search phrase early, so GitHub finds nothing; the search index lags a create
+        by seconds; and ``gh issue list --search`` stopped at ``--limit``. The REST listing
+        has PRs in it too, each with a ``pull_request`` key; they are skipped."""
+        rows = self._json("api", "--paginate", f"repos/{self.repo}/issues?state=all&per_page=100")
+        matches = [
+            d for d in rows or [] if "pull_request" not in d and str(d.get("title")) == title
+        ]
+        if not matches:
+            return None
+        d = min(matches, key=lambda r: int(r["number"]))
+        return IssueInfo(
+            number=int(d["number"]),
+            title=str(d["title"]),
+            body=str(d.get("body") or ""),
+            labels=[str(lb["name"]) for lb in d.get("labels") or []],
+            url=str(d["html_url"]),  # the web URL, as `gh issue list --json url` gave it
+        )
 
     def pr_merged(self, number: int) -> bool:
         d = self._json("pr", "view", str(number), "-R", self.repo, "--json", "state,mergedAt")

@@ -23,7 +23,7 @@ from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
 from scio.harness.failures import FatalError
 from scio.harness.github.client import GitHubClient, GitHubError
-from scio.harness.providers.fake import FakeProvider
+from scio.harness.providers.fake import FakeProvider, FakeReply
 from scio.harness.retry import RetryPolicy
 from scio.harness.types import CompletionRequest
 from scio.product import resume_product, run_product
@@ -1357,6 +1357,85 @@ def test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_r
     assert "P4" in [f.id for f in main_progress.features]
     assert "### P4: Slugify todo titles" in _git(repo, "show", f"main:{PRODUCT_MD}")
     assert _git(repo, "tag", "--list") == ""
+
+
+class _RetitlingPlanner(ScriptedResponder):
+    """The live milestone planner's title is not stable across calls: graphcalc's M2 became
+    "...variables and tab UI" when it was planned a second time (S7)."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.planner_calls = 0
+
+    def _structured(self, role: str, kind: str, text: str) -> FakeReply:
+        reply = super()._structured(role, kind, text)
+        if kind != "milestone_plan":
+            return reply
+        self.planner_calls += 1
+        data = json.loads(reply.text)
+        data["milestone_title"] += f" (take {self.planner_calls})"
+        return FakeReply(text=json.dumps(data))
+
+
+def test_a_milestone_planned_again_reuses_its_plan_github_milestone_and_issues(
+    tmp_path: Path,
+) -> None:
+    """I-149, graphcalc S7: a thread that stops inside a milestone leaves it planned but not
+    recorded, so the next `scio build` (a new thread) planned it again. The planner retitled
+    it, `ensure_milestone` matched by title and made a second GitHub milestone. Now the plan
+    is committed on the milestone branch and reused: one planner call, one milestone, one
+    issue per feature."""
+    responder = _RetitlingPlanner(coder_mode="idle")  # P1 halts at once
+    ctx, fake, repo, _origin = _github_product(tmp_path, responder)
+    harness = ctx.harness
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P1"
+        first = out.state.milestone
+        assert first and first.title == "Milestone 1 (take 1)"
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.exit_reason == "feature_failed"
+    finally:
+        ctx.close()
+    on_branch = _git(repo, "ls-tree", "-r", "--name-only", "milestone/1")
+    assert f"{MILESTONES_DIR}/M1-plan.json" in on_branch.splitlines()
+    issues_before = sorted(str(i["title"]) for i in fake.issues.values())
+    responder.coder_mode = "solve"
+    again = _ctx(
+        tmp_path,
+        harness,
+        f"{build_thread_id(PRODUCT)}-r2",
+        github=GitHubClient("o/r", runner=fake),
+    )
+    try:
+        out = run_build(again, gh_repo="o/r")
+        s = out.state
+        assert out.paused and s.phase == "merge_wait", s.ledger[-3:]
+    finally:
+        again.close()
+    assert responder.planner_calls == 1  # the second thread asked no planner
+    assert s.milestone == first
+    assert any("M1 was planned before" in e.text and "(I-149)" in e.text for e in s.ledger)
+    assert list(fake.milestones) == ["M1: Milestone 1 (take 1)"]
+    titles = sorted(str(i["title"]) for i in fake.issues.values())
+    assert titles == issues_before and len(set(titles)) == len(titles)
+
+
+def test_a_retitled_milestone_finds_its_github_milestone_by_its_id(tmp_path: Path) -> None:
+    """I-149: a milestone branch from before plans were stored can still be planned again
+    under another title; its issues go into the GitHub milestone that already carries its
+    id (`M1: `), not into a new one."""
+    ctx, fake, _repo, _origin = _github_product(tmp_path)
+    fake.milestones["M1: An older title"] = 7
+    try:
+        out = run_build(ctx, gh_repo="o/r")
+        s = out.state
+        assert out.paused and s.phase == "merge_wait", s.ledger[-3:]
+    finally:
+        ctx.close()
+    assert fake.milestones == {"M1: An older title": 7}
+    assert {i["milestone"] for i in fake.issues.values()} == {"M1: An older title"}
+    assert any("GitHub milestone #7 'M1: An older title' is M1's" in e.text for e in s.ledger)
 
 
 def _added_features(first: int, last: int, *, long_id: int | None = None) -> str:

@@ -1,14 +1,28 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
 from scio.harness.github.client import GitHubClient, GitHubError, RunResult
+
+
+def _rest_listing(argv: Sequence[str], path: str, rows: list[dict[str, object]]) -> RunResult:
+    """A REST list endpoint as GitHub serves it: ``state`` filters (``open`` by default), and
+    without ``--paginate`` only the first page (``per_page``, 30 by default) comes back. With
+    it, gh joins the pages into one JSON array (checked live on gh 2.103.3, I-150)."""
+    q = parse_qs(urlsplit(path).query)
+    state = q.get("state", ["open"])[0]
+    if state != "all":
+        rows = [r for r in rows if r.get("state") == state]
+    if "--paginate" not in argv:
+        rows = rows[: int(q.get("per_page", ["30"])[0])]
+    return RunResult(0, json.dumps(rows), "")
 
 
 class FakeGh:
@@ -20,7 +34,14 @@ class FakeGh:
         self.comments: dict[int, dict[int, str]] = {}  # issue -> {id: body}
         self.prs: dict[str, dict[str, object]] = {}  # head -> pr
         self.milestones: dict[str, int] = {}  # title -> number
-        self.issues: dict[int, dict[str, object]] = {}  # number -> issue
+        self.closed_milestones: set[int] = set()
+        self.issues: dict[int, dict[str, object]] = {}  # number -> issue (``state`` optional)
+        self.search_lag = False
+        """Leave issues created from now on out of ``issue list --search``: GitHub's search
+        index lags a create by seconds, the REST listing does not (I-150)."""
+        self.unindexed: set[int] = set()
+        self.quiet_issue_create = False
+        """Make ``issue create`` print no URL, so ``ensure_issue`` must find what it made."""
         self.merged: set[int] = set()
         self.releases: dict[str, dict[str, object]] = {}  # tag -> release
         self.labels: set[str] = set()  # a new repository has none of SCIO's (I-113)
@@ -53,9 +74,25 @@ class FakeGh:
                 "",
             )
         if a[:2] == ["issue", "list"]:
-            needle = a[a.index("--search") + 1].split('"')[1]
-            rows = [i for i in self.issues.values() if needle in str(i["title"])]
-            return RunResult(0, json.dumps(rows), "")
+            # as gh does: issues only, newest first, at most --limit rows (30 by default). A
+            # --search phrase ends at the next '"', so a title with a '"' in it finds nothing:
+            # live, all 7 graphcalc titles with one got 0 hits (S7, I-150)
+            query = a[a.index("--search") + 1] if "--search" in a else ""
+            limit = int(a[a.index("--limit") + 1]) if "--limit" in a else 30
+            rows = sorted(self.issues.values(), key=lambda i: -int(str(i["number"])))
+            if query:
+                m = re.fullmatch(r'in:title "(.*)"', query)
+                if m is None:
+                    return RunResult(1, "", f"FakeGh: unhandled search {query!r}")
+                phrase = m.group(1).lower()
+                rows = [
+                    i
+                    for i in rows
+                    if '"' not in phrase
+                    and int(str(i["number"])) not in self.unindexed
+                    and phrase in str(i["title"]).lower()
+                ]
+            return RunResult(0, json.dumps(rows[:limit]), "")
         if a[:2] == ["issue", "create"]:
             # as GitHub does: a label the repository lacks fails the whole create (I-113)
             missing = [a[i + 1] for i, x in enumerate(a) if x == "--label"]
@@ -75,6 +112,10 @@ class FakeGh:
                 "url": f"https://github.com/o/r/issues/{n}",
                 "milestone": a[a.index("--milestone") + 1] if "--milestone" in a else None,
             }
+            if self.search_lag:
+                self.unindexed.add(n)
+            if self.quiet_issue_create:
+                return RunResult(0, "", "")
             return RunResult(0, f"https://github.com/o/r/issues/{n}\n", "")
         if a[:2] == ["release", "view"]:
             rel = self.releases.get(a[2])
@@ -112,8 +153,17 @@ class FakeGh:
                     self.next_id += 1
                     self.milestones[title] = n
                     return RunResult(0, json.dumps({"number": n, "title": title}), "")
-                rows = [{"number": n, "title": t} for t, n in self.milestones.items()]
-                return RunResult(0, json.dumps(rows), "")
+                rows = [
+                    {
+                        "number": n,
+                        "title": t,
+                        "state": "closed" if n in self.closed_milestones else "open",
+                    }
+                    for t, n in self.milestones.items()
+                ]
+                return _rest_listing(a, path, rows)
+            if urlsplit(path).path.endswith("/issues") and "-X" not in a:
+                return _rest_listing(a, path, self.rest_issues())
             if "/git/ref/heads/" in path:
                 name = path.split("/git/ref/heads/", 1)[1]  # branch names may contain '/'
                 return (
@@ -150,6 +200,7 @@ class FakeGh:
             self.next_id += 1
             self.prs[head] = {
                 "number": n,
+                "title": a[a.index("--title") + 1],
                 "url": f"https://github.com/o/r/pull/{n}",
                 "isDraft": True,
                 "headRefName": head,
@@ -200,6 +251,38 @@ class FakeGh:
         if a[:2] == ["pr", "edit"]:
             return RunResult(0, "", "")
         return RunResult(1, "", f"unhandled: {a}")
+
+    def rest_issues(self) -> list[dict[str, object]]:
+        """``GET repos/o/r/issues`` rows, newest first: PRs are in it too, each with a
+        ``pull_request`` key; ``url`` is the API URL and ``html_url`` the web one."""
+        api = "https://api.github.com/repos/o/r"
+        rows: list[dict[str, object]] = [
+            {
+                "number": n,
+                "title": i["title"],
+                "body": i["body"],
+                "labels": i["labels"],
+                "state": i.get("state", "open"),
+                "milestone": {"title": i["milestone"]} if i.get("milestone") else None,
+                "url": f"{api}/issues/{n}",
+                "html_url": f"https://github.com/o/r/issues/{n}",
+            }
+            for n, i in self.issues.items()
+        ]
+        rows += [
+            {
+                "number": p["number"],
+                "title": p.get("title", ""),
+                "body": p.get("body"),
+                "labels": [],
+                "state": "closed" if p["number"] in self.merged else "open",
+                "url": f"{api}/issues/{p['number']}",
+                "html_url": p["url"],
+                "pull_request": {"url": f"{api}/pulls/{p['number']}", "html_url": p["url"]},
+            }
+            for p in self.prs.values()
+        ]
+        return sorted(rows, key=lambda r: -int(str(r["number"])))
 
     def head_of(self, branch: str) -> str:
         """The branch tip on the fake GitHub: the bare origin's ref, else a made-up SHA."""
@@ -339,6 +422,119 @@ def test_an_issue_label_is_created_once_and_an_existing_one_is_left_alone(
     ]
     raw = fake(["issue", "create", "-R", "o/r", "--title", "x", "--label", "nope"])
     assert raw.code == 1 and "could not add label: 'nope' not found" in raw.stderr
+
+
+GRAPHCALC_P5 = (
+    'P5: Non-real results return 200 with an exact form and a rectangular complex {"real","imag"}'
+)
+
+
+def test_a_title_with_double_quotes_is_found_and_never_duplicated(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-150, graphcalc S7: `find_issue` searched `in:title "<title>"`, and the `"` inside
+    P5's title ended the phrase, so GitHub found nothing and a resumed build opened a second
+    P5 issue (#12 beside #8). The lookup lists the issues instead, so any title is found."""
+    client, fake = gh
+    issue = client.ensure_issue(
+        title=GRAPHCALC_P5, body="- [ ] c\n", milestone=None, labels=("product-mode",)
+    )
+    found = client.find_issue(GRAPHCALC_P5)
+    assert found is not None and found.number == issue.number
+    assert found.url == f"https://github.com/o/r/issues/{issue.number}"  # the web URL, not API
+    assert (found.title, found.body, found.labels) == (GRAPHCALC_P5, "- [ ] c\n", ["product-mode"])
+    again = client.ensure_issue(title=GRAPHCALC_P5, body="other", milestone=None)
+    assert again.number == issue.number and len(fake.issues) == 1
+    fake.issues[issue.number]["state"] = "closed"  # a merged milestone closed it
+    closed = client.find_issue(GRAPHCALC_P5)
+    assert closed is not None and closed.number == issue.number
+    # the fake refuses the phrase as GitHub does, so the old search could not pass here
+    search = f'in:title "{GRAPHCALC_P5}"'
+    raw = fake(["issue", "list", "-R", "o/r", "--state", "all", "--search", search])
+    assert raw.code == 0 and json.loads(raw.stdout) == []
+
+
+def test_find_issue_ignores_pull_requests_and_picks_the_oldest_twin(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-150: `GET repos/{repo}/issues` lists PRs too (with a `pull_request` key); a PR whose
+    title equals a feature's is not that feature's issue. Two issues with one title (S7 left
+    graphcalc #8 and #12) resolve to the lower number, whatever order GitHub lists them in."""
+    client, fake = gh
+    pr = client.ensure_draft_pr(head="agent/1-p1", base="main", title="P1: Add", body="b")
+    assert client.find_issue("P1: Add") is None
+    issue = client.ensure_issue(title="P1: Add", body="b", milestone=None)
+    assert issue.number != pr.number and len(fake.issues) == 1
+    found = client.find_issue("P1: Add")
+    assert found is not None and found.number == issue.number
+    twin = fake.next_id
+    fake.next_id += 1
+    fake.issues[twin] = {**fake.issues[issue.number], "number": twin}
+    found = client.find_issue("P1: Add")
+    assert found is not None and found.number == issue.number < twin
+
+
+def test_find_issue_reads_every_page_of_the_listing(gh: tuple[GitHubClient, FakeGh]) -> None:
+    """I-150: products have no feature cap, and the old search stopped at `--limit 200`. The
+    listing is paginated (`--paginate`, 100 a page), so the oldest of 250 issues is found."""
+    client, fake = gh
+    for n in range(1, 251):
+        fake.issues[n] = {
+            "number": n,
+            "title": f"P{n}: feature {n}",
+            "body": "",
+            "labels": [],
+            "url": f"https://github.com/o/r/issues/{n}",
+        }
+    found = client.find_issue("P1: feature 1")
+    assert found is not None and found.number == 1
+    (listing,) = [a for a, _ in fake.calls if a[0] == "api"]
+    assert "--paginate" in listing and "repos/o/r/issues?state=all&per_page=100" in listing
+
+
+def test_ensure_issue_finds_what_it_created_when_gh_prints_no_url(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-150: `ensure_issue`'s fallback looks the new issue up by title at once. GitHub's
+    search index lags a create by seconds; the REST listing does not, so the fallback holds."""
+    client, fake = gh
+    fake.quiet_issue_create = True
+    fake.search_lag = True
+    issue = client.ensure_issue(title="P2: Add and list", body="b", milestone=None)
+    assert issue.number in fake.issues
+    assert issue.url == f"https://github.com/o/r/issues/{issue.number}"
+    again = client.ensure_issue(title="P2: Add and list", body="b", milestone=None)
+    assert again.number == issue.number and len(fake.issues) == 1
+    assert [(w.op, w.noop) for w in client.writes] == [
+        ("ensure_issue", False),
+        ("ensure_issue", True),
+    ]
+
+
+def test_find_milestone_by_prefix_reuses_a_renamed_milestone(
+    gh: tuple[GitHubClient, FakeGh],
+) -> None:
+    """I-150, graphcalc S7: a re-plan retitled M2 ("...variables and tab UI"), so the exact
+    title lookup missed GitHub milestone #2 and made #3. The id prefix finds the milestone
+    whatever its title says now, with its real title; of two, the lower number wins."""
+    client, fake = gh
+    fake.milestones = {
+        "M1: Server skeleton": 1,
+        "M2: Calculator errors, history, variables and tab UI": 3,  # listed first
+        "M2: Calculator errors, history, variables and UI": 2,
+        "M20: Later": 5,  # "M2: " is not its prefix
+    }
+    fake.closed_milestones = {2}  # state=all: a closed milestone still counts
+    assert client.find_milestone_by_prefix("M2: ") == (
+        2,
+        "M2: Calculator errors, history, variables and UI",
+    )
+    assert client.find_milestone_by_prefix("M20: ") == (5, "M20: Later")
+    assert client.find_milestone_by_prefix("M3: ") is None
+    with pytest.raises(ValueError):
+        client.find_milestone_by_prefix("")
+    assert client.find_milestone("M2: Calculator errors, history, variables and tab UI") == 3
+    assert all("--paginate" in a and any("state=all" in x for x in a) for a, _ in fake.calls)
 
 
 def test_pr_merged_reads_the_merge_state(gh: tuple[GitHubClient, FakeGh]) -> None:

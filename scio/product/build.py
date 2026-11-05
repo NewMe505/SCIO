@@ -254,6 +254,10 @@ def _commit_changed(
         if not files:
             return None
         _git(ctx, "add", "--", *files)
+        # `status` can list a file rewritten with the same content, and then `add` stages
+        # nothing: commit only what is staged, or `git commit` fails the node (I-158).
+        if not git_out(sb, "diff", "--cached", "--name-only", "--", *files):
+            return None
         _git(ctx, "commit", "-q", "-m", f"chore: {subject} {marker}")
         return head_sha(sb)
 
@@ -602,6 +606,33 @@ def plan_milestone(ctx: RunContext) -> Node:
                 ],
             }
         number = progress.next_milestone_number()
+        # A milestone planned before, by a thread that crashed or halted inside it, keeps its
+        # plan: a second planner call retitled graphcalc's M2, which duplicated its GitHub
+        # milestone (S7, I-149). Reused while every feature it names is still open.
+        stored = stored_plan(ctx, number)
+        open_ids = {f.id for f in open_features}
+        if stored is not None and set(stored.feature_ids()) <= open_ids:
+            return _start_milestone(
+                ctx,
+                spec,
+                progress,
+                stored,
+                [fact(n) for n in reread]
+                + [
+                    fact(
+                        f"{stored.id} was planned before (its plan is on {stored.branch}); "
+                        f"reused: {stored.title}: "
+                        + ", ".join(f"{f.id}@{f.tier.value}" for f in stored.features)
+                        + " (I-149)"
+                    )
+                ],
+            )
+        if stored is not None:
+            reread = [
+                *reread,
+                f"the {stored.id} plan on {stored.branch} names features no longer open "
+                f"({', '.join(sorted(set(stored.feature_ids()) - open_ids))}); planning again",
+            ]
         done_lines = [
             f"- {m.id} {m.title}: {m.status}, features {', '.join(m.features)}"
             for m in progress.milestones
@@ -645,66 +676,108 @@ def plan_milestone(ctx: RunContext) -> Node:
             )
         ]
         entries += [fact(n) for n in notes]
-        deferred = [
-            fid
-            for fid in plan.feature_ids()
-            if (rec := progress.feature(fid)) is not None and rec.status == "skipped"
-        ]
-        if deferred:
-            entries.append(
-                fact(
-                    f"deferred by a skip, planned again in {plan.id}: {', '.join(deferred)} (I-116)"
-                )
-            )
-
-        # The milestone branch from main (probe: it exists).
-        def apply() -> str:
-            _git(ctx, "checkout", "-q", "main")
-            if not _branch_exists(ctx, plan.branch):
-                _git(ctx, "branch", plan.branch)
-            return git_out(ctx.sandbox, "rev-parse", plan.branch)
-
-        sha = run_effect(
-            ctx.effects,
-            thread_id=ctx.thread_id,
-            node="plan_milestone",
-            intent=f"branch:{plan.branch}",
-            apply=apply,
-            probe=lambda: (
-                git_out(ctx.sandbox, "rev-parse", plan.branch)
-                if _branch_exists(ctx, plan.branch)
-                else None
-            ),
-        )
-        entries.append(fact(f"branch {plan.branch} at {sha[:12]}"))
-        # The install phase's manifest and lockfile changes are committed on the new branch
-        # before any feature's reset can delete them (I-085).
-        _git(ctx, "checkout", "-q", plan.branch)
-        try:
-            product_env(ctx, spec)
-        except RuntimeError as exc:
-            return _halt(ctx, "load_failed", f"install phase: {exc}")
-        installed = commit_install(ctx, plan, "plan_milestone")
-        if installed:
-            entries.append(fact(f"install phase changes committed at {installed[:12]}"))
-        synced = commit_progress_sync(ctx, plan, "plan_milestone")
-        if synced:
-            entries.append(fact(f"progress.json sync with PRODUCT.md committed at {synced[:12]}"))
-        return {
-            "spec": spec,
-            "milestone": plan,
-            "issues": {},
-            "integration": None,
-            "integration_ok": None,
-            "last_gate": None,
-            "pr": None,
-            "merged_commit": None,
-            "phase": "issues",
-            "ledger": entries,
-            **ctx.budget_update(),
-        }
+        return _start_milestone(ctx, spec, progress, plan, entries)
 
     return node
+
+
+def plan_path(plan_id: str) -> str:
+    """Where a milestone's plan is committed on its branch (I-149)."""
+    return f"{MILESTONES_DIR}/{plan_id}-plan.json"
+
+
+def stored_plan(ctx: RunContext, number: int) -> MilestonePlan | None:
+    """The plan an earlier build thread made for milestone ``number``, read from the plan
+    file committed on its branch; None when there is no branch, no file or no valid plan."""
+    branch = f"milestone/{number}"
+    if not _branch_exists(ctx, branch):
+        return None
+    r = ctx.sandbox.exec(["git", "show", f"{branch}:{plan_path(f'M{number}')}"], timeout_s=30)
+    if not r.ok:
+        return None
+    try:
+        plan = MilestonePlan.model_validate_json(r.stdout)
+    except ValueError:
+        return None
+    return plan if plan.number == number and plan.branch == branch else None
+
+
+def _start_milestone(
+    ctx: RunContext,
+    spec: ProductSpec,
+    progress: ProgressFile,
+    plan: MilestonePlan,
+    entries: list[LedgerEntry],
+) -> dict[str, Any]:
+    """The milestone branch, the install phase, and the bookkeeping commits for ``plan``
+    (planned now or reused), then on to its issues."""
+    deferred = [
+        fid
+        for fid in plan.feature_ids()
+        if (rec := progress.feature(fid)) is not None and rec.status == "skipped"
+    ]
+    if deferred:
+        entries.append(
+            fact(f"deferred by a skip, planned again in {plan.id}: {', '.join(deferred)} (I-116)")
+        )
+
+    # The milestone branch from main (probe: it exists).
+    def apply() -> str:
+        _git(ctx, "checkout", "-q", "main")
+        if not _branch_exists(ctx, plan.branch):
+            _git(ctx, "branch", plan.branch)
+        return git_out(ctx.sandbox, "rev-parse", plan.branch)
+
+    sha = run_effect(
+        ctx.effects,
+        thread_id=ctx.thread_id,
+        node="plan_milestone",
+        intent=f"branch:{plan.branch}",
+        apply=apply,
+        probe=lambda: (
+            git_out(ctx.sandbox, "rev-parse", plan.branch)
+            if _branch_exists(ctx, plan.branch)
+            else None
+        ),
+    )
+    entries.append(fact(f"branch {plan.branch} at {sha[:12]}"))
+    # The install phase's manifest and lockfile changes are committed on the new branch
+    # before any feature's reset can delete them (I-085).
+    _git(ctx, "checkout", "-q", plan.branch)
+    try:
+        product_env(ctx, spec)
+    except RuntimeError as exc:
+        return _halt(ctx, "load_failed", f"install phase: {exc}")
+    installed = commit_install(ctx, plan, "plan_milestone")
+    if installed:
+        entries.append(fact(f"install phase changes committed at {installed[:12]}"))
+    synced = commit_progress_sync(ctx, plan, "plan_milestone")
+    if synced:
+        entries.append(fact(f"progress.json sync with PRODUCT.md committed at {synced[:12]}"))
+    # The plan itself, so a later thread that plans this milestone again reuses it (I-149).
+    rel = plan_path(plan.id)
+    text = plan.model_dump_json(indent=1) + "\n"
+    path = f"{ctx.sandbox.root}/{rel}"
+    if not ctx.sandbox.exists(path) or ctx.sandbox.read_text(path) != text:
+        _write(ctx.sandbox, rel, text)  # a reused plan is not rewritten (I-158)
+    recorded = _commit_changed(
+        ctx, plan, "plan_milestone", "plan", f"record the {plan.id} plan", lambda p: p == rel
+    )
+    if recorded:
+        entries.append(fact(f"{plan.id} plan committed at {recorded[:12]} ({rel})"))
+    return {
+        "spec": spec,
+        "milestone": plan,
+        "issues": {},
+        "integration": None,
+        "integration_ok": None,
+        "last_gate": None,
+        "pr": None,
+        "merged_commit": None,
+        "phase": "issues",
+        "ledger": entries,
+        **ctx.budget_update(),
+    }
 
 
 def after_plan(state: ProductBuildState) -> Literal["issues", "release", "halt"]:
@@ -728,6 +801,18 @@ def issues(ctx: RunContext) -> Node:
         gh = ctx.github
         if gh is not None:
             milestone_title = f"{plan.id}: {plan.title}"
+            # The id is the milestone's identity on GitHub, not its title: a plan made again
+            # without a stored plan (a branch from before I-149) may be retitled, and its
+            # issues still belong in the milestone created first (S7, I-149).
+            found = gh.find_milestone_by_prefix(f"{plan.id}: ")
+            if found is not None and found[1] != milestone_title:
+                entries.append(
+                    fact(
+                        f"GitHub milestone #{found[0]} {found[1]!r} is {plan.id}'s; its issues "
+                        f"go there, not into a new {milestone_title!r} (I-149)"
+                    )
+                )
+                milestone_title = found[1]
             run_effect(
                 ctx.effects,
                 thread_id=ctx.thread_id,
