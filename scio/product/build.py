@@ -148,17 +148,34 @@ def _write_progress(ctx: RunContext, progress: ProgressFile) -> None:
     ctx.sandbox.write_text(f"{ctx.sandbox.root}/{PROGRESS_PATH}", progress.to_json())
 
 
+class ProductMdUnreadable(ValueError):
+    """PRODUCT.md no longer parses. Planning or routing from the spec loaded earlier would
+    leave out the human's edit without a word (I-148), so every caller stops instead."""
+
+
+def product_md_problem(ctx: RunContext) -> str | None:
+    """Why ``PRODUCT.md`` does not parse now, or None when it does: a merge stop refuses
+    ``merged`` while this is set and says it in its question (I-148)."""
+    try:
+        parse_product_md(ctx.sandbox.read_text(f"{ctx.sandbox.root}/{PRODUCT_MD}"))
+    except ValueError as exc:  # pydantic's ValidationError is a ValueError
+        return f"PRODUCT.md does not parse: {' '.join(str(exc).split())[:600]}"
+    return None
+
+
 def reread_product_md(
     ctx: RunContext, spec: ProductSpec, progress: ProgressFile
 ) -> tuple[ProductSpec, list[str]]:
     """``PRODUCT.md`` as it is now, so a hand edit made at a stop of this build thread (a merge
     stop, a halted feature) shapes the next milestone rather than only the next run (I-109).
     New features get records in ``progress``, which is written back. A changed stack keeps
-    the loaded spec: the profile is chosen once, in ``load``."""
-    try:
-        now = parse_product_md(ctx.sandbox.read_text(f"{ctx.sandbox.root}/{PRODUCT_MD}"))
-    except ValueError as exc:
-        return spec, [f"PRODUCT.md unreadable now, the loaded spec stays: {exc}"]
+    the loaded spec: the profile is chosen once, in ``load``. Raises
+    :class:`ProductMdUnreadable` when the file no longer parses; the loaded spec never
+    stands in for it (I-148)."""
+    problem = product_md_problem(ctx)
+    if problem is not None:
+        raise ProductMdUnreadable(problem)
+    now = parse_product_md(ctx.sandbox.read_text(f"{ctx.sandbox.root}/{PRODUCT_MD}"))
     if now == spec:
         return spec, []
     if now.stack != spec.stack:
@@ -565,7 +582,14 @@ def plan_milestone(ctx: RunContext) -> Node:
     def node(state: ProductBuildState) -> dict[str, Any]:
         assert state.spec is not None
         progress = _read_progress(ctx)
-        spec, reread = reread_product_md(ctx, state.spec, progress)
+        try:
+            spec, reread = reread_product_md(ctx, state.spec, progress)
+        except ProductMdUnreadable as exc:  # never plan from the spec loaded earlier (I-148)
+            return _halt(
+                ctx,
+                "load_failed",
+                f"{exc}; nothing was planned. Fix PRODUCT.md, then run scio build again",
+            )
         open_features = _open_features(spec, progress)
         if not open_features:
             return {
@@ -1330,6 +1354,16 @@ def merge_wait(ctx: RunContext) -> Node:
         assert spec is not None and plan is not None and pr is not None
         subject = f"Milestone {plan.id} ({plan.title})"
         github = ctx.github is not None and pr.number is not None
+        # Read, not acted on: the stop's question says up front that a merge answer will be
+        # refused until PRODUCT.md parses again (I-148). A file read is safe to repeat when the
+        # node re-runs on resume (I-065 is about model calls and effects).
+        problem = product_md_problem(ctx)
+        refusal = (
+            f" {problem}. A merge answer is refused until it parses: fix it, then reply "
+            f"'{'merged' if github else 'merge'}' again."
+            if problem
+            else ""
+        )
         answer = str(
             interrupt(
                 {
@@ -1339,7 +1373,9 @@ def merge_wait(ctx: RunContext) -> Node:
                         else f"{subject} is ready. Reply 'merge' to merge the milestone branch "
                         "into main locally"
                     )
-                    + "; reply 'stop' to end the build.",
+                    + "; reply 'stop' to end the build."
+                    + refusal,
+                    **({"product_md_error": problem} if problem else {}),
                     "pr": pr.model_dump(),
                     "branch": plan.branch,
                     "features": [
@@ -1377,6 +1413,16 @@ def merge_wait(ctx: RunContext) -> Node:
                 "ledger": [
                     fact(f"unrecognised merge answer {answer.strip()[:60]!r}; asking again")
                 ],
+            }
+        # Read again after the answer: the human may have broken (or fixed) the file since the
+        # question was asked. Nothing is pulled or merged from a PRODUCT.md SCIO cannot read,
+        # so the next milestone is never planned without the edit made at this stop (I-148).
+        problem = product_md_problem(ctx)
+        if problem is not None:
+            return {
+                "phase": "merge_wait",
+                "human_notes": [f"{plan.id} merge: {answer.strip()[:120]}"],
+                "ledger": [fact(f"{answer.strip()[:40]!r} refused: {problem}; asking again")],
             }
         sb = ctx.sandbox
         marker = f"[scio:merge:{plan.id}]"
@@ -1482,8 +1528,12 @@ def update_progress(ctx: RunContext) -> Node:
             # PRODUCT.md as it is now, inside this commit (I-116, I-109): a feature added or
             # removed by hand at this merge stop is synced before the route is chosen, and
             # the sync and the edit are committed here, so a release cut right after
-            # tags a main that agrees with them (I-116 review)
-            synced.extend(reread_product_md(ctx, spec, progress)[1])
+            # tags a main that agrees with them (I-116 review). An unreadable file still lets
+            # the merge be recorded; the route below refuses to go on from it (I-148).
+            try:
+                synced.extend(reread_product_md(ctx, spec, progress)[1])
+            except ProductMdUnreadable as exc:
+                synced.append(str(exc))
             _write_progress(ctx, progress)
             notes_path = f"{sb.root}/NOTES.md"
             notes = sb.read_text(notes_path) if sb.exists(notes_path) else "# Notes\n\n"
@@ -1517,7 +1567,11 @@ def update_progress(ctx: RunContext) -> Node:
         # The spec for routing: the commit above already holds the re-read (a crash after it
         # re-reads the committed file here, which changes nothing on disk).
         progress = _read_progress(ctx)
-        spec_now, reread = reread_product_md(ctx, spec, progress)
+        unreadable: str | None = None
+        try:
+            spec_now, reread = reread_product_md(ctx, spec, progress)
+        except ProductMdUnreadable as exc:
+            spec_now, reread, unreadable = spec, [], str(exc)
         reread = synced or reread
         remaining = progress.open_feature_ids()
         entries = [fact(n) for n in reread] + [
@@ -1527,13 +1581,28 @@ def update_progress(ctx: RunContext) -> Node:
                 + (f": {', '.join(remaining)}" if remaining else "")
             )
         ]
-        return {
+        recorded = {
             "spec": spec_now,
             "feature_runs": state.runs_stamped(plan.id),  # older runs get this milestone
             "milestones_done": [*state.milestones_done, plan.id],
             "milestone": None,  # recorded in progress.json; the next plan sets a new one
             "pr": None,
             "merged_commit": None,
+        }
+        if unreadable is not None:
+            # neither the next plan nor the release gate may run from the old spec (I-148)
+            reason = (
+                f"{plan.id} is recorded, but {unreadable}; no milestone was planned. "
+                "Fix PRODUCT.md, then run scio build again"
+            )
+            return {
+                **recorded,
+                "exit_reason": "load_failed",
+                "phase": "halted",
+                "ledger": [*entries, fact(reason)],
+            }
+        return {
+            **recorded,
             # the last milestone leads to the release gate; "merge and stop" ends the thread
             "phase": "done" if state.stop_after_merge else "plan" if remaining else "release_check",
             "ledger": entries,

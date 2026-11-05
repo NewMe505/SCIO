@@ -133,6 +133,20 @@ def test_upgrade_refuses_a_dirty_tree_and_a_directory_without_product_md(tmp_pat
         upgrade_product(LocalSandbox(empty))
 
 
+def test_upgrade_refuses_a_product_md_that_does_not_parse(tmp_path: Path) -> None:
+    """I-148's sweep: `scio upgrade` parsed PRODUCT.md unguarded, so a file that no longer
+    parsed ended the command in a ValidationError traceback instead of its refusal."""
+    _pre_m11_product(tmp_path, "python")
+    md = tmp_path / "PRODUCT.md"
+    text = md.read_text(encoding="utf-8")
+    head, sep, rest = text.partition("\n### P1: ")
+    assert sep, "the fixture has a P1 section"
+    md.write_text(head + sep + "x" * 500 + rest, encoding="utf-8", newline="\n")
+    _git(tmp_path, "commit", "-qam", "edit")  # a clean tree, so only the parse can refuse
+    with pytest.raises(UpgradeRefused, match=r"PRODUCT\.md does not parse"):
+        upgrade_product(LocalSandbox(tmp_path))
+
+
 def _v090_python_product(root: Path) -> dict[str, str]:
     """A python product as the 0.9.0 scaffold wrote it: CI and README install only the tools,
     never the project, and pyproject.toml has no build system (the graphcalc run's S6)."""

@@ -123,6 +123,14 @@ _META_RE = re.compile(r"Package: `(?P<name>[^`]+)` · Stack: `(?P<stack>[^`]+)`"
 _CHECK_RE = re.compile(r"^- \[[ xX]\] (?P<text>.+)$")
 
 
+def declared_stack(text: str) -> str | None:
+    """The stack PRODUCT.md's ``Package · Stack`` line names, read without validating the
+    rest of the file: ``scio build`` needs it before the graph exists, and a PRODUCT.md that
+    no longer parses must still reach the merge stop that says why (I-148)."""
+    meta = _META_RE.search(text)
+    return meta.group("stack") if meta else None
+
+
 def parse_product_md(text: str) -> ProductSpec:
     """Read a ``PRODUCT.md`` written by :func:`scio.product.spec.render_product_md` (or
     edited by hand in the same shape) back into a spec. Raises ``ValueError`` when the

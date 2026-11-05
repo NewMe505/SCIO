@@ -106,6 +106,8 @@ It also replaces the old scaffold's python install line, which never installed t
 `pip install -e . ruff pytest` (I-140). With `--gh`, every merge stop reads the PR's CI and calls it
 ready only when it is green. When a red CI comes from an old scaffold file, run `scio upgrade` at the stop,
 then answer `recheck`, which pushes the commit and reads the CI again.
+At a merge stop you may add features to `PRODUCT.md` (there is no feature cap); the next milestone plans
+from it. While the file does not parse, the stop refuses `merged` and its question says why.
 In GitHub mode a squash- or rebase-merged milestone PR is fine: SCIO drops only its own bookkeeping
 commits when it syncs `main`, and stops with `sync_failed` if a commit of yours exists only locally.
 

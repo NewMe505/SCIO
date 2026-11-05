@@ -138,10 +138,12 @@ def _build(args: argparse.Namespace) -> int:
     # Docker by default for product builds when it is there (M9) and the image can run the
     # product's stack, read from PRODUCT.md before any sandbox exists (I-101); the reason
     # lands in the build ledger from `load`.
-    from scio.product.progress import PRODUCT_MD, parse_product_md
+    from scio.product.progress import PRODUCT_MD, declared_stack
     from scio.toolchain import get_toolchain
 
-    stack = parse_product_md((args.product / PRODUCT_MD).read_text(encoding="utf-8")).stack
+    # Only the stack line: a PRODUCT.md that no longer parses is the graph's to refuse, with
+    # its reason, at the step that reads it (I-148), not a traceback here.
+    stack = declared_stack((args.product / PRODUCT_MD).read_text(encoding="utf-8")) or "python"
     backend, _reason = product_sandbox_backend(settings, get_toolchain(stack))
     settings = settings.model_copy(update={"sandbox_backend": backend})
     gh_repo = args.gh or settings.gh_repo
