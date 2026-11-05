@@ -61,6 +61,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 53. **Always** carry the previous session's report (its summary, the files it changed or "none", and the tree's diff) into the next fresh session of the same loop on the same step (I-154). Guard: `test:test_second_t0_iteration_carries_the_first_sessions_summary_and_empty_files`, `test:test_a_t1_debugger_gets_the_coder_sessions_report_on_the_same_step`
 54. **Always** sync a fresh worktree as CI does (`uv sync --frozen --all-extras --group dev`) before its first check, and say so in every worktree agent's brief (I-156). Guard: `manual:` a property of a new checkout made by the agent tool, which nothing in the repository runs before an agent's first command
 55. **Never** commit from a status listing alone: a bookkeeping commit runs only when something is staged, and a file whose text is unchanged is not rewritten (I-158). Guard: `test:test_a_provider_failure_inside_a_feature_ends_the_build_gracefully`, `test:test_a_milestone_planned_again_reuses_its_plan_github_milestone_and_issues`
+56. **Always** list the open `live-run` issues in a session's state-first inspection: a live product run's session opens one for each SCIO bug the moment it logs it, so a bug never waits for a paste (owner correction, 2026-11-05, #81). Guard: `test:test_the_state_first_inspection_lists_the_live_run_issues`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
