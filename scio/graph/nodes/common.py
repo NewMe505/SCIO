@@ -51,6 +51,16 @@ def untracked_files(sandbox: Sandbox) -> list[str]:
     return [ln for ln in out.splitlines() if ln and not ln.startswith("(git")]
 
 
+def changed_since_head(sandbox: Sandbox) -> list[str]:
+    """The files the current step changed, as git spells them: tracked changes against
+    ``HEAD`` (a passing step is committed, so this is the open step's work) and new files.
+    Ground truth for plan drift, where a worker's own ``files_touched`` may spell a path
+    any way it likes (I-166: ``graphcalc/graphcalc/calc.py``)."""
+    out = git_out(sandbox, "diff", "--name-only", "HEAD")
+    tracked = [ln for ln in out.splitlines() if ln and not ln.startswith("(git")]
+    return list(dict.fromkeys([*tracked, *untracked_files(sandbox)]))
+
+
 def diff_stat(sandbox: Sandbox, base_sha: str | None) -> str:
     """What changed since ``base_sha``: the tracked diff stat plus every untracked file."""
     if not base_sha:

@@ -31,13 +31,13 @@ Measured before the design (pre-flight 8, a scratch probe on the Fake):
    - The orchestrator writes the repository's excludes and merge attributes once, into the common directory.
    - The orchestrator alone merges.
 4. **The merge is the check.**
-   - Finished features merge onto the milestone branch in plan order, each once: an effect whose probe is "the feature's head is in the milestone branch".
+   - Finished features merge onto the milestone branch in plan order, each once: the merge's own `apply` returns at once when the feature's head is already in the milestone branch, since `run_effect` reads a probe only after a crash inside the effect (I-164).
    - A fast-forward is the very tree the feature's verify passed. Any other merge runs the suite on the merged tree.
    - A conflict, or a suite that is not green, is undone (`merge --abort`, `reset --hard` to the head before). The run is recorded `failed` with `exit_reason: merge`, and the feature's next attempt runs from the new head.
    - CHANGELOG.md and NOTES.md, which every feature's documenter adds to, merge with git's union driver.
 5. **Stops.**
    - A feature that halts gets the usual decision (retry, skip, stop), one per node run (guardrail 29): the first halted feature in plan order, after the others have merged. A halted feature after it keeps its worktree, and its paused thread is resumed by the next node run.
-   - Every subgraph is checkpointed and every merge is an effect with a probe, so the node re-run that an answer starts repeats neither (I-065).
+   - Every subgraph is checkpointed and every merge checks whether it already happened, so the node re-run that an answer starts repeats neither (I-065, I-164).
    - A harness failure in one feature ends its attempt, and the build stops after the others have merged, as a serial failure does (I-100).
    - Worktrees are removed only when the node returns, never before its stop.
 

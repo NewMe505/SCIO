@@ -1442,6 +1442,51 @@ Template:
 - Guard: guardrail 17 (`manual:`, now citing I-162)
 - Resolved: 2026-11-05 · Status: resolved
 
+### I-163 · `scio build --decision` went to a thread computed from the milestone count, not to the paused one
+- Found: 2026-11-07 · issue #84, the graphcalc live run's S11 (09:20 UTC 2026-11-05)
+- Symptom: `--decision retry` after P26's halt in M3 started a fresh thread `build-graphcalc-m3` and ignored the decision; M3 was running inside `build-graphcalc-m2`
+- Root cause: `scio build` named its thread from `progress.json`'s milestone count (`build-<product>-m<recorded + 1>`), but `merged` carries a thread on into the next milestone, so the thread running milestone n+1 is the one that recorded milestone n. A thread the count named and that had no checkpoint was started fresh, and `run_build` takes no decision, so `--decision` was dropped without a word. The halt's `resume with:` line named no thread. S7 (2026-10-31 18:50) was the same cause; I-149 fixed its GitHub duplicates, and its review wrongly ruled out resuming `progress.build_thread`.
+- Fix: the CLI resumes `progress.build_thread` while it is unfinished, else the counted thread (`-rN` after an ended one), and refuses with exit 2 when both are unfinished. A `--decision` for a thread not waiting at a stop (`build_waiting`) is refused with exit 2 and nothing runs. `_print_build`'s hint and every stop's `resume` string name `--thread` (`_resume`).
+- Sweep: every caller that picks a build thread (`grep -rn "build_thread_id(" scio`): the CLI (fixed); `earlier_runs` (I-165) reads the counted names as well as the recorded one. Every place that prints how to resume (`grep -rn "scio build --product" scio`): the six stop payloads and `_print_build` (fixed); the GitHub refusal message names its thread already.
+- Guard: `test_a_decision_reaches_the_thread_that_carried_on_into_the_next_milestone` (through `main([...])`; fails on `dd3bfaf`); guardrail 58
+- Resolved: 2026-11-07 · Status: resolved
+
+### I-164 · A new build thread's `plan_milestone` checked out `main` even when the milestone branch existed, and crashed on a dirty tree
+- Found: 2026-11-07 · issue #84, S11
+- Symptom: `RuntimeError: git checkout -q main failed: error: Your local changes to the following files would be overwritten by checkout: graphcalc/calc.py` (`_start_milestone`, during task `plan_milestone`)
+- Root cause: `run_effect` reads an effect's probe only when a record of that effect exists (a crash inside it); on a thread's first try it runs `apply` straight away. The branch effect's `apply` began with `git checkout main` and was written as if the probe ("the branch exists") had already been read, so every new thread on a started milestone checked out main, which a halted attempt's uncommitted edits refused. I-149's notes leaned on the same wrong reading: its plan commit works because `_commit_changed` commits only what is staged, not because of the probe.
+- Fix: the branch is created with `git branch <milestone> main`, no checkout; the switch to the milestone branch is unchanged (it carries the leftover edits onto a branch with the same base, and the next feature attempt's `clean_tree` resets them). A hard reset in `plan_milestone` was ruled out: `load`'s progress sync and a node product's install changes are still uncommitted there. The release tag's `apply` returns an existing tag instead of failing.
+- Sweep: every `run_effect` `apply` in `scio/product/build.py` and `scio/graph/nodes` (23 in build.py), asking "is it safe to run when the effect already happened in the world?": the `ensure_*` calls look first; `_commit_changed`, the issues commit, `update_progress` and the release cut commit only what changed; pushes, the fast-forward and the offline `merge --no-ff` of a merged branch are no-ops; `sync_main` is safe to re-run; the tag was not (fixed). The release cut also starts with `checkout main`, safe at that point because every merge before it leaves the tree clean (left).
+- Guard: `test_a_new_thread_on_a_started_milestone_goes_on_where_the_last_one_stopped` dirties a file main has another version of before the new thread starts; with the old `apply` it fails with S11's error; guardrail 59
+- Resolved: 2026-11-07 · Status: resolved
+
+### I-165 · A new build thread that reuses a stored milestone plan would rebuild the features that already passed
+- Found: 2026-11-07 · issue #84, S11 (reading the fix for I-163 through)
+- Symptom: a new thread's `feature_runs` start empty, so `next_feature` returns the milestone's first feature: M3's P23 to P25, passed in `build-graphcalc-m2`, would run again from attempt 1; I-100's halt message ("the next `scio build` starts attempt N+1") is not true for a new thread
+- Root cause: a milestone's runs lived only in the state of the thread that ran them. I-149 made a new thread reuse the stored plan, but not what was done under it. `test_a_provider_failure_inside_a_feature_ends_the_build_gracefully` documented "the next build starts attempt 2" and asserted attempt 1, so it pinned the gap.
+- Fix: `earlier_runs`: when the stored plan is reused, the runs of this milestone are taken from the recorded thread and the counted thread names (`-rN` too), oldest attempt first. A passed run counts only if its commit is on the milestone branch (`merge-base --is-ancestor`), else it is kept as failed for the numbering. The ledger names what was taken. Checked on a copy of graphcalc's checkpoint DB: P23 to P25 come in as passed with their commits on `milestone/3`, P26's two attempts as failed, and P26 attempt 3 is next.
+- Sweep: every reader of `feature_runs` for "what is left" (`grep -n "next_feature\|latest_run\|milestone_runs" scio/product`): `next_feature`, `latest_run` (attempt numbers), `milestone_runs` (the milestone's cost in `progress.json`), all fed by the imported runs; the release check reads `progress.json`, not runs.
+- Guard: `test_a_new_thread_on_a_started_milestone_goes_on_where_the_last_one_stopped` (P1 is not run again; P2 goes to attempt 2), `test_a_provider_failure_inside_a_feature_ends_the_build_gracefully` (now asserts attempt 2); both fail on `dd3bfaf`; guardrail 59
+- Resolved: 2026-11-07 · Status: resolved
+
+### I-166 · Plan drift fired on files the plan expected, because it compared the model's own path spellings
+- Found: 2026-11-07 · issue #84, S11 (P26 attempt 1, read from a copy of the checkpoint DB)
+- Symptom: `triage -> halt` with `plan_drift`; the coder's `files_touched` were `graphcalc/graphcalc/calc.py`, `graphcalc/graphcalc/state.py`, `graphcalc/graphcalc/cli.py` (the product folder's name doubled), while localize had added `graphcalc/calc.py` and `graphcalc/cli.py` to S1
+- Root cause: `detect` compared the worker's `files_touched` with the plan, and on the Claude Code backend `files_touched` is the model's own closing report: it may spell a path any way it likes. The S8 fix (I-151) worked (the files were in the plan), and the halt was the model's spelling. The live run's rule 18 scan read `plan-v1.txt`, posted before localize, so it showed the localized files as "unplanned" and agreed with the false drift.
+- Fix: `verify` hands `detect` the step's files as git names them (`changed_since_head`: tracked changes against `HEAD`, as each passing step is committed, plus new files); the state keeps the worker's report as it was. A drift halt or escalation names the drifted files in its reason.
+- Sweep: every reader of `files_touched` (`grep -rn "files_touched" scio`): drift (fixed); the previous-session block (I-154) shows it as that session's own report, which is what it is; the advisor brief and the task ledger quote it as the worker's words. Impact assessment (`assess`) already reads the git diff.
+- Guard: `test_drift_reads_what_git_changed_not_how_the_worker_spells_its_paths` (a Fake worker spelling `<folder>/<path>`; fails on `dd3bfaf`), `test_a_drift_halt_names_the_drifted_files`; guardrail 60
+- Resolved: 2026-11-07 · Status: resolved
+
+### I-167 · A read-only grep with a regex went through the shell with backslashes
+- Found: 2026-11-07 · issue #84, reading a test's output
+- Symptom: none in the result (the pattern matched); the one-liner carried `\\\\` in a `grep -oE` pattern, which guardrail 17 covers ("a read-only one-liner with a regex counts too")
+- Root cause: the rule was applied to edits and not to a quick read; the same lapse as I-162 on `feat/82`
+- Fix: later reads used fixed strings; the rule stays as it is
+- Sweep: this session's other shell regexes since the fix branch started: none with a backslash
+- Guard: guardrail 17 (`manual:`, now citing I-167)
+- Resolved: 2026-11-07 · Status: resolved
+
 ### I-168 · Four defects in the unmerged parallel-features code, found by its scenario tests
 - Found: 2026-11-05 · issue #82, the scenario-test agent's report, before the branch's first commit
 - Symptom:
@@ -1471,3 +1516,4 @@ Template:
 - Sweep: every path comparison by `startswith` against a sandbox root added on this branch (`grep -n "startswith(.*root" scio/graph/nodes/prepare.py scio/product/parallel.py`): this one; `escalation._norm` already normalises both sides
 - Guard: `test_a_worktrees_excludes_are_the_common_directorys_file` (now asserts a plain clone's file is under its root), `test_happy_path_end_to_end` (no cache files tracked); guardrail 57
 - Resolved: 2026-11-07 · Status: resolved
+

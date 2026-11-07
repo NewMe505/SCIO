@@ -231,6 +231,12 @@ def _git(ctx: RunContext, *args: str) -> str:
     return r.stdout.strip()
 
 
+def _resume(ctx: RunContext, choices: str) -> str:
+    """The command that answers a stop of this thread, the thread named: the next
+    milestone's number can name another one (I-163)."""
+    return f'scio build --product <dir> --thread {ctx.thread_id} --decision "{choices}"'
+
+
 def total_usd(state: ProductBuildState) -> float:
     """Orchestrator spend plus the latest attempt of every feature run."""
     return round(state.budgets.usd_used + sum(r.usd for r in state.feature_runs), 4)
@@ -624,7 +630,9 @@ def plan_milestone(ctx: RunContext) -> Node:
         stored = stored_plan(ctx, number)
         open_order = [f.id for f in open_features]
         if stored is not None and stored.feature_ids() == open_order[: len(stored.features)]:
-            return _start_milestone(
+            # what the thread that planned it already did is not done again (I-165)
+            imported, notes = earlier_runs(ctx, stored, progress, state.feature_runs)
+            started = _start_milestone(
                 ctx,
                 spec,
                 progress,
@@ -637,8 +645,12 @@ def plan_milestone(ctx: RunContext) -> Node:
                         + ", ".join(f"{f.id}@{f.tier.value}" for f in stored.features)
                         + " (I-149)"
                     )
-                ],
+                ]
+                + [fact(n) for n in notes],
             )
+            if imported:
+                started["feature_runs"] = [*state.feature_runs, *imported]
+            return started
         if stored is not None:
             reread = [
                 *reread,
@@ -694,6 +706,55 @@ def plan_milestone(ctx: RunContext) -> Node:
     return node
 
 
+def earlier_runs(
+    ctx: RunContext, plan: MilestonePlan, progress: ProgressFile, have: list[FeatureRun]
+) -> tuple[list[FeatureRun], list[str]]:
+    """This milestone's feature runs from the build threads that ran it before this one: the
+    thread that recorded the last milestone (``merged`` carries a thread into the next one,
+    S11) and the threads named for this milestone (``build-<product>-m<n>``, ``-r2``...).
+    A new thread that reuses the stored plan takes them, so a feature that passed is not
+    built again and a failed one goes on to its next attempt (I-165). A passed run counts only
+    if its commit is on the milestone branch; otherwise it is kept as failed, for numbering.
+    Returns the runs (oldest attempt first) and the notes for the ledger."""
+    base = build_thread_id(progress.product, plan.number)
+    names = [progress.build_thread, base, *(f"{base}-r{i}" for i in range(2, 10))]
+    threads = [t for t in dict.fromkeys(names) if t and t != ctx.thread_id]
+    known = {r.thread_id for r in have}
+    found: dict[str, FeatureRun] = {}
+    with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
+        graph: Any = build_product_build_graph(None, saver).compile(checkpointer=saver)
+        for t in threads:
+            values = graph.get_state({"configurable": {"thread_id": t}}).values
+            if not values:
+                continue
+            for r in ProductBuildState.model_validate(values).feature_runs:
+                if r.milestone == plan.id and r.feature_id in plan.feature_ids():
+                    found.setdefault(r.thread_id, r)
+    runs: list[FeatureRun] = []
+    notes: list[str] = []
+    for r in sorted(found.values(), key=lambda x: x.attempt):
+        if r.thread_id in known:
+            continue
+        if r.status == "passed":
+            on_branch = (
+                bool(r.commit_sha)
+                and ctx.sandbox.exec(
+                    ["git", "merge-base", "--is-ancestor", str(r.commit_sha), plan.branch],
+                    timeout_s=30,
+                ).ok
+            )
+            if not on_branch:
+                r = r.model_copy(update={"status": "failed", "exit_reason": "not merged"})
+        runs.append(r)
+    if runs:
+        notes.append(
+            f"{plan.id} ran before in this build: "
+            + ", ".join(f"{r.feature_id} a{r.attempt} {r.status}" for r in runs)
+            + "; passed features are not built again (I-165)"
+        )
+    return runs, notes
+
+
 def plan_path(plan_id: str) -> str:
     """Where a milestone's plan is committed on its branch (I-149)."""
     return f"{MILESTONES_DIR}/{plan_id}-plan.json"
@@ -734,11 +795,12 @@ def _start_milestone(
             fact(f"deferred by a skip, planned again in {plan.id}: {', '.join(deferred)} (I-116)")
         )
 
-    # The milestone branch from main (probe: it exists).
+    # The milestone branch from main. `run_effect` reads the probe only after a crash inside
+    # this effect, so on a new thread `apply` runs even when the branch exists: it must not
+    # check out main, which a halted attempt's edits block (I-164).
     def apply() -> str:
-        _git(ctx, "checkout", "-q", "main")
         if not _branch_exists(ctx, plan.branch):
-            _git(ctx, "branch", plan.branch)
+            _git(ctx, "branch", plan.branch, "main")
         return git_out(ctx.sandbox, "rev-parse", plan.branch)
 
     sha = run_effect(
@@ -1084,7 +1146,7 @@ def _feature_decision(
                 "inner": outcome.interrupt,
                 "ledger_tail": [e.text for e in final.task_ledger[-5:]],
                 "cost_usd": total_usd(state),
-                "resume": 'scio build --product <dir> --decision "<retry|skip|stop>"',
+                "resume": _resume(ctx, "<retry|skip|stop>"),
             }
         )
     )
@@ -1152,9 +1214,9 @@ def _run_batch(
     (ADR 0018), then merge the ones that passed onto the milestone branch in PRODUCT.md order.
     A merge that conflicts or turns the suite red is undone; that feature's next attempt runs
     from the new head. A feature that halts gets the usual human decision, one per node run
-    (guardrail 29): every subgraph is checkpointed and every merge is an effect with a probe,
-    so the node re-run that the answer starts repeats neither. Worktrees are removed only
-    once the node returns."""
+    (guardrail 29): every subgraph is checkpointed and every merge checks whether it already
+    happened (I-164), so the node re-run that the answer starts repeats neither. Worktrees are
+    removed only once the node returns."""
     prepare_shared_git(ctx)
 
     def clean_tree() -> None:  # the product tree: the milestone branch, nothing left over
@@ -1451,7 +1513,7 @@ def gate_decision(ctx: RunContext) -> Node:
                     "Reply 'proceed' to open the milestone PR anyway, anything else to stop.",
                     "unmet_acceptance": gate.unmet_acceptance,
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<proceed|stop>"',
+                    "resume": _resume(ctx, "<proceed|stop>"),
                 }
             )
         )
@@ -1670,9 +1732,9 @@ def merge_wait(ctx: RunContext) -> Node:
                         for mf in plan.features
                     ],
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<merged|recheck|stop>"'
+                    "resume": _resume(ctx, "<merged|recheck|stop>")
                     if github
-                    else 'scio build --product <dir> --decision "<merge|stop>"',
+                    else _resume(ctx, "<merge|stop>"),
                 }
             )
         )
@@ -1991,7 +2053,7 @@ def release_decision(ctx: RunContext) -> Node:
                     "tag": rel.tag,
                     "report": rel.report[-3000:],
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<release|stop>"',
+                    "resume": _resume(ctx, "<release|stop>"),
                 }
             )
         )
@@ -2151,7 +2213,7 @@ def release_merge_wait(ctx: RunContext) -> Node:
                     "tag": rel.tag,
                     "ci": rel.pr_ci.model_dump() if rel.pr_ci else None,
                     "cost_usd": total_usd(state),
-                    "resume": 'scio build --product <dir> --decision "<merged|recheck|stop>"',
+                    "resume": _resume(ctx, "<merged|recheck|stop>"),
                 }
             )
         )
@@ -2224,6 +2286,10 @@ def release_publish(ctx: RunContext) -> Node:
         gh = ctx.github
 
         def tag() -> str:
+            # idempotent on its own: the probe is read only after a crash here (I-164)
+            existing = tag_exists(sb, rel.tag)
+            if existing is not None:
+                return existing
             _git(ctx, "tag", "-a", rel.tag, "-m", f"{spec.title} {rel.tag}", commit)
             return commit
 
@@ -2433,6 +2499,16 @@ def build_finished(ctx: RunContext) -> bool:
         graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
         snapshot = graph.get_state(config)
     return bool(snapshot.values) and not snapshot.next
+
+
+def build_waiting(ctx: RunContext) -> bool:
+    """True when the build thread is paused at a human stop, so a ``--decision`` has a
+    question to answer; a crashed or running thread is not (I-163)."""
+    config = {"configurable": {"thread_id": ctx.thread_id}}
+    with open_checkpointer(ctx.settings.checkpoint_dsn) as saver:
+        graph: Any = build_product_build_graph(ctx, saver).compile(checkpointer=saver)
+        snapshot = graph.get_state(config)
+    return any(task.interrupts for task in snapshot.tasks)
 
 
 def load_build_state(ctx: RunContext) -> ProductBuildState:

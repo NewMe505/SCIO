@@ -72,10 +72,13 @@ def prepare_shared_git(ctx: RunContext) -> None:
 
 
 def ensure_worktree(ctx: RunContext, thread: str, base_sha: str) -> Path:
-    """The worktree of one feature attempt, detached at ``base_sha`` (probe: it exists)."""
+    """The worktree of one feature attempt, detached at ``base_sha``. ``run_effect`` reads the
+    probe only after a crash inside the effect, so ``apply`` checks for itself (I-164)."""
     path = worktrees_root(ctx) / thread
 
     def apply() -> str:
+        if (path / ".git").exists():
+            return str(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         r = ctx.sandbox.exec(
             [
@@ -160,14 +163,17 @@ def _remove_tree(path: Path) -> None:
 def merge_feature(
     ctx: RunContext, plan: MilestonePlan, feature_id: str, attempt: int, branch: str, head: str
 ) -> dict[str, Any]:
-    """Merge one finished feature onto the milestone branch in the product tree, once (probe:
-    its head is in the milestone branch). A fast-forward is the tree the feature's own verify
-    passed; any other merge runs the suite on the merged tree. A conflict or a red suite is
-    undone. Returns ``{"ok", "sha", "how"}``; ``how`` says what happened, for the ledger."""
+    """Merge one finished feature onto the milestone branch in the product tree, once: a head
+    already in the milestone branch is not merged again (``apply`` checks for itself; the
+    probe is read only after a crash inside the effect, I-164). A fast-forward is the tree the
+    feature's own verify passed; any other merge runs the suite on the merged tree. A conflict
+    or a red suite is undone. Returns ``{"ok", "sha", "how"}``; ``how`` is for the ledger."""
     sb, tc = ctx.sandbox, ctx.toolchain
     marker = f"[scio:feature-merge:{plan.id}:{feature_id}:a{attempt}]"
 
     def apply() -> dict[str, Any]:
+        if (merged := probe()) is not None:
+            return merged
         _run(ctx, "checkout", "-q", plan.branch)
         before = git_out(sb, "rev-parse", "HEAD")
         message = f"Merge {branch} ({feature_id}) {marker}"
