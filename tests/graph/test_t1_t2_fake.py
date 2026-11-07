@@ -262,6 +262,54 @@ class GuessedFileResponder(ScriptedResponder):
         return edits
 
 
+class DoubledPathResponder(GuessedFileResponder):
+    """graphcalc S11 (I-166): the worker's own report spells every path with the product
+    folder's name in front (``graphcalc/graphcalc/calc.py``), while it edited the right
+    files. Drift used those spellings and halted a step that touched only planned files."""
+
+    def _worker_output(self, role: str, text: str) -> FakeReply:
+        data = json.loads(super()._worker_output(role, text).text)
+        root = (self.root or ".").replace("\\", "/").rstrip("/")
+        folder = root.rsplit("/", 1)[-1]
+        data["files_touched"] = [
+            f"{folder}/{p.replace(chr(92), '/').removeprefix(root + '/')}"
+            for p in data["files_touched"]
+        ]
+        return FakeReply(text=json.dumps(data))
+
+
+def test_drift_reads_what_git_changed_not_how_the_worker_spells_its_paths(
+    tmp_path: Path,
+) -> None:
+    """I-166: drift compares the step's files as git names them (changed against HEAD, and
+    new files) with the plan, so a worker that spells ``<folder>/<path>`` drifts on nothing;
+    with no advisor call left the old code halted, as P26 attempt 1 did."""
+    ctx, outcome = _run(
+        tmp_path, "t002_fix_failing_test", "T1", DoubledPathResponder(), advisor_calls_max=0
+    )
+    s = _finish(ctx, outcome).state
+    assert s.exit_reason is ExitReason.SUCCESS, s.task_ledger[-3:]
+    reported = s.last_worker_output.files_touched if s.last_worker_output else []
+    assert reported and all(p.count("/") >= 2 for p in reported)  # the doubled spelling stayed
+    texts = [e.text for e in s.task_ledger]
+    assert any("triage -> debug (no escalation signal" in t for t in texts), texts
+    assert not any("plan_drift" in t for t in texts)
+
+
+def test_a_drift_halt_names_the_drifted_files(tmp_path: Path) -> None:
+    """I-166: a halt on plan drift says which files drifted, so the owner (and the live
+    run's rule 18) checks them against the plan, not against a stale plan artifact."""
+    _ctx_unused, outcome = _run(
+        tmp_path,
+        "t002_fix_failing_test",
+        "T1",
+        GuessedFileResponder(unnamed=True),
+        advisor_calls_max=0,
+    )
+    assert outcome.paused and outcome.interrupt is not None
+    assert "plan_drift on pager/extra.py" in outcome.interrupt["triage"]["reason"]
+
+
 def test_t1_a_guessed_planned_file_does_not_drift_once_localize_names_the_real_one(
     tmp_path: Path,
 ) -> None:

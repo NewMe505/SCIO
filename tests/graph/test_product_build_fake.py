@@ -1188,10 +1188,14 @@ def test_a_provider_failure_inside_a_feature_ends_the_build_gracefully(tmp_path:
     try:
         out = run_build(ctx)  # a later build: P1's attempt 2 runs and the milestone completes
         assert out.paused and out.state.phase == "merge_wait", out.state.ledger[-3:]
+        # I-165: the new thread takes the first thread's runs of M1 with the stored plan, so
+        # P1 goes on to attempt 2 (as the halt said); before, it started over at attempt 1
         assert [(r.feature_id, r.attempt, r.status) for r in out.state.feature_runs] == [
-            ("P1", 1, "passed"),
+            ("P1", 1, "failed"),
+            ("P1", 2, "passed"),
             ("P2", 1, "passed"),
         ]
+        assert any("M1 ran before in this build: P1 a1 failed" in e.text for e in out.state.ledger)
     finally:
         ctx.close()
 
@@ -1357,6 +1361,65 @@ def test_a_feature_added_at_the_last_merge_stop_is_planned_not_left_out_of_the_r
     assert "P4" in [f.id for f in main_progress.features]
     assert "### P4: Slugify todo titles" in _git(repo, "show", f"main:{PRODUCT_MD}")
     assert _git(repo, "tag", "--list") == ""
+
+
+class _OneFeatureIdles(ScriptedResponder):
+    """The coder idles in one feature's threads only (``idle_in``, e.g. ``-p2-``)."""
+
+    def __init__(self, idle_in: str, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.idle_in = idle_in
+        self.threads: list[str] = []
+
+    def __call__(self, req: CompletionRequest) -> FakeReply:
+        thread = str(req.tags.get("thread", ""))
+        self.threads.append(thread)
+        self.coder_mode = "idle" if self.idle_in and self.idle_in in thread else "solve"
+        return super().__call__(req)
+
+
+def test_a_new_thread_on_a_started_milestone_goes_on_where_the_last_one_stopped(
+    tmp_path: Path,
+) -> None:
+    """I-165 and I-164, graphcalc S11: P1 passed and P2 halted in the first thread, then the build
+    stopped. The next `scio build` is a new thread; it reuses M1's stored plan and takes the
+    first thread's runs: P1 counts as passed (its commit is on milestone/1) and is not built
+    again, and P2 goes on to attempt 2."""
+    responder = _OneFeatureIdles("-p2-")
+    harness = _bootstrap(tmp_path, responder)
+    ctx = _ctx(tmp_path, harness, build_thread_id(PRODUCT))
+    try:
+        out = run_build(ctx)
+        assert out.paused and out.interrupt and out.interrupt["feature"] == "P2", out.state.ledger[
+            -3:
+        ]
+        out = resume_build(ctx, "stop")
+        assert not out.paused and out.state.exit_reason == "feature_failed"
+    finally:
+        ctx.close()
+    responder.idle_in = ""
+    # I-164: the halted attempt leaves edits behind, in a file main has another version of
+    # (P1's changelog line is on milestone/1 only); `git checkout main` refused to run over it
+    repo = tmp_path / "product"
+    assert _git(repo, "diff", "main", "milestone/1", "--", "CHANGELOG.md")
+    changelog = repo / "CHANGELOG.md"
+    changelog.write_text(
+        changelog.read_text(encoding="utf-8") + "left over\n", encoding="utf-8", newline="\n"
+    )
+    again = _ctx(tmp_path, harness, f"{build_thread_id(PRODUCT)}-r2")
+    try:
+        out = run_build(again)
+        s = out.state
+        assert out.paused and s.phase == "merge_wait", s.ledger[-3:]
+    finally:
+        again.close()
+    assert [(r.feature_id, r.attempt, r.status) for r in s.feature_runs] == [
+        ("P1", 1, "passed"),
+        ("P2", 1, "failed"),
+        ("P2", 2, "passed"),
+    ]
+    assert not any("-r2-p1-" in t for t in responder.threads)  # P1 never ran again
+    assert any("M1 ran before in this build" in e.text for e in s.ledger)
 
 
 class _RetitlingPlanner(ScriptedResponder):
@@ -1607,6 +1670,45 @@ def test_scio_build_reaches_the_merge_stop_refusal_when_product_md_does_not_pars
     assert "PAUSED for a human" in out and "phase=merge_wait" in out
     assert "PRODUCT.md does not parse" in out and "reply 'merge' again" in out
     assert "Traceback" not in out
+
+
+def test_a_decision_reaches_the_thread_that_carried_on_into_the_next_milestone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I-163, graphcalc S11: `merge` at M1's stop carries thread m1 on into M2, while
+    progress.json records only M1, so the CLI named `build-todo_cli-m2` from the count; that
+    thread had no checkpoint, a fresh build started and the decision was dropped. The CLI
+    resumes the thread progress.json recorded while it is unfinished, refuses a decision for
+    a thread that is not waiting, and its resume hint names the thread."""
+    from scio.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
+    monkeypatch.setenv("SCIO_FAKE_SCRIPT", "1")
+    monkeypatch.setenv("SCIO_CHECKPOINT_DSN", f"sqlite:///{(tmp_path / 'ckpt.sqlite').as_posix()}")
+    target = str(tmp_path / "product")
+    assert main(["new", "--prompt", PROMPT, "--dir", target, "--thread", "new-cli"]) == 0
+    assert main(["new", "--thread", "new-cli", "--dir", target, "--decision", "answers"]) == 0
+    assert main(["new", "--thread", "new-cli", "--dir", target, "--decision", "approve"]) == 0
+    capsys.readouterr()
+    # nothing waits yet: a decision is refused and nothing runs
+    assert main(["build", "--product", target, "--decision", "merge"]) == 2
+    err = capsys.readouterr().err
+    assert "has no checkpoint" in err and "nothing was run" in err
+    assert main(["build", "--product", target]) == 0  # M1 to its merge stop
+    out = capsys.readouterr().out
+    assert "--thread build-todo_cli-m1 --decision" in out  # the hint names the thread
+    assert main(["build", "--product", target, "--decision", "merge"]) == 0  # on into M2
+    out = capsys.readouterr().out
+    assert "build thread build-todo_cli-m1 " in out and "milestones done M1" in out, out
+    recorded = ProgressFile.from_json(
+        (tmp_path / "product" / PROGRESS_PATH).read_text(encoding="utf-8")
+    )
+    assert [m.id for m in recorded.milestones] == ["M1"] and recorded.next_milestone_number() == 2
+    # M2's stop is in thread m1; the count would name build-todo_cli-m2
+    assert main(["build", "--product", target, "--decision", "merge"]) == 0
+    out = capsys.readouterr().out
+    assert "build thread build-todo_cli-m1 " in out and "milestones done M1, M2" in out, out
 
 
 def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(
