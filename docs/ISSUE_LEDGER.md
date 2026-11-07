@@ -1462,3 +1462,12 @@ Template:
 - Sweep: every `sandbox.exec(` in `scio/product/parallel.py` whose result was unread: `remove_worktree` only (`ensure_worktree`, `merge_feature` and `_run` check theirs). Every place a batch is formed: `ready_batch` only.
 - Guard: `test_a_feature_whose_merge_failed_retries_alone_even_with_an_unrun_feature_left`, `test_a_finished_worktree_is_removed_from_a_deep_work_dir` (Windows; it forces `core.longpaths=false` in the environment), and the full mypy gate; guardrail 61
 - Resolved: 2026-11-05 · Status: resolved
+
+### I-169 · The I-161 fix stopped writing a plain clone's excludes on Windows, so caches were committed again
+- Found: 2026-11-07 · issue #82, the branch's full local gate · `uv run python -m pytest -n 8`
+- Symptom: `FAILED tests/graph/test_t0_fake.py::test_happy_path_end_to_end` (`'__pycache__' is contained here: ... tests/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc`) and `FAILED tests/unit/test_t0_carry_over.py::...` (`'(no changes since base)'` missing: the caches showed as changes); both failed again alone by node id
+- Root cause: `prepare_repo` wrote the excludes only when their path started with the sandbox root, compared with forward slashes; `exclude_path` built a plain clone's path as `sb.root` (backslashes on Windows) plus `/.git/info/exclude`, so the comparison never held, nothing was written, and I-028 came back. The new unit test checked only the worktree side (not under the root), not that a plain clone's file is.
+- Fix: `exclude_path` returns forward slashes throughout; `under_root` compares both sides with forward slashes (and without case on Windows)
+- Sweep: every path comparison by `startswith` against a sandbox root added on this branch (`grep -n "startswith(.*root" scio/graph/nodes/prepare.py scio/product/parallel.py`): this one; `escalation._norm` already normalises both sides
+- Guard: `test_a_worktrees_excludes_are_the_common_directorys_file` (now asserts a plain clone's file is under its root), `test_happy_path_end_to_end` (no cache files tracked); guardrail 57
+- Resolved: 2026-11-07 · Status: resolved
