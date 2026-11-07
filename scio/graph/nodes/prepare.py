@@ -5,6 +5,7 @@ Idempotent under ``run_effect``: the probe checks for an existing clone on the b
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -24,7 +25,16 @@ def exclude_path(sb: Sandbox) -> str:
     r = sb.exec(["git", "rev-parse", "--git-path", "info/exclude"], timeout_s=30)
     rel = r.stdout.strip().replace("\\", "/") if r.ok else ".git/info/exclude"
     is_abs = rel.startswith("/") or (len(rel) > 1 and rel[1] == ":")
-    return rel if is_abs else f"{sb.root}/{rel}"
+    root = sb.root.replace("\\", "/").rstrip("/")
+    return rel if is_abs else f"{root}/{rel}"  # forward slashes throughout (I-169)
+
+
+def under_root(sb: Sandbox, path: str) -> bool:
+    """True when ``path`` lies inside the sandbox root, compared with forward slashes on both
+    sides and without regard to case on Windows (I-169)."""
+    root = sb.root.replace("\\", "/").rstrip("/") + "/"
+    p = path.replace("\\", "/")
+    return p.lower().startswith(root.lower()) if os.name == "nt" else p.startswith(root)
 
 
 def branch_name(state: SCIOState) -> str:
@@ -62,7 +72,7 @@ def prepare_repo(ctx: RunContext) -> Node:
             # A worktree's file is outside the sandbox: the orchestrator that made the worktree
             # wrote it there first (`scio/product/parallel.py`), and the sandbox may not.
             excludes = exclude_path(sb)
-            if excludes.startswith(sb.root.replace("\\", "/").rstrip("/") + "/"):
+            if under_root(sb, excludes):
                 sb.write_text(excludes, ctx.toolchain.git_exclude_text())
             sb.exec(["git", "config", "user.name", "scio"], timeout_s=30)
             sb.exec(["git", "config", "user.email", "scio@users.noreply.github.com"], timeout_s=30)

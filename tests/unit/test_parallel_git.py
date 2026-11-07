@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from scio.aci.sandbox.local import LocalSandbox
-from scio.graph.nodes.prepare import exclude_path
+from scio.graph.nodes.prepare import exclude_path, under_root
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -35,7 +35,10 @@ def test_a_worktrees_excludes_are_the_common_directorys_file(tmp_path: Path) -> 
 
     plain = exclude_path(LocalSandbox(repo))
     assert plain.replace("\\", "/").endswith("repo/.git/info/exclude")
+    # I-169: a plain clone's file is under its root, so prepare_repo writes it (the first
+    # version compared a backslash path with a forward-slash root, wrote nothing, and caches
+    # were committed again, I-028)
+    assert under_root(LocalSandbox(repo), plain)
     shared = exclude_path(LocalSandbox(tree))
     assert shared.replace("\\", "/").endswith("repo/.git/info/exclude")  # not under wt/
-    root = str(tree).replace("\\", "/").rstrip("/") + "/"
-    assert not shared.startswith(root)  # so prepare_repo leaves it to the orchestrator
+    assert not under_root(LocalSandbox(tree), shared)  # the orchestrator writes it
