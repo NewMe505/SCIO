@@ -111,19 +111,27 @@ def _print_build(outcome: Any) -> None:
     if outcome.interrupt:
         print("PAUSED for a human:")
         print(json.dumps(outcome.interrupt, indent=2, default=str))
-        print(f'resume with: scio build --product {s.product_dir} --decision "<text>"')
+        # the thread named: the next milestone's number may name another one (I-163)
+        print(
+            f"resume with: scio build --product {s.product_dir} --thread {s.thread_id} "
+            '--decision "<text>"'
+        )
 
 
 def _build(args: argparse.Namespace) -> int:
     """``scio build``: start or resume the milestone loop of a bootstrapped product
-    (ADR 0011). The thread is ``build-<product>-m<next milestone>`` unless ``--thread`` names
-    another; a paused thread is resumed, an ended one (done, halted, or ``merge and stop``)
-    is left alone and a fresh thread starts (``-r2``, ``-r3`` ... after a halt)."""
+    (ADR 0011). Without ``--thread``: the thread ``progress.json`` recorded the last milestone
+    in, while it is unfinished (``merged`` carries a thread on into the next milestone, I-163);
+    else ``build-<product>-m<next milestone>``. A paused thread is resumed, an ended one (done,
+    halted, or ``merge and stop``) is left alone and a fresh thread starts (``-r2``, ``-r3``
+    ... after a halt). A ``--decision`` answers a thread waiting at a stop, never starts or
+    resumes one that is not: it is refused with exit 2 and nothing runs."""
     from scio.harness.github.client import GitHubClient, GitHubError
     from scio.product.build import (
         build_finished,
         build_started,
         build_thread_id,
+        build_waiting,
         resume_build,
         run_build,
     )
@@ -165,12 +173,41 @@ def _build(args: argparse.Namespace) -> int:
     thread = base
     ctx = make(thread)
     try:
+        # I-163: `merged` carries a thread into the next milestone, so the thread that recorded
+        # the last milestone may be the one running now; the count of recorded milestones
+        # names a thread that may not exist.
+        recorded = progress.build_thread if args.thread is None else None
+        if recorded and recorded != base:
+            rctx = make(recorded)
+            if build_started(rctx) and not build_finished(rctx):
+                if build_started(ctx) and not build_finished(ctx):
+                    rctx.close()
+                    print(
+                        f"scio build: two build threads are unfinished, {recorded} and {base}; "
+                        "name the one to resume with --thread",
+                        file=sys.stderr,
+                    )
+                    return 2
+                ctx.close()
+                ctx, thread = rctx, recorded
+            else:
+                rctx.close()
         attempt = 1
-        while args.thread is None and build_finished(ctx):
+        while args.thread is None and thread.startswith(base) and build_finished(ctx):
             ctx.close()
             attempt += 1
             thread = f"{base}-r{attempt}"
             ctx = make(thread)
+        if args.decision is not None and not build_waiting(ctx):
+            # a decision answers a stop; it never starts or resumes a build that asked nothing
+            where = "is not paused at a stop" if build_started(ctx) else "has no checkpoint"
+            print(
+                f"scio build: thread {thread} {where}, so --decision {args.decision!r} has "
+                "nothing to answer; nothing was run. Run scio build without --decision to "
+                "start or resume it, or name the waiting thread with --thread.",
+                file=sys.stderr,
+            )
+            return 2
         if build_started(ctx):
             outcome = resume_build(ctx, args.decision)
         else:

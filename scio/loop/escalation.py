@@ -110,9 +110,18 @@ def decide(state: SCIOState, cfg: EscalationConfig, *, root: str | None = None) 
     if not triggers:
         return TriageDecision(route="debug", reason="no escalation signal; clear failure path")
     step_id = state.progress.current_step_id or "S?"
+    # I-166: a drift signal says which files, so a halt can be checked against the plan
+    drift = ""
+    step, w = state.current_step(), state.last_worker_output
+    if EscalationTrigger.PLAN_DRIFT in triggers and step is not None and w is not None:
+        files = drifted_files(w.files_touched, step.files_expected, root=root,
+                              test_dirs=cfg.test_dirs)  # fmt: skip
+        drift = f"; plan_drift on {', '.join(files[:8])}" + (" ..." if len(files) > 8 else "")
     if state.budgets.advisor_allowed(step_id):
         return TriageDecision(
-            route="advise", triggers=triggers, reason=", ".join(t.value for t in triggers)
+            route="advise",
+            triggers=triggers,
+            reason=", ".join(t.value for t in triggers) + drift,
         )
     used, cap = state.budgets.advisor_calls_used, state.budgets.advisor_calls_max
     # I-115: name the cap that fired. The per-step cap (one call per step) refuses while the
@@ -125,7 +134,7 @@ def decide(state: SCIOState, cfg: EscalationConfig, *, root: str | None = None) 
             f"advisor already consulted on step {step_id} "
             f"(one call per step; {used}/{cap} for this run)"
         )
-    return TriageDecision(route="halt", triggers=triggers, reason=reason)
+    return TriageDecision(route="halt", triggers=triggers, reason=reason + drift)
 
 
 def review_decision(state: SCIOState, cfg: EscalationConfig) -> TriageDecision | None:
