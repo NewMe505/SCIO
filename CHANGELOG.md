@@ -9,6 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
 
 ### Changed
+- A live product run's session opens each SCIO bug it finds as a `live-run` issue in this repository the moment it logs it, and every SCIO session's state-first inspection lists the open ones (CLAUDE.md, the owner's decision, #81): the graphcalc run's S7 to S9 waited days for a paste.
 - The local pre-push check runs the tests on 8 workers (`uv run python -m pytest -n 8`), as CI runs them in parallel; a serial run took 14 to 28 minutes per push (issue #73, the owner's decision). Its type check runs `uv run python -m mypy`, since the dev machine's Application Control now blocks the `mypy.exe` launcher too (I-146).
 
 ### Fixed

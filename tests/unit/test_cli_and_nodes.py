@@ -90,6 +90,17 @@ def test_python_m_scio_is_the_console_entry_point() -> None:
     assert "usage: scio" in r.stdout and "build" in r.stdout
 
 
+def test_the_state_first_inspection_lists_the_live_run_issues() -> None:
+    """A live product run's SCIO bugs reach this repository as `live-run` issues, and every
+    session's state-first inspection lists them (the owner's decision, 2026-11-05, #81): the
+    graphcalc run's S7 to S9 sat in its log for days, waiting for a paste."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "CLAUDE.md").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if "**State-First Inspection:**" in ln)
+    assert "gh issue list --label live-run --state open" in line
+
+
 def test_the_local_ci_line_runs_python_tools_as_modules() -> None:
     """CLAUDE.md's CI-equivalent runs every Python tool as ``python -m``: Application Control
     blocks the venv's launchers on the dev machine (``pytest.exe``, ``scio.exe``, and
