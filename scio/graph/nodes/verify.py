@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from scio.aci.tools import SKIPPED_ONLY, RunTestsInput, ToolError, run_tests
-from scio.graph.nodes.common import diff_stat, fact
+from scio.graph.nodes.common import changed_since_head, diff_stat, fact
 from scio.graph.run_context import RunContext
 from scio.loop.escalation import decide, exit_for, review_decision
 from scio.loop.exits import check_exit
@@ -247,6 +247,13 @@ def verify(ctx: RunContext) -> Node:
             exit_reason = ExitReason.STALL
         if not all_ok and exit_reason is None and plan is not None:
             probe = state.model_copy(update={"progress": progress, "feature_list": features})
+            worker = probe.last_worker_output
+            if worker is not None:
+                # Plan drift compares what git says changed, never the worker's own spelling
+                # of its paths (I-166); the state keeps the worker's report as it was.
+                git_changed = changed_since_head(ctx.sandbox)
+                actual = worker.model_copy(update={"files_touched": git_changed})
+                probe = probe.model_copy(update={"last_worker_output": actual})
             triage_decision = decide(probe, ctx.escalation, root=ctx.sandbox.root)
             exit_reason = exit_for(triage_decision)
         if all_ok and exit_reason is None and plan is not None:
