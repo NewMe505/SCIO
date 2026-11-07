@@ -1438,6 +1438,27 @@ Template:
 - Symptom: none in the file: every anchor assert held and ruff parsed the result. The script replaced five blocks whose new text held `\n` escapes inside a Python heredoc, which guardrail 17 forbids.
 - Root cause: the multi-site replacement was faster through one script, and the rule was read as covering "a backslash in the file's text", not a backslash in the script's own string literals. Both are covered.
 - Fix: every later edit in the session went through the Edit tool; the written file was linted, formatted and type-checked
-- Sweep: this session's other shell-embedded edit scripts after I-157: the graphcalc workspace runner's `--out` change (`\n` in the replacement text as well; that file was linted and run end to end afterwards) and the probe's title change (no backslash)
+- Sweep: this session's other shell-embedded edit scripts after I-157: the graphcalc workspace runner's `--out` change (`\n` in the replacement text as well; that file was linted and run end to end afterwards) and the probe's title change (no backslash). The scenario-test agent reported three of its own: a heredoc append holding `"Gamma.\n"`, a `python -` heredoc with `"\n"` in its strings, and a `sed -i` whose pattern had `\.`; its brief carried the rule in its first lines. The test file passed ruff, mypy and pytest afterwards.
 - Guard: guardrail 17 (`manual:`, now citing I-162)
+- Resolved: 2026-11-05 · Status: resolved
+
+### I-168 · Four defects in the unmerged parallel-features code, found by its scenario tests
+- Found: 2026-11-05 · issue #82, the scenario-test agent's report, before the branch's first commit
+- Symptom:
+  1. `uv run python -m mypy`: 8 errors in `evals/fake_scripts.py`, e.g. `"PerThreadResponder" has no attribute "_lock"`.
+  2. With three independent features two at a time, a feature whose merge had conflicted led the next batch beside an unrun one (`2 features at once ...: P2 (...-p2-a2), P3 (...-p3-a1)`), against the design's "retries alone".
+  3. Past Windows' 260-character limit, `git worktree remove --force` exited 255 (`error: failed to delete '.../worktrees/build-todo_cli-m1-p1-a1': Filename too long`), dropped the worktree from git and left its directory, and `remove_worktree` never looked at the exit code.
+  4. A ledger line read "passed in its worktree, but merged cleanly, but the suite ...".
+- Root cause:
+  1. Attributes set through `object.__setattr__` were never declared.
+  2. `ready_batch` let a feature that had already run in the milestone lead a batch.
+  3. A worktree's deepest file (pytest's bytecode) sits deeper than the product tree's, and the removal ignored git's exit code.
+  4. Two clauses joined without reading the result.
+- Fix:
+  1. Class-level annotations.
+  2. A feature that already ran in this milestone runs alone.
+  3. `git -c core.longpaths=true worktree add/remove`, the exit code checked, a fallback that deletes the directory through an extended-length path and runs `git worktree prune`, and a ledger line when a directory is left.
+  4. The line reworded.
+- Sweep: every `sandbox.exec(` in `scio/product/parallel.py` whose result was unread: `remove_worktree` only (`ensure_worktree`, `merge_feature` and `_run` check theirs). Every place a batch is formed: `ready_batch` only.
+- Guard: `test_a_feature_whose_merge_failed_retries_alone_even_with_an_unrun_feature_left`, `test_a_finished_worktree_is_removed_from_a_deep_work_dir` (Windows; it forces `core.longpaths=false` in the environment), and the full mypy gate; guardrail 61
 - Resolved: 2026-11-05 · Status: resolved
