@@ -218,6 +218,12 @@ def test_t0_runs_through_claude_code_turns_with_verify_as_ground_truth(
     documenter = next(a for a in actor.calls if _flag(a, "--name") == "scio-documenter")
     assert "Bash(" in (_flag(documenter, "--allowedTools") or "")
     assert _flag(documenter, "--max-turns") == str(backends.DOCUMENTER_TURN_CAP)  # I-153
+    # I-171: no `claude` the run starts loads the machine's CLAUDE.md (a product in an
+    # operator's workspace got the operator's "never edit its code" rules); every session and
+    # every summary resume runs in safe mode
+    assert actor.calls and all("--safe-mode" in a for a in actor.calls), [
+        a[:4] for a in actor.calls
+    ]
     # Claude Code's usage reached the ledger and the budget under the claude_code provider
     rows = ctx.harness.ledger.to_dict()["entries"]
     assert {r["provider"] for r in rows} == {"fake", "claude_code"}
