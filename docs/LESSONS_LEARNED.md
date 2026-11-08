@@ -748,7 +748,7 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - Two first-draft errors in the new scripts: a dataclass in a module loaded by path (I-174) and `# fmt: skip` inside a bracket (I-175).
 
 ### Actions
-- `SAFE_MODE` on every `claude` argv (I-171, guardrail 62); `scripts/gate.py`; `scripts/watch_ci.py` with `full_sha` (I-172); `backslash_reason` and `pipefail_reason` in `scripts/hooks/push_gate.py` (guardrail 17, I-173); the CI split into `tests`, `evals` and the `checks` aggregator; CLAUDE.md's CI line and CONTRIBUTING's test section name the gate, 16 workers and the watcher.
+- `SAFE_MODE` on every `claude` argv (I-171, guardrail 62); `scripts/gate.py`, with `tests/unit/test_gate.py` showing that a failed step fails it and that its eval flags are CI's; `scripts/watch_ci.py` with `full_sha` (I-172); `backslash_reason` and `pipefail_reason` in `scripts/hooks/push_gate.py` (guardrail 17, I-173); the CI split into `tests`, `evals` and the `checks` aggregator; CLAUDE.md's CI line and CONTRIBUTING's test section name the gate, 16 workers and the watcher.
 - Ledger I-171 to I-175; guardrails 62 to 66, and guardrail 17's guard is now `hook:push_gate`.
 
 ### Bottleneck audit
