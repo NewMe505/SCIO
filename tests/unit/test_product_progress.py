@@ -21,14 +21,91 @@ from scio.product.progress import (
 )
 from scio.product.spec import render_product_md
 from scio.state.models import (
+    Budget,
+    FeatureRun,
     MilestoneFeatureOutput,
     MilestonePlan,
     MilestonePlanOutput,
+    ProductBuildState,
     ProductFeature,
     ProductSpec,
     ProductSpecOutput,
     Tier,
 )
+
+
+def _batch_state(
+    features: list[MilestoneFeatureOutput], runs: list[FeatureRun]
+) -> ProductBuildState:
+    plan = MilestonePlan(number=2, title="t", branch="milestone/2", features=features)
+    return ProductBuildState(
+        thread_id="b",
+        product_dir=".",
+        milestone=plan,
+        feature_runs=runs,
+        budgets=Budget(tokens_max=1, usd_max=1.0, advisor_calls_max=0, max_iters=1, max_stall=1),
+    )
+
+
+def _run(fid: str, status: str, attempt: int = 1, milestone: str = "M2") -> FeatureRun:
+    return FeatureRun(
+        feature_id=fid,
+        thread_id=f"b-{fid}-a{attempt}",
+        attempt=attempt,
+        tier=Tier.T1,
+        status=status,  # type: ignore[arg-type]
+        milestone=milestone,
+    )
+
+
+def test_a_batch_holds_only_features_the_plan_marks_independent() -> None:
+    """ADR 0018: ``depends_on`` None is the feature before it (the serial order), ``[]`` is
+    independent, ids wait for those features; the next unfinished feature always leads; a
+    feature that already ran in this milestone retries alone; ``n`` caps the batch."""
+    f = MilestoneFeatureOutput
+    plan = [
+        f(id="P5"),
+        f(id="P6", depends_on=[]),
+        f(id="P7"),  # after P6
+        f(id="P8", depends_on=["P5"]),
+        f(id="P9", depends_on=[]),
+    ]
+    assert [x.id for x in _batch_state(plan, []).ready_batch(1)] == ["P5"]
+    assert [x.id for x in _batch_state(plan, []).ready_batch(4)] == ["P5", "P6", "P9"]
+    assert [x.id for x in _batch_state(plan, []).ready_batch(2)] == ["P5", "P6"]
+    done_p5 = _batch_state(plan, [_run("P5", "passed")])
+    assert [x.id for x in done_p5.ready_batch(4)] == ["P6", "P8", "P9"]
+    retried = _batch_state(plan, [_run("P5", "passed"), _run("P6", "failed")])
+    assert [x.id for x in retried.ready_batch(4)] == ["P6"]  # a retry runs alone
+    unrun = _batch_state(plan, [_run("P5", "passed"), _run("P6", "passed")])
+    assert [x.id for x in unrun.ready_batch(4)] == ["P7", "P8", "P9"]
+    ran = _batch_state(plan, [_run("P6", "passed"), _run("P9", "failed")])
+    # P7 waits on P6, which passed; P9 ran, so it retries alone later; P8 waits on P5
+    assert [x.id for x in ran.ready_batch(4)] == ["P5", "P7"]
+    serial = [f(id="P5"), f(id="P6"), f(id="P7")]
+    assert [x.id for x in _batch_state(serial, []).ready_batch(4)] == ["P5"]
+
+
+def test_the_normaliser_keeps_dependencies_on_earlier_features_only() -> None:
+    """ADR 0018: a feature waits only on earlier features of its own milestone; an id that is
+    later, unknown or outside the milestone is dropped and said; None stays None."""
+    spec = _spec(4)
+    out = MilestonePlanOutput(
+        milestone_title="m",
+        features=[
+            MilestoneFeatureOutput(id="P1"),
+            MilestoneFeatureOutput(id="P2", depends_on=[]),
+            MilestoneFeatureOutput(id="P3", depends_on=["P1", "P4", "P9", "P1"]),
+        ],
+        rationale="r",
+    )
+    plan, notes = normalise_milestone(out, spec.features, 1)
+    assert [(x.id, x.depends_on) for x in plan.features] == [
+        ("P1", None),
+        ("P2", []),
+        ("P3", ["P1"]),
+    ]
+    assert any("P3 depends_on P4, P9" in n for n in notes), notes
 
 
 def _spec(n: int = 4) -> ProductSpec:

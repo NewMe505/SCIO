@@ -1424,7 +1424,23 @@ Template:
 - Guard: `test_drift_keeps_the_dot_of_a_dot_directory`, `test_a_test_path_keeps_the_dot_of_a_dot_directory` (each fails on the old code); guardrail 50
 - Resolved: 2026-11-04 · Status: resolved
 
-<!-- I-161 and I-162 are on the unmerged branch feat/82-parallel-features (issue #82). -->
+### I-161 · `prepare_repo` wrote `.git/info/exclude` by hand, which fails in a git worktree
+- Found: 2026-11-05 · issue #82, the pre-flight probe for parallel features (two task graphs in two worktrees of one repository)
+- Symptom: `FileExistsError: [WinError 183] Cannot create a file when that file already exists: '...\\wt-a\\.git'` from `LocalSandbox.write_text` in `prepare_repo`; after a first fix that asked git for the path, `PathEscapeError: path escapes the sandbox root ...wt-a: '.../repo/.git/info/exclude'`
+- Root cause: `prepare_repo` built the path `<root>/.git/info/exclude`. In a worktree `.git` is a file that points to the repository, and the excludes git reads live in the common directory, outside the worktree, where the sandbox (rightly) refuses to write.
+- Fix: `exclude_path(sandbox)` asks git (`git rev-parse --git-path info/exclude`). `prepare_repo` writes the file only when it lies under its own root. The orchestrator writes the common directory's excludes and merge attributes once, before it makes worktrees (`prepare_shared_git`).
+- Sweep: `grep -rn '\.git/\|"\.git"' scio evals`: `prepare_repo` was the only place a `.git/...` path is built to write. `tools.py`'s `.git` guards (never edit or delete inside `.git`) and `repo_search`'s skip read the path, so they stay correct in a worktree.
+- Guard: `test_a_worktrees_excludes_are_the_common_directorys_file`, and every parallel-features graph test, which runs `prepare_repo` in worktrees; guardrail 57
+- Resolved: 2026-11-05 · Status: resolved
+
+### I-162 · An edit script with `\n` escapes went through the shell again, an hour after I-157
+- Found: 2026-11-05 · issue #82, writing `scio/product/parallel.py`
+- Symptom: none in the file: every anchor assert held and ruff parsed the result. The script replaced five blocks whose new text held `\n` escapes inside a Python heredoc, which guardrail 17 forbids.
+- Root cause: the multi-site replacement was faster through one script, and the rule was read as covering "a backslash in the file's text", not a backslash in the script's own string literals. Both are covered.
+- Fix: every later edit in the session went through the Edit tool; the written file was linted, formatted and type-checked
+- Sweep: this session's other shell-embedded edit scripts after I-157: the graphcalc workspace runner's `--out` change (`\n` in the replacement text as well; that file was linted and run end to end afterwards) and the probe's title change (no backslash). The scenario-test agent reported three of its own: a heredoc append holding `"Gamma.\n"`, a `python -` heredoc with `"\n"` in its strings, and a `sed -i` whose pattern had `\.`; its brief carried the rule in its first lines. The test file passed ruff, mypy and pytest afterwards.
+- Guard: guardrail 17 (`manual:`, now citing I-162)
+- Resolved: 2026-11-05 · Status: resolved
 
 ### I-163 · `scio build --decision` went to a thread computed from the milestone count, not to the paused one
 - Found: 2026-11-07 · issue #84, the graphcalc live run's S11 (09:20 UTC 2026-11-05)
@@ -1470,3 +1486,42 @@ Template:
 - Sweep: this session's other shell regexes since the fix branch started: none with a backslash
 - Guard: guardrail 17 (`manual:`, now citing I-167)
 - Resolved: 2026-11-07 · Status: resolved
+
+### I-168 · Four defects in the unmerged parallel-features code, found by its scenario tests
+- Found: 2026-11-05 · issue #82, the scenario-test agent's report, before the branch's first commit
+- Symptom:
+  1. `uv run python -m mypy`: 8 errors in `evals/fake_scripts.py`, e.g. `"PerThreadResponder" has no attribute "_lock"`.
+  2. With three independent features two at a time, a feature whose merge had conflicted led the next batch beside an unrun one (`2 features at once ...: P2 (...-p2-a2), P3 (...-p3-a1)`), against the design's "retries alone".
+  3. Past Windows' 260-character limit, `git worktree remove --force` exited 255 (`error: failed to delete '.../worktrees/build-todo_cli-m1-p1-a1': Filename too long`), dropped the worktree from git and left its directory, and `remove_worktree` never looked at the exit code.
+  4. A ledger line read "passed in its worktree, but merged cleanly, but the suite ...".
+- Root cause:
+  1. Attributes set through `object.__setattr__` were never declared.
+  2. `ready_batch` let a feature that had already run in the milestone lead a batch.
+  3. A worktree's deepest file (pytest's bytecode) sits deeper than the product tree's, and the removal ignored git's exit code.
+  4. Two clauses joined without reading the result.
+- Fix:
+  1. Class-level annotations.
+  2. A feature that already ran in this milestone runs alone.
+  3. `git -c core.longpaths=true worktree add/remove`, the exit code checked, a fallback that deletes the directory through an extended-length path and runs `git worktree prune`, and a ledger line when a directory is left.
+  4. The line reworded.
+- Sweep: every `sandbox.exec(` in `scio/product/parallel.py` whose result was unread: `remove_worktree` only (`ensure_worktree`, `merge_feature` and `_run` check theirs). Every place a batch is formed: `ready_batch` only.
+- Guard: `test_a_feature_whose_merge_failed_retries_alone_even_with_an_unrun_feature_left`, `test_a_finished_worktree_is_removed_from_a_deep_work_dir` (Windows; it forces `core.longpaths=false` in the environment), and the full mypy gate; guardrail 61
+- Resolved: 2026-11-05 · Status: resolved
+
+### I-169 · The I-161 fix stopped writing a plain clone's excludes on Windows, so caches were committed again
+- Found: 2026-11-07 · issue #82, the branch's full local gate · `uv run python -m pytest -n 8`
+- Symptom: `FAILED tests/graph/test_t0_fake.py::test_happy_path_end_to_end` (`'__pycache__' is contained here: ... tests/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc`) and `FAILED tests/unit/test_t0_carry_over.py::...` (`'(no changes since base)'` missing: the caches showed as changes); both failed again alone by node id
+- Root cause: `prepare_repo` wrote the excludes only when their path started with the sandbox root, compared with forward slashes; `exclude_path` built a plain clone's path as `sb.root` (backslashes on Windows) plus `/.git/info/exclude`, so the comparison never held, nothing was written, and I-028 came back. The new unit test checked only the worktree side (not under the root), not that a plain clone's file is.
+- Fix: `exclude_path` returns forward slashes throughout; `under_root` compares both sides with forward slashes (and without case on Windows)
+- Sweep: every path comparison by `startswith` against a sandbox root added on this branch (`grep -n "startswith(.*root" scio/graph/nodes/prepare.py scio/product/parallel.py`): this one; `escalation._norm` already normalises both sides
+- Guard: `test_a_worktrees_excludes_are_the_common_directorys_file` (now asserts a plain clone's file is under its root), `test_happy_path_end_to_end` (no cache files tracked); guardrail 57
+- Resolved: 2026-11-07 · Status: resolved
+
+### I-170 · A dashboard browser test timed out once on CI and passed on the rerun
+- Found: 2026-11-07 · PR #83's CI on its head after `main` was merged in (run 42402585925, attempt 1) · the `checks` job
+- Symptom: `FAILED tests/live/test_dashboard_page.py::test_the_build_view_shows_the_attempts_still_running - playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 10000ms exceeded.`; the rest of the job passed. The same commit passed locally (547 passed) and on CI attempt 2 (`checks` 14m19s). PR #83 changed only CLAUDE.md, a test of CLAUDE.md, the CHANGELOG and the guardrails, so the code under test was `main`'s, which had passed #85's CI.
+- Root cause: not found. The test's page helpers wait up to 10 s for a thread head or a section to render (`tests/live/test_dashboard_page.py:319-326`); on a loaded runner the page may take longer. Not verified: the failing attempt's page state was not captured.
+- Fix: none yet. The next step is to capture the page (a screenshot and the WebSocket state) when such a wait times out, so a recurrence names its cause, as I-145 asks for its two tests.
+- Sweep: the other fixed 10 s browser waits (`grep -n "timeout=10_000" tests/live`): the three helpers in this file; the reconnect test's 5 s waits (`:694`, `:697`)
+- Resolved: - · Status: open
+

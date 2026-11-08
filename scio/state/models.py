@@ -468,6 +468,10 @@ class MilestoneFeatureOutput(BaseModel):
     tier: Tier = Tier.T1
     notes: str = Field(default="", max_length=400)
     """Guidance for the task run (which modules to touch, what to avoid)."""
+    depends_on: list[str] | None = None
+    """The earlier features of this milestone this one needs built first (ADR 0018). None:
+    the feature right before it, the serial order. ``[]``: none, so with
+    ``SCIO_PARALLEL_FEATURES`` above 1 it may build beside the features before it."""
 
 
 class MilestonePlanOutput(BaseModel):
@@ -650,6 +654,40 @@ class ProductBuildState(BaseModel):
                 continue
             return f
         return None
+
+    def finished(self, feature_id: str) -> bool:
+        """``next_feature``'s rule for one feature: passed, or skipped in this milestone."""
+        run = self.latest_run(feature_id)
+        mid = self.milestone.id if self.milestone else None
+        return run is not None and (
+            run.status == "passed" or (run.status == "skipped" and run.milestone in (None, mid))
+        )
+
+    def ready_batch(self, n: int) -> list[MilestoneFeatureOutput]:
+        """Up to ``n`` features to build at once (ADR 0018): the next unfinished feature, then
+        each later one that has not run in this milestone yet and whose dependencies have all
+        finished. ``depends_on`` None means the feature right before it, so a plan that says
+        nothing runs serially. A feature that already ran in this milestone (a merge that was
+        undone, a retry) runs alone, from the new head, so it cannot collide again."""
+        first = self.next_feature()
+        if first is None or self.milestone is None:
+            return []
+        mid, feats = self.milestone.id, self.milestone.features
+        own = self.latest_run(first.id)
+        if own is not None and own.milestone in (None, mid):
+            return [first]
+        ids = [f.id for f in feats]
+        batch = [first]
+        for i in range(ids.index(first.id) + 1, len(feats)):
+            if len(batch) >= n:
+                break
+            f, run = feats[i], self.latest_run(feats[i].id)
+            if run is not None and run.milestone in (None, mid):
+                continue  # it ran in this milestone: its next attempt is serial
+            deps = f.depends_on if f.depends_on is not None else [ids[i - 1]]
+            if all(self.finished(d) for d in deps):
+                batch.append(f)
+        return batch
 
     def milestone_runs(self) -> list[FeatureRun]:
         """Every run of the current milestone, oldest first: its cost, attempts and record

@@ -13,6 +13,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass, field
+from typing import Any
 
 from scio.harness.providers.fake import FakeReply
 from scio.harness.types import CompletionRequest, StopReason, ToolCall
@@ -642,6 +643,39 @@ def _edit_call(root: str, e: Edit) -> FakeReply:
 # ---------- the responder ----------
 
 
+class PerThreadResponder:
+    """One :class:`ScriptedResponder` per calling thread (ADR 0018). A product build with
+    parallel features calls the provider from several feature threads at once, and a scripted
+    responder holds its current task's script, counters and sandbox root. An attribute set on
+    this object (``coder_mode``) reaches every thread's responder and the ones made later."""
+
+    _kwargs: dict[str, Any]
+    _by_thread: dict[int, ScriptedResponder]
+    _lock: threading.Lock
+
+    def __init__(self, **kwargs: Any) -> None:
+        object.__setattr__(self, "_kwargs", kwargs)
+        object.__setattr__(self, "_by_thread", {})
+        object.__setattr__(self, "_lock", threading.Lock())
+
+    def _mine(self) -> ScriptedResponder:
+        tid = threading.get_ident()
+        with self._lock:
+            r = self._by_thread.get(tid)
+            if r is None:
+                r = self._by_thread[tid] = ScriptedResponder(**self._kwargs)
+            return r
+
+    def __call__(self, req: CompletionRequest) -> FakeReply:
+        return self._mine()(req)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        with self._lock:
+            self._kwargs[name] = value
+            for r in self._by_thread.values():
+                setattr(r, name, value)
+
+
 class ScriptedResponder:
     """Deterministic agent behaviour for the eval tasks and the escalation scenarios.
 
@@ -661,7 +695,11 @@ class ScriptedResponder:
         product: str = "todo_cli",
         stack: str = "python",
         dependencies: list[str] | None = None,
+        independent: bool = False,
     ) -> None:
+        self.independent = independent
+        """The scripted milestone planner marks every feature ``depends_on: []`` (ADR 0018),
+        so a build with ``parallel_features`` above 1 builds them at once."""
         self.product = product
         """Which scripted product the planner drafts: ``todo_cli`` (a CLI, standard library
         only) or ``todo_api`` (an http server with an approved dependency, M9)."""
@@ -799,7 +837,12 @@ class ScriptedResponder:
                 {
                     "milestone_title": f"Milestone {number}",
                     "features": [
-                        {"id": fid, "tier": "T0" if fid == "P1" else "T1", "notes": ""}
+                        {
+                            "id": fid,
+                            "tier": "T0" if fid == "P1" else "T1",
+                            "notes": "",
+                            "depends_on": [] if self.independent else None,
+                        }
                         for fid in ids[: self.milestone_size]
                     ],
                     "rationale": "scripted milestone",

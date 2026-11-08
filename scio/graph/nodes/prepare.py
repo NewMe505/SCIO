@@ -5,9 +5,11 @@ Idempotent under ``run_effect``: the probe checks for an existing clone on the b
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
+from scio.aci.sandbox.base import Sandbox
 from scio.graph.effects import run_effect
 from scio.graph.nodes.common import fact, git_out, slug
 from scio.graph.run_context import RunContext
@@ -15,6 +17,24 @@ from scio.state.models import Role, SCIOState
 from scio.toolchain import detect_toolchain, get_toolchain
 
 Node = Callable[[SCIOState], dict[str, Any]]
+
+
+def exclude_path(sb: Sandbox) -> str:
+    """The repository's ``info/exclude`` as git resolves it: ``<root>/.git/info/exclude`` in a
+    plain clone, the common directory's file in a worktree, where ``.git`` is a file (I-161)."""
+    r = sb.exec(["git", "rev-parse", "--git-path", "info/exclude"], timeout_s=30)
+    rel = r.stdout.strip().replace("\\", "/") if r.ok else ".git/info/exclude"
+    is_abs = rel.startswith("/") or (len(rel) > 1 and rel[1] == ":")
+    root = sb.root.replace("\\", "/").rstrip("/")
+    return rel if is_abs else f"{root}/{rel}"  # forward slashes throughout (I-169)
+
+
+def under_root(sb: Sandbox, path: str) -> bool:
+    """True when ``path`` lies inside the sandbox root, compared with forward slashes on both
+    sides and without regard to case on Windows (I-169)."""
+    root = sb.root.replace("\\", "/").rstrip("/") + "/"
+    p = path.replace("\\", "/")
+    return p.lower().startswith(root.lower()) if os.name == "nt" else p.startswith(root)
 
 
 def branch_name(state: SCIOState) -> str:
@@ -47,7 +67,13 @@ def prepare_repo(ctx: RunContext) -> Node:
                 if detected is not None:
                     ctx.adopt_toolchain(get_toolchain(detected))
             # Repo-local excludes (not committed): never let test caches into a checkpoint.
-            sb.write_text(f"{sb.root}/.git/info/exclude", ctx.toolchain.git_exclude_text())
+            # Git names the file: in a worktree `.git` is a file and the excludes live in the
+            # common directory (I-161).
+            # A worktree's file is outside the sandbox: the orchestrator that made the worktree
+            # wrote it there first (`scio/product/parallel.py`), and the sandbox may not.
+            excludes = exclude_path(sb)
+            if under_root(sb, excludes):
+                sb.write_text(excludes, ctx.toolchain.git_exclude_text())
             sb.exec(["git", "config", "user.name", "scio"], timeout_s=30)
             sb.exec(["git", "config", "user.email", "scio@users.noreply.github.com"], timeout_s=30)
             sb.exec(["git", "checkout", "-q", state.task.base_branch], timeout_s=60)
