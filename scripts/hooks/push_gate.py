@@ -11,6 +11,13 @@
    whose ``pyproject.toml`` configures ruff, every changed Python file (staged, modified or
    untracked, since ``git add ... && git commit`` stages in the same line) must pass
    ``ruff check`` and ``ruff format --check``.
+4. A heredoc body or a ``python -c`` script holding a backslash, or a double backslash
+   anywhere, is denied (guardrail 17, issue #88, I-176): the Bash tool halves ``\\\\`` before
+   the shell runs, and the shell rewrites escapes in scripts; the Edit and Write tools carry
+   text as it is.
+5. A check (pytest, mypy, ruff, the gate, the CI watcher, the docs check, the evals) piped
+   into another command is denied unless the line sets ``pipefail`` (I-018, I-173): the
+   pipe's status is the last command's, so a failed check reads as success.
 
 Reads the hook JSON (``tool_input.command``, ``cwd``) from stdin and prints a deny decision as
 JSON; anything else is allowed silently. A failure of the gate itself (no ``gh``, offline, not a
@@ -35,6 +42,86 @@ GIT_GLOBAL_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespa
 
 
 HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\s*(?:\n|$)", re.DOTALL)
+
+
+PYTHON_C_RE = re.compile(
+    r"""\bpython(?:3)?(?:\.exe)?\s+(?:-\w+\s+)*-c\s+(?P<q>['"])(?P<body>.*?)(?<!\\)(?P=q)""",
+    re.DOTALL,
+)
+
+
+def backslash_reason(command: str) -> str | None:
+    """Guardrail 17 as a gate (issue #88): a heredoc body or a ``python -c`` script holding a
+    backslash is refused. The shell layer has rewritten such backslashes (``\\n``, ``\\\\``,
+    Windows paths) six times (I-027, I-071, I-072, I-157, I-162, I-167); the Edit and Write
+    tools carry text as it is. A plain command's own arguments (a ``grep`` pattern) are left
+    alone: they are not a script."""
+    if "\\\\" in command:
+        return (
+            "This command holds a double backslash, and the Bash tool halves it before the "
+            "shell runs (`printf %s 'x\\\\y'` printed `x\\y`; I-176, guardrail 17). Put the "
+            "pattern or text in a file with the Write tool and pass the file (`grep -f`, "
+            "`jq -f`, `python <file>`), or find a spelling without the escape."
+        )
+    bodies = [m.group(0).split("\n", 1)[-1] for m in HEREDOC_RE.finditer(command)]
+    bodies += [m.group("body") for m in PYTHON_C_RE.finditer(command)]
+    if any("\\" in body for body in bodies):
+        return (
+            "This command carries a backslash inside a heredoc or a `python -c` script, and "
+            "the shell layer may rewrite it (guardrail 17). Make the edit with the Edit or Write "
+            "tool, or write the text or script to a file with Write and pass the file "
+            "(`--body-file`, `-F`, `python <file>`)."
+        )
+    return None
+
+
+CHECKS = {
+    "pytest",
+    "mypy",
+    "ruff",
+    "gate.py",
+    "watch_ci.py",
+    "check_docs.py",
+    "evals.runner",
+}
+RUNNERS = {"uv", "python", "python3", "pytest", "mypy", "ruff"}
+LIST_ENDS = {";", "&&", "||", "&", "(", ")"}
+
+
+def _is_check(words: list[str]) -> bool:
+    """Whether a simple command runs a check: it starts (after ``VAR=x`` prefixes) with a
+    Python runner or a check and names a check. ``grep pytest log`` does not run one."""
+    i = 0
+    while i < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):
+        i += 1
+    if i >= len(words) or os.path.basename(words[i]).removesuffix(".exe") not in RUNNERS:
+        return False
+    return any(os.path.basename(w).removesuffix(".exe") in CHECKS for w in words[i:])
+
+
+def pipefail_reason(command: str) -> str | None:
+    """A check piped into another command without ``pipefail`` is refused (I-018, I-173):
+    ``pytest ... | tail -3; echo $?`` prints the status of ``tail``, so a red check reads
+    green. A line that sets ``pipefail`` anywhere passes."""
+    if "pipefail" in command:
+        return None
+    for line in strip_heredocs(command).splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            continue
+        words: list[str] = []
+        for token in tokens:
+            if token == "|" and _is_check(words):
+                return (
+                    f"This line pipes a check (`{' '.join(words)[:80]}`) into another command "
+                    "without `set -o pipefail`, so its exit code is lost (I-018, I-173). Start "
+                    "the line with `set -o pipefail`, or drop the pipe."
+                )
+            words = [] if token in LIST_ENDS or token == "|" else [*words, token]
+    return None
 
 
 def strip_heredocs(command: str) -> str:
@@ -226,9 +313,9 @@ def main() -> int:
     except json.JSONDecodeError:
         return 0
     command = str((data.get("tool_input") or {}).get("command", ""))
-    if "git" not in command:
-        return 0
-    reason, warning = evaluate(command, str(data.get("cwd") or os.getcwd()))
+    reason, warning = backslash_reason(command) or pipefail_reason(command), None
+    if reason is None and "git" in command:
+        reason, warning = evaluate(command, str(data.get("cwd") or os.getcwd()))
     if reason:
         decision = {
             "hookEventName": "PreToolUse",

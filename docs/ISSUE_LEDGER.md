@@ -1534,3 +1534,57 @@ Template:
 - Guard: `test_t0_runs_through_claude_code_turns_with_verify_as_ground_truth` asserts every `claude` call of an end-to-end run carries `--safe-mode` (fails on `316bf40`), `test_provider_structured_call_is_one_restricted_turn_with_a_schema`; guardrail 62
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-172 · The CI watcher missed a running run when it was given a short SHA
+- Found: 2026-11-08 · issue #88, watching PR #89's CI with the new `scripts/watch_ci.py --sha 6dba0d2`
+- Symptom: `no ci run for 6dba0d2 on fix/87-claude-md-leak within 300 s` while run 42431853875, `headSha` `6dba0d2da939…`, was in progress.
+- Root cause: `run_for_head` compares `headSha` by equality, GitHub reports full SHAs, and `main` passed `--sha` through as typed; only the default (`git rev-parse HEAD`) was full.
+- Fix: `full_sha(rev)` resolves whatever is given (`git rev-parse --verify <rev>^{commit}`, `HEAD` by default) before any comparison.
+- Sweep: other comparisons with GitHub's `headSha` (`grep -rn headSha scio scripts evals`): the push gate requests it but compares only run ids and conclusions; SCIO's own `pr_ci` reads checks by the PR, not by a SHA it was given.
+- Guard: `test_a_short_sha_is_resolved_to_the_full_one_github_reports`; guardrail 63
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-173 · A check piped through `tail` without pipefail reported success over a failure
+- Found: 2026-11-08 · issue #88, the same watch as I-172
+- Symptom: `uv run python scripts/watch_ci.py ... 2>&1 | tail -6; echo "EXIT=$?"` printed `EXIT=0` after the watcher had given up with exit 2. Nothing was decided on it (the timeout line was read), but a green-looking exit over a failed check is I-018's mistake again.
+- Root cause: a pipeline's status is its last command's. CLAUDE.md and pre-flight 10 (I-018) say to start such a line with `set -o pipefail`; nothing enforced it, and I wrote the line without it.
+- Fix: the push-gate hook refuses a line that pipes a check (pytest, mypy, ruff, `gate.py`, `watch_ci.py`, `check_docs.py`, `evals.runner`, run as a command) into another command unless the line sets `pipefail` (`pipefail_reason`). `scripts/gate.py` writes each step's output to a log file and needs no pipe at all.
+- Sweep: every Bash command of this session's transcript run through the new `pipefail_reason`: 103 of 708 commands (87 distinct) piped a check without pipefail, and 19 of them fed the piped check's status into an `&&` chain (`mypy 2>&1 | tail -1 && pytest ...`), where a failure would have gone on to the next step. The rule was held by habit and was mostly not held. None of them reached `main`: every pushed head's CI ran the same checks unpiped and passed before its merge. The repository's scripts and workflows pipe no check (`grep -rnE "(pytest|mypy|ruff|check_docs|evals\.runner|gate\.py)[^|]*\|[^|]" .github scripts`: only the new docstring).
+- Guard: `test_a_check_piped_without_pipefail_is_refused`; guardrail 64
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-174 · `scripts/gate.py` failed to load in its test: a dataclass in a module loaded by path
+- Found: 2026-11-08 · issue #88, the first run of `test_the_local_ci_line_runs_python_tools_as_modules`
+- Symptom: `AttributeError: 'NoneType' object has no attribute '__dict__'` from `@dataclass` while `exec_module` ran `gate.py`.
+- Root cause: `dataclasses` looks the class's module up in `sys.modules`; a module made by `importlib.util.module_from_spec` is not there until it is registered.
+- Fix: the test registers it (`sys.modules["gate"] = gate`) before `exec_module`.
+- Sweep: every module loaded by path in the tests (`grep -rn module_from_spec tests scripts evals scio`): seven loaders; only `gate.py` defines a dataclass.
+- Guard: `test_the_local_ci_line_runs_python_tools_as_modules` (it loads `gate.py`); guardrail 65
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-175 · `# fmt: skip` inside a list literal in the new scripts
+- Found: 2026-11-08 · issue #88, `ruff check` on the first drafts of `scripts/gate.py` and `scripts/watch_ci.py`
+- Symptom: `RUF028 This suppression comment is invalid` on comments meant to keep argv lists on one line.
+- Root cause: the formatter honours `# fmt: skip` only at the end of a statement (the repository's other ten uses all are); inside a bracket it is ignored, and ruff flags it.
+- Fix: the comments are gone and the formatter lays the lists out.
+- Sweep: `grep -rn "fmt: skip\|fmt: off" scio scripts tests evals`: the ten remaining uses each close a statement.
+- Guard: ruff's RUF028, run by the commit gate (`push_gate`) and by `scripts/gate.py`; guardrail 66
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-176 · The Bash tool halves a double backslash before the shell runs; a jq filter broke on it
+- Found: 2026-11-08 · issue #88, reading PR #90's CI timings with `gh run view --jq`
+- Symptom: `failed to parse jq expression (line 1, column 136) ... unexpected token "|"`. The filter's `test("Tests \\(|Regression evals")` reached jq as `\(`, which jq reads as string interpolation.
+- Root cause: the Bash tool turns a double backslash into one before the shell sees the command. This was measured with `printf %s 'x\\y' | od -c`: single quotes, which bash leaves alone, and a `%s`, which prints its argument as it is, gave `x \ y`; `echo` gave the same. The session transcript records the same command with both backslashes. So a `\\` written in any Bash command arrives halved, which is the mechanism behind I-167's grep and the escaped heredocs of I-071 and I-157. Guardrail 17 covered a read-only one-liner as a rule, but the hook added in this issue checked only heredoc bodies and `python -c` scripts.
+- Fix: `backslash_reason` also refuses any command that holds a double backslash. A PreToolUse hook reads the command as the transcript records it, before the halving, so it sees both backslashes. Its message names the fix: put the pattern in a file with the Write tool and pass the file (`grep -f`, `jq -f`).
+- Sweep: every Bash command of this session's transcript checked for a double backslash: 6 of 760. They are I-157's heredoc (twice, its retry), I-167's grep (twice), this jq filter, and the `echo` and `printf` that measured the halving. The repository's scripts and workflows pass no double backslash to a shell.
+- Guard: `test_a_double_backslash_anywhere_is_refused`; guardrail 17 now cites I-176. Still to check once this merges: a live `printf %s 'x\\y'` must be denied, which shows the hook receives the command before the halving.
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-177 · An edit went through `sed` with backslashes minutes after I-176
+- Found: 2026-11-08 · issue #88, updating PR #90's body file with a `sed` substitution whose pattern escaped its slashes
+- Symptom: none in the file: both substitutions landed, which was checked with `grep -n` on the result. Guardrail 17 forbids the method, though: an edit whose text holds a backslash goes through the Edit tool.
+- Root cause: the same lapse as I-162 and I-167. A quick multi-site change went to the shell, and this session's hook is still the main checkout's old one, so nothing refused it. The result agrees with I-176's measurement: single backslashes in a command's own arguments reach the shell intact, and only a double backslash is halved. So the new hook's scope (script bodies and double backslashes) refuses what the tool mangles and lets the rest through.
+- Fix: none in code. The edit was correct, and the hook in this PR refuses the commands the tool would mangle. The sed-with-slashes form is still against the rule.
+- Sweep: this session's other Bash commands with a backslash outside a heredoc or `python -c`, besides the six of I-176: the earlier grep sweeps, which are read-only.
+- Guard: guardrail 17 (`hook:push_gate`) now cites I-177; its test `test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused` keeps a single-backslash `grep` argument allowed on purpose.
+- Resolved: 2026-11-08 · Status: resolved
+

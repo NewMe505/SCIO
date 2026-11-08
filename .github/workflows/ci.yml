@@ -14,11 +14,46 @@ env:
   PYTHONUTF8: "1"
 
 jobs:
+  # The ruleset `protect-main` requires the status `checks`: it is the job at the end, which
+  # passes only when `tests` and `evals` both passed. The two run side by side (issue #88):
+  # one after the other they took 459 s and 179 s of the old job's 11.5 min.
   checks:
+    needs: [tests, evals]
+    if: always()
     runs-on: ubuntu-latest
-    # A runaway guard, not a speed target (I-094): the job measured 12.9, 14.3 and 15.2 min
-    # over M11 slices 1 to 3 (tests 512 to 615 s, regression evals about 265 s), so 15 cut
-    # it off; keep the evals in this job, the one the ruleset requires.
+    timeout-minutes: 5
+    steps:
+      - name: Tests and regression evals both passed
+        run: |
+          echo "tests: ${{ needs.tests.result }}, evals: ${{ needs.evals.result }}"
+          test "${{ needs.tests.result }}" = success && test "${{ needs.evals.result }}" = success
+
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras --group dev
+
+      - name: Regression evals (Fake provider)
+        run: uv run python -m evals.runner --suite regression --provider fake --trials 5 --min-pass-pow-k 1.0 --parallel 5 --out evals/results
+
+      - name: Post eval table to job summary
+        if: always()
+        run: cat evals/results/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+  tests:
+    runs-on: ubuntu-latest
+    # A runaway guard, not a speed target (I-094): the old single job measured 12.9 to 15.2 min
+    # over M11 (tests 512 to 615 s, regression evals about 265 s); the tests alone ran 459 s
+    # on 2026-11-07.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +87,8 @@ jobs:
 
       # In parallel (issue #58): the product builds dominate and mostly wait on subprocesses
       # (git, pytest, node), so twice the runner's cores; the serial run measured 792 s at
-      # v0.7.0. Locally 8 workers gave the serial counts exactly (341 passed, 16 skipped).
+      # v0.7.0. Locally 8 workers gave the serial counts exactly (341 passed, 16 skipped), and
+      # 16 workers gave the same counts on two runs at issue #88 (563 passed, 18 skipped).
       - name: Tests (Fake provider, offline)
         run: |
           echo "runner cores: $(nproc)"
@@ -60,13 +96,6 @@ jobs:
 
       - name: Docs checks
         run: uv run python scripts/check_docs.py
-
-      - name: Regression evals (Fake provider)
-        run: uv run python -m evals.runner --suite regression --provider fake --trials 5 --min-pass-pow-k 1.0 --out evals/results
-
-      - name: Post eval table to job summary
-        if: always()
-        run: cat evals/results/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: API docs
         run: uv run python scripts/gen_api_docs.py
