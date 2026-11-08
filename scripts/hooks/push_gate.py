@@ -124,6 +124,20 @@ def pipefail_reason(command: str) -> str | None:
     return None
 
 
+GIT_BASH_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")
+
+
+def native_dir(path: str, windows: bool = os.name == "nt") -> str:
+    """A directory as Windows takes it. Git Bash spells ``C:/Users/x`` as ``/c/Users/x``, and
+    ``os.path.join("C:/...", "/c/Users/x")`` keeps the drive: ``C:/c/Users/x``, which does not
+    exist. Every git call the gate made there raised ``WinError 267`` and the gate let the
+    command through (I-179). Off Windows, and for any other spelling, the path is unchanged."""
+    if not windows:
+        return path
+    m = GIT_BASH_DRIVE_RE.match(path)
+    return f"{m.group(1).upper()}:{path[2:] or '/'}" if m else path
+
+
 def strip_heredocs(command: str) -> str:
     """The command without heredoc bodies: a commit message that mentions ``git stash`` is
     text, not a command."""
@@ -274,13 +288,13 @@ def evaluate(command: str, cwd: str) -> tuple[str | None, str | None]:
     here = cwd
     for words in segments(command):
         if words[0] == "cd" and len(words) > 1:
-            here = os.path.join(here, words[1])
+            here = os.path.join(here, native_dir(words[1]))
             continue
         call = git_call(words)
         if call is None:
             continue
         sub, args, directory = call
-        repo = os.path.join(here, directory) if directory else here
+        repo = os.path.join(here, native_dir(directory)) if directory else here
         if sub == "stash" and is_bare_stash(args):
             return (
                 "A bare `git stash` pushes onto the stash stack that parallel sessions share. "
