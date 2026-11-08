@@ -10,6 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - Parallel features, opt-in (`SCIO_PARALLEL_FEATURES=2` to 4; ADR 0018, issue #82). The milestone planner marks features that need nothing from the others `depends_on: []`, and the build runs them at once. Each runs in its own git worktree outside the product tree, on its own branch from the milestone head. The orchestrator alone merges each onto the milestone branch in plan order and reruns the suite on a merged tree. A merge that conflicts or turns the suite red is undone, and that feature's next attempt runs from the new head. CHANGELOG.md and NOTES.md merge with git's union driver. The default of 1 is the serial loop, unchanged. Python products on a local sandbox only.
 
 ### Changed
+- A live product run's session opens each SCIO bug it finds as a `live-run` issue in this repository the moment it logs it, and every SCIO session's state-first inspection lists the open ones (CLAUDE.md, the owner's decision, #81): the graphcalc run's S7 to S9 waited days for a paste.
 - The local pre-push check runs the tests on 8 workers (`uv run python -m pytest -n 8`), as CI runs them in parallel; a serial run took 14 to 28 minutes per push (issue #73, the owner's decision). Its type check runs `uv run python -m mypy`, since the dev machine's Application Control now blocks the `mypy.exe` launcher too (I-146).
 
 ### Fixed

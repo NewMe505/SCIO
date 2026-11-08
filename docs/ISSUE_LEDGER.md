@@ -1517,3 +1517,11 @@ Template:
 - Guard: `test_a_worktrees_excludes_are_the_common_directorys_file` (now asserts a plain clone's file is under its root), `test_happy_path_end_to_end` (no cache files tracked); guardrail 57
 - Resolved: 2026-11-07 · Status: resolved
 
+### I-170 · A dashboard browser test timed out once on CI and passed on the rerun
+- Found: 2026-11-07 · PR #83's CI on its head after `main` was merged in (run 42402585925, attempt 1) · the `checks` job
+- Symptom: `FAILED tests/live/test_dashboard_page.py::test_the_build_view_shows_the_attempts_still_running - playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 10000ms exceeded.`; the rest of the job passed. The same commit passed locally (547 passed) and on CI attempt 2 (`checks` 14m19s). PR #83 changed only CLAUDE.md, a test of CLAUDE.md, the CHANGELOG and the guardrails, so the code under test was `main`'s, which had passed #85's CI.
+- Root cause: not found. The test's page helpers wait up to 10 s for a thread head or a section to render (`tests/live/test_dashboard_page.py:319-326`); on a loaded runner the page may take longer. Not verified: the failing attempt's page state was not captured.
+- Fix: none yet. The next step is to capture the page (a screenshot and the WebSocket state) when such a wait times out, so a recurrence names its cause, as I-145 asks for its two tests.
+- Sweep: the other fixed 10 s browser waits (`grep -n "timeout=10_000" tests/live`): the three helpers in this file; the reconnect test's 5 s waits (`:694`, `:697`)
+- Resolved: - · Status: open
+
