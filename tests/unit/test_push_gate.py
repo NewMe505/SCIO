@@ -133,8 +133,8 @@ def test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused() -> None:
 
 
 def test_a_double_backslash_anywhere_is_refused() -> None:
-    """I-176: the Bash tool halves a double backslash before the shell runs: `echo 'x\\\\y'`
-    printed `x\\y`, and a jq filter's `\\\\(` reached jq as `\\(`, its interpolation. The
+    """I-176: the Bash tool halves a double backslash before the shell runs: `printf %s
+    'x\\\\y'` printed `x\\y`, and a jq filter's `\\\\(` reached jq as `\\(`, its interpolation. The
     hook reads the command as sent, before the halving, so it can refuse it."""
     pg = _load()
     refused = [

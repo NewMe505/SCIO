@@ -59,9 +59,9 @@ def backslash_reason(command: str) -> str | None:
     if "\\\\" in command:
         return (
             "This command holds a double backslash, and the Bash tool halves it before the "
-            "shell runs (`echo 'x\\\\y'` printed `x\\y`; I-176, guardrail 17). Put the pattern "
-            "or text in a file with the Write tool and pass the file (`grep -f`, `jq -f`, "
-            "`python <file>`), or find a spelling without the escape."
+            "shell runs (`printf %s 'x\\\\y'` printed `x\\y`; I-176, guardrail 17). Put the "
+            "pattern or text in a file with the Write tool and pass the file (`grep -f`, "
+            "`jq -f`, `python <file>`), or find a spelling without the escape."
         )
     bodies = [m.group(0).split("\n", 1)[-1] for m in HEREDOC_RE.finditer(command)]
     bodies += [m.group("body") for m in PYTHON_C_RE.finditer(command)]
