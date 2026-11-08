@@ -132,6 +132,22 @@ def test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused() -> None:
         assert pg.backslash_reason(line) is None, line
 
 
+def test_a_double_backslash_anywhere_is_refused() -> None:
+    """I-176: the Bash tool halves a double backslash before the shell runs: `echo 'x\\\\y'`
+    printed `x\\y`, and a jq filter's `\\\\(` reached jq as `\\(`, its interpolation. The
+    hook reads the command as sent, before the halving, so it can refuse it."""
+    pg = _load()
+    refused = [
+        "gh run view 1 --json jobs --jq '.jobs[] | select(.name|test(\"Tests \\\\(\"))'",
+        'grep -oE "failed[^\\\\\\\\]{0,80}" log.txt',
+        "echo 'x\\\\y'",
+    ]
+    for line in refused:
+        reason = pg.backslash_reason(line)
+        assert reason and "I-176" in reason and "Write tool" in reason, line
+    assert pg.backslash_reason('grep -n "a\\|b" file.py') is None  # one backslash passes
+
+
 def test_a_check_piped_without_pipefail_is_refused() -> None:
     """I-173: `watch_ci.py ... 2>&1 | tail -6; echo "EXIT=$?"` printed EXIT=0 over the
     watcher's exit 2 (pre-flight 10, I-018, held only as a rule until then)."""

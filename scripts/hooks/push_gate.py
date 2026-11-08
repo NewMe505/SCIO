@@ -11,8 +11,10 @@
    whose ``pyproject.toml`` configures ruff, every changed Python file (staged, modified or
    untracked, since ``git add ... && git commit`` stages in the same line) must pass
    ``ruff check`` and ``ruff format --check``.
-4. A heredoc body or a ``python -c`` script holding a backslash is denied (guardrail 17,
-   issue #88): the shell layer rewrites such backslashes; the Edit and Write tools do not.
+4. A heredoc body or a ``python -c`` script holding a backslash, or a double backslash
+   anywhere, is denied (guardrail 17, issue #88, I-176): the Bash tool halves ``\\\\`` before
+   the shell runs, and the shell rewrites escapes in scripts; the Edit and Write tools carry
+   text as it is.
 5. A check (pytest, mypy, ruff, the gate, the CI watcher, the docs check, the evals) piped
    into another command is denied unless the line sets ``pipefail`` (I-018, I-173): the
    pipe's status is the last command's, so a failed check reads as success.
@@ -54,6 +56,13 @@ def backslash_reason(command: str) -> str | None:
     Windows paths) six times (I-027, I-071, I-072, I-157, I-162, I-167); the Edit and Write
     tools carry text as it is. A plain command's own arguments (a ``grep`` pattern) are left
     alone: they are not a script."""
+    if "\\\\" in command:
+        return (
+            "This command holds a double backslash, and the Bash tool halves it before the "
+            "shell runs (`echo 'x\\\\y'` printed `x\\y`; I-176, guardrail 17). Put the pattern "
+            "or text in a file with the Write tool and pass the file (`grep -f`, `jq -f`, "
+            "`python <file>`), or find a spelling without the escape."
+        )
     bodies = [m.group(0).split("\n", 1)[-1] for m in HEREDOC_RE.finditer(command)]
     bodies += [m.group("body") for m in PYTHON_C_RE.finditer(command)]
     if any("\\" in body for body in bodies):

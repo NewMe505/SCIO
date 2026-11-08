@@ -1570,3 +1570,12 @@ Template:
 - Guard: ruff's RUF028, run by the commit gate (`push_gate`) and by `scripts/gate.py`; guardrail 66
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-176 · The Bash tool halves a double backslash before the shell runs; a jq filter broke on it
+- Found: 2026-11-08 · issue #88, reading PR #90's CI timings with `gh run view --jq`
+- Symptom: `failed to parse jq expression (line 1, column 136) ... unexpected token "|"`. The filter's `test("Tests \\(|Regression evals")` reached jq as `\(`, which jq reads as string interpolation.
+- Root cause: the Bash tool turns a double backslash into one before the shell sees the command. This was measured with `echo 'x\\y' | od -c`: single quotes, which bash leaves alone, printed `x \ y`. The session transcript records the same command with both backslashes. So a `\\` written in any Bash command arrives halved, which is the mechanism behind I-167's grep and the escaped heredocs of I-071 and I-157. Guardrail 17 covered a read-only one-liner as a rule, but the hook added in this issue checked only heredoc bodies and `python -c` scripts.
+- Fix: `backslash_reason` also refuses any command that holds a double backslash. A PreToolUse hook reads the command as the transcript records it, before the halving, so it sees both backslashes. Its message names the fix: put the pattern in a file with the Write tool and pass the file (`grep -f`, `jq -f`).
+- Sweep: every Bash command of this session's transcript checked for a double backslash: 6 of 760. They are I-157's heredoc (twice, its retry), I-167's grep (twice), this jq filter, and the `echo` that measured the halving. The repository's scripts and workflows pass no double backslash to a shell.
+- Guard: `test_a_double_backslash_anywhere_is_refused`; guardrail 17 now cites I-176. Still to check once this merges: a live `echo 'x\\y'` must be denied, which shows the hook receives the command before the halving.
+- Resolved: 2026-11-08 · Status: resolved
+
