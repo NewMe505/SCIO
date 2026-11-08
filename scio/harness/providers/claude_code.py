@@ -38,6 +38,13 @@ from scio.harness.types import (
 )
 
 PROVIDER_NAME = "claude_code"
+SAFE_MODE = "--safe-mode"
+"""Every ``claude`` SCIO starts runs without the machine's customizations: Claude Code loads
+the CLAUDE.md of the working directory's parents, and a product in an operator's workspace
+got the operator's rules ("Never edit its code by hand", I-171). ``--safe-mode`` drops
+CLAUDE.md, skills, plugins, hooks and MCP servers and keeps auth, the model, the built-in
+tools and the permission flags (``claude --help``); ``--bare`` would switch to API-key auth,
+which ADR 0012 rules out."""
 STRUCTURED_MAX_TURNS = 3
 """Turns for a ``--json-schema`` call: the answer is a ``StructuredOutput`` tool call that
 Claude Code bounces with a schema error when it misses, and the retry is another turn
@@ -229,6 +236,7 @@ class ClaudeCodeProvider:
             )
             argv = [
                 "-p",
+                SAFE_MODE,
                 "--output-format",
                 "json",
                 "--restricted",

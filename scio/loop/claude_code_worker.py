@@ -36,6 +36,7 @@ from scio.harness.core import Harness
 from scio.harness.failures import FatalError
 from scio.harness.providers.claude_code import (
     PROVIDER_NAME,
+    SAFE_MODE,
     ClaudeRunResult,
     Runner,
     claude_runner,
@@ -256,6 +257,7 @@ class ClaudeCodeWorker:
             system_path.write_text(system, encoding="utf-8", newline="\n")
             argv = [
                 "-p",
+                SAFE_MODE,  # never the machine's CLAUDE.md (I-171)
                 "--output-format",
                 "stream-json",
                 "--verbose",
@@ -328,6 +330,7 @@ class ClaudeCodeWorker:
             )
             argv = [
                 "-p",
+                SAFE_MODE,  # never the machine's CLAUDE.md (I-171)
                 "--output-format",
                 "json",
                 "--resume",

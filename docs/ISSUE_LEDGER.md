@@ -1525,3 +1525,12 @@ Template:
 - Sweep: the other fixed 10 s browser waits (`grep -n "timeout=10_000" tests/live`): the three helpers in this file; the reconnect test's 5 s waits (`:694`, `:697`)
 - Resolved: - · Status: open
 
+### I-171 · Every Claude Code session SCIO started loaded the CLAUDE.md of the product's parent directories
+- Found: 2026-11-08 · issue #87, the advisor's question while planning the gate speed-ups ("does graphcalc's workspace CLAUDE.md reach the coder sessions?")
+- Symptom: 73 of the graphcalc run's 82 Claude Code session logs (`~/.claude/projects/C--Users-playa-OneDrive-Desktop-projects-graphcalc-run-graphcalc/*.jsonl`) contain `Contents of C:\Users\playa\OneDrive\Desktop\projects\graphcalc-run\CLAUDE.md (project instructions...)`: the operator session's rules, "Never edit its code by hand" and "Never commit or push in it yourself" among them. Checked live in `graphcalc-run/graphcalc`: `claude -p` says YES to "do your instructions include 'graphcalc run: rules for this session'?"; with `--safe-mode`, NO.
+- Root cause: Claude Code loads every CLAUDE.md from the working directory up to the root (and the user's own), and SCIO started `claude` in the product's directory with nothing that turns that off. ADR 0012 left out `--bare` because it switches to API-key auth, and with it the CLAUDE.md skip; nothing else took its place. The product's coders got rules written for the operator. That fits S9 (sessions that "stopped as instructed" before any edit) and S11 (paths spelled from the workspace, `graphcalc/graphcalc/calc.py`), though neither is proven to have come from it.
+- Fix: `SAFE_MODE = "--safe-mode"` on every `claude` argv SCIO builds: the worker's session, its summary resume, and the tool-less provider. Per `claude --help` it drops CLAUDE.md, skills, plugins, hooks and MCP servers and keeps auth, the model, the built-in tools and the permission flags. Checked live: a `--safe-mode --permission-mode acceptEdits --allowedTools Write,Edit,Read` session wrote its file in 2 turns and returned a session id.
+- Sweep: every place SCIO builds a `claude` argv (`grep -rn '"-p",' scio`): the worker (2) and the provider (1), all fixed; `claude_runner` runs whatever argv it is given; nothing in `scripts/` or `evals/` starts `claude`.
+- Guard: `test_t0_runs_through_claude_code_turns_with_verify_as_ground_truth` asserts every `claude` call of an end-to-end run carries `--safe-mode` (fails on `316bf40`), `test_provider_structured_call_is_one_restricted_turn_with_a_schema`; guardrail 62
+- Resolved: 2026-11-08 · Status: resolved
+

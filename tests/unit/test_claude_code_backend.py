@@ -145,7 +145,7 @@ def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None
     schema = {"type": "object", "properties": {"tier": {"type": "string"}}}
     resp = provider.structured(req, schema)
     argv, cwd, stdin = fake.calls[0]
-    assert argv[:3] == ["-p", "--output-format", "json"]
+    assert argv[:4] == ["-p", "--safe-mode", "--output-format", "json"]  # I-171
     assert (
         "--restricted" in argv
         and _flag(argv, "--tools") == ""
