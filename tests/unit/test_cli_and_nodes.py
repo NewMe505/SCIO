@@ -104,12 +104,29 @@ def test_the_state_first_inspection_lists_the_live_run_issues() -> None:
 def test_the_local_ci_line_runs_python_tools_as_modules() -> None:
     """CLAUDE.md's CI-equivalent runs every Python tool as ``python -m``: Application Control
     blocks the venv's launchers on the dev machine (``pytest.exe``, ``scio.exe``, and
-    ``mypy.exe`` since 2026-10-31; I-075, I-146). ``ruff.exe`` is ruff's own binary."""
-    import re
+    ``mypy.exe`` since 2026-10-31; I-075, I-146). Since issue #88 the line names
+    ``scripts/gate.py``, and every step of the gate starts this interpreter, never a launcher;
+    the checks and thresholds are CI's (16 test workers, 5 eval trials, pass^5 = 1.00)."""
+    import importlib.util
+    import sys
     from pathlib import Path
 
-    text = (Path(__file__).resolve().parents[2] / "CLAUDE.md").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "CLAUDE.md").read_text(encoding="utf-8")
     line = next(ln for ln in text.splitlines() if ln.startswith("- Run the CI-equivalent locally"))
-    chain = next(c for c in re.findall(r"`([^`]+)`", line) if "&&" in c)
-    tools = [part.split()[2] for part in chain.split("&&")]
-    assert len(tools) == 6 and set(tools) <= {"python", "ruff"}, tools
+    assert "`uv run python scripts/gate.py`" in line, line[:120]
+    spec = importlib.util.spec_from_file_location("gate", root / "scripts" / "gate.py")
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    sys.modules["gate"] = gate  # @dataclass looks its module up there
+    spec.loader.exec_module(gate)
+    names = [name for name, _ in gate.steps()]
+    assert names == ["ruff check", "ruff format", "mypy", "pytest", "evals", "docs"], names
+    for name, argv in gate.steps():
+        assert argv[0] == sys.executable, (name, argv)  # the interpreter, not a launcher
+        assert argv[1] == "-m" or argv[1].endswith(".py"), (name, argv)
+    argv = dict(gate.steps())
+    assert argv["pytest"][-2:] == ["-n", "16"]
+    evals = argv["evals"]
+    assert evals[evals.index("--trials") + 1] == "5"
+    assert evals[evals.index("--min-pass-pow-k") + 1] == "1.0"

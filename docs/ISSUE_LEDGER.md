@@ -1534,3 +1534,39 @@ Template:
 - Guard: `test_t0_runs_through_claude_code_turns_with_verify_as_ground_truth` asserts every `claude` call of an end-to-end run carries `--safe-mode` (fails on `316bf40`), `test_provider_structured_call_is_one_restricted_turn_with_a_schema`; guardrail 62
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-172 · The CI watcher missed a running run when it was given a short SHA
+- Found: 2026-11-08 · issue #88, watching PR #89's CI with the new `scripts/watch_ci.py --sha 6dba0d2`
+- Symptom: `no ci run for 6dba0d2 on fix/87-claude-md-leak within 300 s` while run 42431853875, `headSha` `6dba0d2da939…`, was in progress.
+- Root cause: `run_for_head` compares `headSha` by equality, GitHub reports full SHAs, and `main` passed `--sha` through as typed; only the default (`git rev-parse HEAD`) was full.
+- Fix: `full_sha(rev)` resolves whatever is given (`git rev-parse --verify <rev>^{commit}`, `HEAD` by default) before any comparison.
+- Sweep: other comparisons with GitHub's `headSha` (`grep -rn headSha scio scripts evals`): the push gate requests it but compares only run ids and conclusions; SCIO's own `pr_ci` reads checks by the PR, not by a SHA it was given.
+- Guard: `test_a_short_sha_is_resolved_to_the_full_one_github_reports`; guardrail 63
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-173 · A check piped through `tail` without pipefail reported success over a failure
+- Found: 2026-11-08 · issue #88, the same watch as I-172
+- Symptom: `uv run python scripts/watch_ci.py ... 2>&1 | tail -6; echo "EXIT=$?"` printed `EXIT=0` after the watcher had given up with exit 2. Nothing was decided on it (the timeout line was read), but a green-looking exit over a failed check is I-018's mistake again.
+- Root cause: a pipeline's status is its last command's. CLAUDE.md and pre-flight 10 (I-018) say to start such a line with `set -o pipefail`; nothing enforced it, and I wrote the line without it.
+- Fix: the push-gate hook refuses a line that pipes a check (pytest, mypy, ruff, `gate.py`, `watch_ci.py`, `check_docs.py`, `evals.runner`, run as a command) into another command unless the line sets `pipefail` (`pipefail_reason`). `scripts/gate.py` writes each step's output to a log file and needs no pipe at all.
+- Sweep: every Bash command of this session's transcript run through the new `pipefail_reason`: 103 of 708 commands (87 distinct) piped a check without pipefail, and 19 of them fed the piped check's status into an `&&` chain (`mypy 2>&1 | tail -1 && pytest ...`), where a failure would have gone on to the next step. The rule was held by habit and was mostly not held. None of them reached `main`: every pushed head's CI ran the same checks unpiped and passed before its merge. The repository's scripts and workflows pipe no check (`grep -rnE "(pytest|mypy|ruff|check_docs|evals\.runner|gate\.py)[^|]*\|[^|]" .github scripts`: only the new docstring).
+- Guard: `test_a_check_piped_without_pipefail_is_refused`; guardrail 64
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-174 · `scripts/gate.py` failed to load in its test: a dataclass in a module loaded by path
+- Found: 2026-11-08 · issue #88, the first run of `test_the_local_ci_line_runs_python_tools_as_modules`
+- Symptom: `AttributeError: 'NoneType' object has no attribute '__dict__'` from `@dataclass` while `exec_module` ran `gate.py`.
+- Root cause: `dataclasses` looks the class's module up in `sys.modules`; a module made by `importlib.util.module_from_spec` is not there until it is registered.
+- Fix: the test registers it (`sys.modules["gate"] = gate`) before `exec_module`.
+- Sweep: every module loaded by path in the tests (`grep -rn module_from_spec tests scripts evals scio`): seven loaders; only `gate.py` defines a dataclass.
+- Guard: `test_the_local_ci_line_runs_python_tools_as_modules` (it loads `gate.py`); guardrail 65
+- Resolved: 2026-11-08 · Status: resolved
+
+### I-175 · `# fmt: skip` inside a list literal in the new scripts
+- Found: 2026-11-08 · issue #88, `ruff check` on the first drafts of `scripts/gate.py` and `scripts/watch_ci.py`
+- Symptom: `RUF028 This suppression comment is invalid` on comments meant to keep argv lists on one line.
+- Root cause: the formatter honours `# fmt: skip` only at the end of a statement (the repository's other ten uses all are); inside a bracket it is ignored, and ruff flags it.
+- Fix: the comments are gone and the formatter lays the lists out.
+- Sweep: `grep -rn "fmt: skip\|fmt: off" scio scripts tests evals`: the ten remaining uses each close a statement.
+- Guard: ruff's RUF028, run by the commit gate (`push_gate`) and by `scripts/gate.py`; guardrail 66
+- Resolved: 2026-11-08 · Status: resolved
+

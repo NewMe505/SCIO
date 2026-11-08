@@ -107,6 +107,76 @@ def test_a_heredoc_that_mentions_git_is_text_not_a_command() -> None:
     assert pg.evaluate(line, ".") == (None, None)
 
 
+def test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused() -> None:
+    """Guardrail 17 as a gate (issue #88; I-027, I-071, I-072, I-157, I-162, I-167): the shell
+    layer rewrites backslashes in a heredoc body or a `python -c` script, so such a command is
+    denied and the Edit or Write tool is named. A command's own arguments (a grep pattern) and
+    heredocs without a backslash pass."""
+    pg = _load()
+    refused = [
+        "python - <<'EOF'\nt = t.replace('a\\nb', 'c')\nEOF",
+        "cat > f.md <<'EOF'\nC:\\Users\\x\\file\nEOF",
+        "python -c \"print('a\\tb')\"",
+        "git commit -q -F - <<'EOF'\nfix: the \\n escape\nEOF",
+    ]
+    for line in refused:
+        reason = pg.backslash_reason(line)
+        assert reason and "Edit or Write" in reason, line
+    allowed = [
+        'grep -n "a\\|b" file.py',  # a plain command's argument, not a script
+        "git commit -q -F - <<'EOF'\nfix: no escapes here\nEOF",
+        "python -c \"print('ok')\"",
+        "sed -n 1,5p README.md",
+    ]
+    for line in allowed:
+        assert pg.backslash_reason(line) is None, line
+
+
+def test_a_check_piped_without_pipefail_is_refused() -> None:
+    """I-173: `watch_ci.py ... 2>&1 | tail -6; echo "EXIT=$?"` printed EXIT=0 over the
+    watcher's exit 2 (pre-flight 10, I-018, held only as a rule until then)."""
+    pg = _load()
+    refused = [
+        "uv run python scripts/watch_ci.py --sha 6dba0d2 2>&1 | tail -6; echo EXIT=$?",
+        "cd x && UV_SYSTEM_CERTS=1 uv run python -m pytest -n 16 2>&1 | tail -3",
+        "uv run python -m mypy | grep error",
+        "uv run ruff check . | head",
+        "uv run python -m evals.runner --suite regression --provider fake | grep pass",
+        "uv run python scripts/gate.py | tee gate.log",
+    ]
+    for line in refused:
+        reason = pg.pipefail_reason(line)
+        assert reason and "set -o pipefail" in reason, line
+    allowed = [
+        "set -o pipefail && uv run python -m pytest -n 16 2>&1 | tail -3",
+        "uv run python -m pytest -n 16",
+        "uv run python -m pytest -x || echo failed",
+        "grep -n pytest CONTRIBUTING.md | head",  # pytest is an argument, not the command
+        "git log --oneline | head -3",
+        "git commit -q -F - <<'EOF'\nfix: no more pytest | tail\nEOF",
+    ]
+    for line in allowed:
+        assert pg.pipefail_reason(line) is None, line
+
+
+def test_the_hook_refuses_a_backslash_heredoc_without_any_git_in_it() -> None:
+    """The heredoc check runs before the git checks, which skip a line without `git`."""
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "python - <<'EOF'\nprint('a\\nb')\nEOF"},
+        "cwd": str(REPO_ROOT),
+    }
+    r = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "hooks" / "push_gate.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    out = json.loads(r.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny" and "guardrail 17" in out["permissionDecisionReason"]
+
+
 def test_a_gate_that_cannot_check_warns_and_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     pg = _load()
 
