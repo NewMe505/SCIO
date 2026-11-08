@@ -1579,3 +1579,12 @@ Template:
 - Guard: `test_a_double_backslash_anywhere_is_refused`; guardrail 17 now cites I-176. Still to check once this merges: a live `printf %s 'x\\y'` must be denied, which shows the hook receives the command before the halving.
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-177 · An edit went through `sed` with backslashes minutes after I-176
+- Found: 2026-11-08 · issue #88, updating PR #90's body file with a `sed` substitution whose pattern escaped its slashes
+- Symptom: none in the file: both substitutions landed, which was checked with `grep -n` on the result. Guardrail 17 forbids the method, though: an edit whose text holds a backslash goes through the Edit tool.
+- Root cause: the same lapse as I-162 and I-167. A quick multi-site change went to the shell, and this session's hook is still the main checkout's old one, so nothing refused it. The result agrees with I-176's measurement: single backslashes in a command's own arguments reach the shell intact, and only a double backslash is halved. So the new hook's scope (script bodies and double backslashes) refuses what the tool mangles and lets the rest through.
+- Fix: none in code. The edit was correct, and the hook in this PR refuses the commands the tool would mangle. The sed-with-slashes form is still against the rule.
+- Sweep: this session's other Bash commands with a backslash outside a heredoc or `python -c`, besides the six of I-176: the earlier grep sweeps, which are read-only.
+- Guard: guardrail 17 (`hook:push_gate`) now cites I-177; its test `test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused` keeps a single-backslash `grep` argument allowed on purpose.
+- Resolved: 2026-11-08 · Status: resolved
+
