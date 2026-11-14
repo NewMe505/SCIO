@@ -77,6 +77,7 @@ The repair session runs `claude -p --permission-mode auto` in a fresh worktree u
 | Command | What it does |
 |---|---|
 | `python -m recovery status [--workspace W]` | runs (with their log directories) and open incidents |
+| `python -m recovery watch <incident> [--follow] [--last N]` | one incident live: its state, its timeline, and the repair session's steps (each tool call and what the session says), read from Claude Code's transcript of the repair worktree; `--follow` prints only what is new until the incident closes or escalates |
 | `python -m recovery incidents [--signature S] [--grep TEXT]` | searches incident history |
 | `python -m recovery hold <incident>` and `release <incident>` | pause and resume an incident's automation |
 | `python -m recovery tick [--incident I]` | advance incidents now instead of waiting for the scheduled tick |

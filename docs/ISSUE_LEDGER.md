@@ -1776,4 +1776,11 @@ Template:
 - Fix: `run_tree` raises a new `TimeoutExpired(cmd, timeout, output=, stderr=)` with the drained text, whose constructor takes text, `from None`. Its callers read `exc.stdout` and `exc.stderr` through `_text`, which takes either type.
 - Sweep: `grep -rn "\.stdout, .*\.stderr = \|exc\.stdout =\|exc\.stderr =" scio/ recovery/` finds no other assignment.
 - Guard: guardrail 74 (`symbol:run_tree`); the gate's `mypy` step refuses the construct.
+### I-194 · `recovery watch` could not find a Windows worktree's transcript on Linux; `Path(...).name` does not split a backslash path there
+- Found: 2026-11-14 · PR #108 (issue #107), CI run 43583884387 on Linux. Green locally on Windows. · `recovery/watch.py::transcript_for`
+- Symptom: `test_a_differently_spelled_parent_still_finds_the_worktrees_transcript` failed on CI with `assert None == PosixPath(...)`. The fallback lookup takes the worktree's own name and matches project directories ending in its key. On Linux, `Path(r"C:\Users\...\recovery-inc-1").name` is the whole string, because PosixPath does not split on backslashes, so nothing matched.
+- Root cause: pathlib parts were taken from a path string written for another OS. The worktree path comes from the supervisor's store, where Windows wrote it, while the code and its tests may run on any OS.
+- Fix: the name is split on both separators (`re.split(r"[\\/]+", ...)`).
+- Sweep: `grep -rn "Path([^)]*)\.name\|Path([^)]*)\.parts\|Path([^)]*)\.parent" recovery/` finds only this site. `classify.scio_module_path` already splits frame paths on both separators, which was agent B's choice in the wave.
+- Guard: `test_a_windows_worktree_path_finds_its_transcript_on_any_os` runs on every OS. It bites on Linux, where the bug lives, and CI is that runner. Guardrail 78.
 - Resolved: 2026-11-14 · Status: resolved
