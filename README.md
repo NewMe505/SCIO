@@ -1,8 +1,24 @@
 # SCIO
 
-A model-agnostic, multi-agent framework built on LangGraph that turns a prompt into product-ready software. Today it takes one software task, from a spec or a GitHub Issue, to a merged, tested and documented pull request, reliably and live. Product Mode (M6 to M11) extends that to whole products, from a prompt or a `PRODUCT.md`, in Python or TypeScript, one approved milestone at a time, through a release gate to a tagged release.
+A model-agnostic, multi-agent framework built on LangGraph that turns a prompt into product-ready software. Today it takes one software task, from a spec or a GitHub Issue, to a merged, tested and documented pull request, reliably and live. Product Mode (M6 to M11) extends that to whole products, from a prompt or a `PRODUCT.md`, in Python or TypeScript, one approved milestone at a time, through a release gate to a tagged release. An external recovery supervisor keeps SCIO itself running. When SCIO's own harness fails mid-build, Claude repairs SCIO in a tested PR, and after the owner's merge the build resumes from its checkpoint.
 
-> Status: **v0.9.0 released; Product Mode M6 to M11, the post-M11 follow-ups and the live dashboard done.** The product eval suite passes live on one commit: a CLI todo app (p001), a REST API (p002) and a web app graded in a real browser (p003), each built from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass ($11.63 estimated for all three, nothing billed). `scio new` and `scio build` have also bootstrapped and built live products on the Claude Code backend: `todo_tags` (M8), `bookmarks_api` (M9: a Python HTTP service with a third-party dependency, black-box acceptance against the started server, $5.38 estimated, nothing billed) and `notes_service` (M10: a TypeScript HTTP service with zod, eslint, tsc, npm audit and black-box acceptance all green, $4.61 estimated, nothing billed). Post-M11 follow-ups ([issue #58](https://github.com/NewMe505/SCIO/issues/58), [PR #59](https://github.com/NewMe505/SCIO/pull/59), [ADR 0016](docs/adr/0016-post-m11-follow-ups.md)) are done and released in 0.8.0: squash-safe `--gh` merges and a release PR, `scio upgrade` (live: `bookmarks_api` upgraded and its M2 built, $4.56 estimated), Node in the Docker sandbox, `run_app` in a container, parallel CI tests. Released in 0.9.0: `scio dashboard`, a live read-only web view of every thread's step, pending stop and cost across workspaces ([issue #68](https://github.com/NewMe505/SCIO/issues/68), [PR #70](https://github.com/NewMe505/SCIO/pull/70), [ADR 0017](docs/adr/0017-dashboard.md)); Always/Never guardrails enforced by a docs check and a push-gate hook (#61); the first fixes from the live `graphcalc` run (#64: the quality bar follows the stack, hand edits of PRODUCT.md survive, `scio new` threads report, spend spans invocations; [#66](https://github.com/NewMe505/SCIO/issues/66): GitHub labels are created before use; [#69](https://github.com/NewMe505/SCIO/issues/69): the worker's `python` is the product's environment, `skip` defers a feature). In progress: that live product test, `graphcalc` (a TI-Nspire-style graphing calculator), and the fixes it finds. Accepted and being built: an external recovery supervisor that has Claude repair SCIO's own harness in a tested PR and resumes the interrupted build from its checkpoint after a human merge ([issue #95](https://github.com/NewMe505/SCIO/issues/95), [ADR 0019](docs/adr/0019-external-recovery-supervisor.md)). Task mode is proven live: ten regression tasks at pass^5 = 1.00 offline, nightly live suites green. Roadmap: [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md); decision records: [docs/adr/](docs/adr/); board: [SCIO Product Mode](https://github.com/users/NewMe505/projects/1); milestones: [M6 to M11](https://github.com/NewMe505/SCIO/milestones).
+> Status: **v0.9.0 released; on `main` for 0.10.0: the self-healing recovery supervisor (ADR 0019), parallel features (ADR 0018) and the graphcalc run's fixes.**
+>
+> **Proven live.**
+> - Task mode passes ten regression tasks at pass^5 = 1.00 offline on every push.
+> - Product Mode M6 to M11 is done. The product eval suite passes live on one commit: a CLI todo app (p001), a REST API (p002) and a web app graded in a real browser (p003). Each is built from a fixed `PRODUCT.md` to a released v0.1.0 whose hidden black-box tests pass ($11.63 estimated, nothing billed).
+> - `scio new` and `scio build` have bootstrapped and built live products on the Claude Code backend: `todo_tags`, `bookmarks_api` (Python) and `notes_service` (TypeScript).
+>
+> **Since 0.9.0:**
+> - [`python -m recovery`](docs/RECOVERY.md), the external recovery supervisor ([PR #96](https://github.com/NewMe505/SCIO/pull/96)). It catches SCIO's own harness failures from outside SCIO and has Claude repair SCIO in a tested PR. After the owner's merge, it resumes the interrupted build from its checkpoint.
+> - Opt-in parallel features.
+> - Claude Code sessions in `--safe-mode`.
+> - Faster gates, and push-gate hooks that run in every session.
+> - The graphcalc run's fixes.
+>
+> **In progress:** the supervisor's live drill on a real SCIO defect ([issue #95](https://github.com/NewMe505/SCIO/issues/95)), and the `graphcalc` live product run, a TI-Nspire-style graphing calculator.
+>
+> **Next:** see the [roadmap](#roadmap) and the [board](https://github.com/users/NewMe505/projects/1). Decision records are in [docs/adr/](docs/adr/), and the [milestones](https://github.com/NewMe505/SCIO/milestones) list on GitHub.
 
 ## Product Mode in one paragraph
 A product orchestrator sits above the proven task graph. It interviews you (two to four Opus questions), writes a normalised `PRODUCT.md`, picks a toolchain profile, and bootstraps a repository with CI and a walking skeleton. Then, milestone by milestone, it decomposes work into GitHub issues, runs each feature through the task graph with the tier pinned, verifies the integrated result against a fixed quality bar (tests with a coverage floor, lint, types, build, smoke and e2e against the running app, dependency audit, secret scan, working README instructions), and opens one milestone PR for a human to merge. Any failing check overrides any model verdict. There is one writer, so a product builds serially; there is no product-level dollar cap by default, but per-feature tier caps, stall caps and iteration caps remain as runaway guards, and cost is reported at every approval stop.
@@ -234,7 +250,7 @@ Task mode (complete, released as 0.1.0 to 0.4.0):
 - M5 (done): nightly capability suite, A/B configs, threshold tuning (ADR 0006), run reports, release workflow
 - post-0.1.0 (done): live validation, realistic and path-specific eval tasks t006 to t010, advisor review of passing high-impact diffs (ADR 0008)
 
-Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on the [project board](https://github.com/users/NewMe505/projects/1)):
+Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on the [SCIO roadmap board](https://github.com/users/NewMe505/projects/1)):
 - M6 (done, 0.4.0): toolchain profiles (ADR 0009), `--tier` pins the route, every declared setting read
 - M7 (done, 0.5.0): `scio new`, greenfield bootstrap from a prompt to a repository with green CI (ADR 0010)
 - M8 (done, 0.6.0): progress file, GitHub milestones and issues, the milestone loop with crash-safe resume (ADR 0011); the Claude Code backend runs SCIO on a subscription (ADR 0012)
@@ -243,4 +259,22 @@ Product Mode ([docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md), ADR 0007; tracked on
 - M11 (done, 0.7.0): product-ready quality bar, release gate, product eval suite p001 to p003 passing live (ADR 0015)
 - post-M11 (done, 0.8.0): squash-safe `--gh` merges, a release PR, `scio upgrade`, Node in the Docker sandbox, `run_app` in a container, parallel CI tests (ADR 0016)
 - dashboard (done, 0.9.0): `scio dashboard`, a live read-only view of every thread across workspaces (ADR 0017)
-- parallel features (in review, [issue #82](https://github.com/NewMe505/SCIO/issues/82)): opt-in `SCIO_PARALLEL_FEATURES`, independent features in worktrees, merged and rechecked by one integrator (ADR 0018)
+- parallel features (done, on `main` for 0.10.0, [issue #82](https://github.com/NewMe505/SCIO/issues/82)): opt-in `SCIO_PARALLEL_FEATURES`, independent features in worktrees, merged and rechecked by one integrator (ADR 0018)
+- the graphcalc live run's fixes (done, on `main` for 0.10.0): S6 to S11 (issues #75, #77, #79, #84), Claude Code sessions in `--safe-mode` (#87), faster gates with evals beside tests (#88), and push-gate hooks that follow Git Bash paths and run in every session (#91, #93)
+
+Self-healing ([ADR 0019](docs/adr/0019-external-recovery-supervisor.md), [docs/RECOVERY.md](docs/RECOVERY.md), milestone [Self-healing supervisor](https://github.com/NewMe505/SCIO/milestone/7)):
+- the external recovery supervisor (done, on `main` for 0.10.0, [PR #96](https://github.com/NewMe505/SCIO/pull/96)). `python -m recovery` is the parent of `scio build`, uses the standard library only, and never imports `scio`. When the build fails on a SCIO harness fault, it backs up the workspace's state and opens a `recovery` issue. A headless Claude Code session then repairs SCIO in a tested PR, its claims are checked on GitHub, and the supervisor waits for the owner's merge. After the merge it moves live-wt, health-checks the halted thread and replays the original command. An offline end-to-end test covers the loop with real processes and real git.
+
+In progress:
+- **The supervisor's live drill** ([issue #95](https://github.com/NewMe505/SCIO/issues/95)). A real SCIO defect (I-180: a hung `claude` call ends a build with a traceback) crashed a live build after its first milestone merged. The supervisor opened [issue #105](https://github.com/NewMe505/SCIO/issues/105) and started the repair session; once the fix is merged, the build resumes from its checkpoint.
+- **The graphcalc live product run** (a TI-Nspire-style graphing calculator, [issue #63](https://github.com/NewMe505/SCIO/issues/63) for its retrospective), paused at M3 since 2026-11-05.
+
+Proposed next (each one on the [board](https://github.com/users/NewMe505/projects/1)):
+- run graphcalc under the supervisor and register the scheduled tick ([#98](https://github.com/NewMe505/SCIO/issues/98))
+- guard every orchestrator node's harness errors, I-182 ([#99](https://github.com/NewMe505/SCIO/issues/99))
+- the commit gate lints only what a commit commits, I-186 ([#100](https://github.com/NewMe505/SCIO/issues/100))
+- move the nightly live suite to the Claude Code backend, or retire it, I-181 ([#101](https://github.com/NewMe505/SCIO/issues/101))
+- the dashboard shows recovery incidents and stopped threads, with Claude Code spans and a narrower CSP ([#102](https://github.com/NewMe505/SCIO/issues/102))
+- a credential pre-flight before live product commands ([#103](https://github.com/NewMe505/SCIO/issues/103))
+- close the oldest open ledger entries, I-145, I-159 and I-170 ([#104](https://github.com/NewMe505/SCIO/issues/104))
+- release 0.10.0 once the drill passes
