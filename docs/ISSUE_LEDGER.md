@@ -1611,3 +1611,96 @@ Template:
 - Guard: `test_a_git_bash_drive_path_becomes_a_path_windows_can_run_git_in` and `test_the_gate_runs_git_where_a_git_bash_path_points` (both forms; `windows=True`, so they run on Linux CI); guardrail 67
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-180 · A hung `claude` process ends a build with a traceback, not a resumable stop
+- Found: 2026-11-13 · issue #95, read-only discovery for the external recovery supervisor · `scio/harness/providers/claude_code.py:89`
+- Symptom: not seen live yet; found by reading, then reproduced. `claude_runner(sys.executable)` running `time.sleep(5)` with `timeout_s=1` raises `subprocess.TimeoutExpired`, which is not a `HarnessError`. A `claude -p` process that outlives its timeout (600 s for a tool-less call, 1800 s for a worker turn) therefore escapes `scio/product/build.py`'s `except HarnessError` around a feature attempt (the I-100 guard) and every orchestrator node's guard. `scio build` ends with a traceback and exit 1, with no `feature_failed` record and no resume hint.
+- Root cause: `claude_runner` passes `timeout=` to `subprocess.run` and maps the binary's own error results (`parse_result`), but not the subprocess layer's timeout. Both the provider and the worker build their runner from it.
+- Fix: not yet. ADR 0019 (proposed) makes it the real defect for the recovery supervisor's end-to-end drill. A stub `claude` that sleeps past a short `SCIO_REQUEST_TIMEOUT_S` reproduces it offline. The expected fix is to map `TimeoutExpired` to `RetryableError` and kill the process tree, with a test.
+- Sweep: `grep -rn "TimeoutExpired" scio/` finds it caught in `aci/apps.py`, `aci/sandbox/local.py` and `aci/sandbox/docker.py`, but not in `harness/providers/claude_code.py` or `loop/claude_code_worker.py`. Every other `subprocess.run(..., timeout=` site is checked when this is fixed.
+- Resolved: - · Status: open
+
+### I-181 · The README says the nightly live task runs daily; it has been disabled since 2026-10-12
+- Found: 2026-11-13 · issue #95, discovery · `README.md` "Nightly live suite"
+- Symptom: the README says the dev machine runs `SCIO nightly live evals` at 03:17 daily. `Get-ScheduledTask` reads `State: Disabled`, last run 2026-10-12 03:17 with result 2. Nothing in the repository records that it was disabled. It stopped when live runs moved to the Max login on the Claude Code backend (ADR 0012), and `scripts/nightly_live.py` uses the API-key path.
+- Root cause: machine state described in prose, with nothing that reads the machine.
+- Fix: not yet. ADR 0019's supervisor registers its own scheduled task, and that change will reword this paragraph to match the task's real state.
+- Sweep: the README's other claims about machine state (the user-level hook, I-178) were checked by hand in issue #93.
+- Resolved: - · Status: open
+
+### I-182 · A harness error other than a budget stop in an orchestrator node ends `scio build` with a traceback
+- Found: 2026-11-14 · issue #95, discovery for ADR 0019 · `scio/product/build.py:691-694`, `:1460-1463`, `scio/cli.py:215`
+- Symptom: found by reading, not yet reproduced. `plan_milestone` and `milestone_gate` call the model inside `try ... except BudgetExceeded` only. A `FatalError`, a `StructuredOutputError` or a `RetryableError` whose retries ran out therefore leaves the node; examples are an expired login and a usage window that is used up. `_build` catches only `GitHubError`, so the build ends with a traceback and exit 1, with no halt record and no resume hint. Feature attempts have had this guard since I-100, and orchestrator nodes do not.
+- Root cause: I-100 and I-098 guarded the feature attempt and the PR-body and router calls. Their sweep looked for a `BudgetExceeded` guard, not for every `HarnessError`.
+- Fix: not yet. It sits on the ADR 0019 drill's path. Once I-180 maps a timeout to `RetryableError`, exhausted retries in `plan_milestone` still end in this traceback. The drill's repair session is expected to reach it in its sweep. If it does not, it is fixed after the drill.
+- Sweep: `grep -n "except BudgetExceeded\|except HarnessError" scio/product/build.py` finds `BudgetExceeded` only at :693 (`plan_milestone`) and :1462 (`milestone_gate`), and `HarnessError` at :1043 and :1271 (feature attempts). The model calls in `scio new` (interviewer, product planner) are checked when this is fixed.
+- Resolved: - · Status: open
+
+### I-183 · On Windows a child's own PATH does not find its program, so a tick under Task Scheduler could not start `sh scio.sh`
+- Found: 2026-11-14 · issue #95, the phase 6b Task Scheduler probe · `recovery/commands.py::run_command`
+- Symptom: a temporary scheduled task (registered, run once, then deleted) reported that `shutil.which("sh")` was None on its PATH, while `uv`, `claude`, `gh`, `git` and `python` resolved. A probe whose own PATH lacked `sh` then ran `subprocess.run(["sh", "-c", "echo found"], env=<env whose PATH has sh>)` and got `[WinError 2] The system cannot find the file specified`. The same call with `shutil.which("sh", path=<that PATH>)` as argv[0] printed `found`. A `recovery tick` starts the health check and the replay with the run's recorded environment, so each would have failed with a missing `sh`.
+- Root cause: on Windows `subprocess` passes a bare argv[0] to CreateProcess, which searches the parent process's PATH and never the `env` given for the child. POSIX `execvpe` uses the child's PATH, so the code reads as if it works.
+- Fix: `commands.resolve_program(argv0, env)` looks a bare name up on the env's PATH, and `run_command` uses it. The process agent's `procs.spawn` and `procs.spawn_detached` use it too.
+- Sweep: every spawn that passes `env=`. `grep -rn "Popen(\|subprocess.run(" recovery/ scio/` found the following:
+  - `recovery/commands.py` is fixed here, and `recovery/procs.py` is fixed in the same wave.
+  - SCIO's local sandbox already resolves with the command's own PATH (`resolve_command(..., path=)`, `scio/aci/sandbox/local.py:80`, I-081).
+  - `claude_runner` spawns `claude`, which is on both PATHs.
+- Guard: `test_a_program_on_the_child_envs_path_only_is_found`. It runs a `.cmd` (on POSIX, an executable script) that only the env's PATH holds. With `resolve_program` disabled by a monkeypatch the test fails, which was checked. Guardrail 69.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-184 · The recovery health check's first step called `scio --version`, which SCIO does not have
+- Found: 2026-11-14 · issue #95, wave agent E while implementing `recovery/runtime.py::health_check` · ADR 0019 decision 8
+- Symptom: `uv run python -m scio --version` exits 2 (`unrecognized arguments`). The health check runs before every resume, so step 1 would have failed on every real resume, and every repaired incident would have escalated at `runtime_updated`. All the offline tests used a fake launcher that accepted any argument.
+- Root cause: the ADR and the contract stub named a `--version` flag from memory. Nothing checked a command line that the supervisor sends to SCIO against SCIO's own parser, because the two packages share no code by design.
+- Fix: step 1 is `SMOKE_ARGS = ("--help",)`. It imports SCIO's CLI and exits 0 from the parser. ADR 0019 decision 8 and the runtime docstring now say `--help`.
+- Sweep: every command line `recovery/` sends to SCIO.
+  - The health check's `--help`, `status --product` and `report --thread --out` are now parsed by SCIO's real `_parser()` in a test.
+  - The `--outcome-file` that `runner.supervise` appends is accepted by `build`, `new`, `run` and `resume` (`tests/unit/test_outcome_file.py`, agent F).
+- Guard: `tests/unit/test_recovery_contract.py`. It imports both sides and replaces the launcher with SCIO's parser. `test_the_parser_check_refuses_a_flag_scio_lacks` shows that the check refuses `--version`. Guardrail 70.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-185 · The repair session inherited the workspace's `SCIO_*` settings, which would reach SCIO's own gate
+- Found: 2026-11-14 · issue #95, wave agent D's report · `recovery/repair.py::repair_env`
+- Symptom: `repair_env` removed `CLAUDECODE` and the API keys and forced `SCIO_PROVIDER_OVERRIDE=fake`. It kept every other `SCIO_*` variable of the process that starts the repair, such as `SCIO_WORKER_BACKEND=claude_code`, `SCIO_PARALLEL_FEATURES=2` and a workspace's `SCIO_CHECKPOINT_DSN`. The repair session runs `scripts/gate.py` on SCIO's own tests, and `scio.settings` reads those variables, so the gate could have run against the workspace's settings.
+- Root cause: the contract named only the variables known to break `claude -p` (ADR 0012). It did not name the ones that change SCIO's behaviour under test.
+- Fix: `repair_env` drops every `SCIO_*` variable, compared without case as on Windows, then sets `SCIO_PROVIDER_OVERRIDE=fake` and `UV_SYSTEM_CERTS=1`.
+- Sweep: every environment `recovery/` hands to a process.
+  - A replay restores the run's own recorded environment, which must keep its `SCIO_*` values.
+  - The health check runs the launcher with the run's environment plus database copies.
+  - `config.recorded_env` already drops secrets.
+- Guard: `test_the_environment_drops_secrets_and_nesting_and_stays_offline` now holds workspace `SCIO_*` settings and asserts they are gone. Guardrail 71.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-186 · The commit gate lints every changed Python file in the tree, not just the staged ones, so an orchestrator commit during a parallel wave is refused
+- Found: 2026-11-14 · issue #95, committing wave 1's finished modules while three agents were still writing · `scripts/hooks/push_gate.py` commit gate
+- Symptom: `git add <14 finished files> && git commit` was denied: "`ruff check` fails on the changed Python files". The failures were in `recovery/machine.py` and `tests/recovery/test_scrub.py`, two unstaged files that running agents had not finished. The commit would not have included them.
+- Root cause: confirmed by reading `commit_reason` (`scripts/hooks/push_gate.py:256-272`). It lints every `.py` file that `git status --porcelain --untracked-files=all` lists. That choice is deliberate. The hook runs before the whole command line, so in `git add X && git commit` nothing is staged yet when it looks, and `git diff --cached` would miss X. The cost is that one session's unfinished files block another session's commit in a shared checkout.
+- Fix: not yet. A likely fix is to lint the paths a `git add` in the same command names, the staged files, and nothing else, falling back to the whole tree for `git commit -a` or `git add -A`. A hook change reaches other sessions only when live-wt moves (guardrail 68), so it gets its own PR. Meanwhile, commit after the wave's agents finish.
+- Sweep: -
+- Resolved: - · Status: open
+
+### I-187 · The supervisor handed `--outcome-file` to a SCIO older than the flag, which would refuse every run
+- Found: 2026-11-14 · issue #95, while planning the live drill · `recovery/runner.py`
+- Symptom: `runner.supervise` appended `--outcome-file <path>` to every `build`, `new`, `run` and `resume`. The flag exists only from this branch on. The live-wt that graphcalc and the drill run from is `e5294d1`, which does not have it. argparse refuses an unknown flag with exit 2 before any work, so every supervised run against that SCIO would have ended at once as `refused`. The offline tests all used a SCIO that knew the flag.
+- Root cause: the supervisor and SCIO deploy separately. The supervisor runs from its own pinned worktree, and SCIO runs from live-wt, which moves only after merges, so either can be older than the other. The design assumed SCIO was always at least as new as the supervisor.
+- Fix: `runner.outcome_flag_supported(live_wt)` appends the flag only when `<live_wt>/scio/cli.py` names it. It reads a file and starts no process. Without the flag the supervisor reads the run's text, the same fallback it uses when a broken SCIO writes no outcome file.
+- Sweep: the other arguments the supervisor sends SCIO are the health check's `--help`, `status --product` and `report --thread --out`. All of them predate this branch, and `tests/unit/test_recovery_contract.py` parses them with SCIO's parser (I-184). The replay argv is the run's own recorded argv, minus `--decision`.
+- Guard: `test_a_scio_older_than_the_outcome_flag_is_never_handed_it`. The end-to-end test's stand-in SCIO knows the flag and checks the outcome file, and before this change it had passed on the text fallback alone. Guardrail 72.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-188 · The pipefail guard refused the same mistake about sixteen times in one pass; it now repairs the line
+- Found: 2026-11-14 · issue #95, the owner's request ("can we make sure this doesn't happen again") · `scripts/hooks/push_gate.py`
+- Symptom: in the issue #95 wave, every one of the seven agents and the orchestrator piped a check (pytest, mypy, a check into `tail` or `grep`) without `set -o pipefail`. The hook refused each line, about sixteen times in all. Each refusal cost a turn and a retry. The rule was in every agent's brief, in pre-flight item 10 and in guardrail 64, and it was still broken.
+- Root cause: the guard was a refusal, and a refusal only stops a mistake that people will go on making. Piping a long check into `tail` is the natural way to keep its output short. A rule that runs against the natural move is broken at a steady rate, whatever the briefs say.
+- Fix: when a line pipes a check without pipefail, the hook returns `updatedInput` with `set -o pipefail; ` in front of the command, plus a one-line notice, instead of a denial.
+  - Per the Claude Code hooks docs (read for this fix), `updatedInput` replaces the whole input, so every other field is kept.
+  - It sets no `permissionDecision`, because `"allow"` would auto-approve the call. The user's permission rules judge the rewritten command.
+  - The git gates judge the rewritten command, and the backslash refusal (I-176) stays a denial, since a mangled backslash cannot be repaired.
+  - It takes effect for every session when live-wt moves after the merge. Until then the user-level hook copy in live-wt still refuses, and a `deny` beats a rewrite (guardrail 68).
+- Sweep: every refusal in the hook was checked for one that could be a repair instead.
+  - **The bare `git stash`** is refused, because no correct form can be guessed.
+  - **The backslash refusals** stay, because the intended text is unknown.
+  - **The push gate** stays, because only waiting fixes a running CI.
+  - **The commit lint gate** stays, because a lint failure needs an edit.
+  - The pipefail refusal is the only one with a certain repair.
+- Guard: `test_a_piped_check_is_rewritten_to_fail_closed_not_refused` runs the real hook: the input is kept whole, and no permission decision is made. `test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal` checks that a rewritten line still faces the other gates. Guardrail 73.
+- Resolved: 2026-11-14 · Status: resolved

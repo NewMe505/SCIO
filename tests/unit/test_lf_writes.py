@@ -9,7 +9,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CODE_DIRS = ("scio", "evals", "scripts")
+CODE_DIRS = ("scio", "evals", "scripts", "recovery")
 
 
 def _keywords(call: ast.Call) -> set[str]:

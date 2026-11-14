@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 ### Added
+- The external recovery supervisor, `python -m recovery` (ADR 0019, issue #95). It runs a `scio build` as its parent process, outside SCIO, with the standard library only. When the build fails because of a SCIO harness fault, it does the following:
+  - Saves the build's state, including database backups taken before any repair.
+  - Opens a `recovery` issue.
+  - Starts a headless Claude Code session (`--permission-mode auto` with a deny list) that repairs SCIO in a tested PR.
+  - After the owner merges, moves `.scio/live-wt`, checks that the repaired SCIO can still read the halted thread, and replays the original command, so the build resumes from its checkpoint.
+
+  A pure classifier keeps sign-in failures, rate limits, task faults and human stops away from repairs. Merges stay human. Setup and commands are in `docs/RECOVERY.md`.
+- `--outcome-file PATH` on `scio build`, `new`, `run` and `resume`. It writes one JSON object on every exit path (done, paused, halted, refused, crashed), and a crash is still re-raised unchanged.
 - `scio build --gh` reads the PR's CI on GitHub after it pushes a milestone or release PR (up to 15 minutes, ending at the first failing check) and stores it in the checkpoint (`MilestonePR.ci`, `ReleaseRecord.pr_ci`). A merge stop says "ready" only over a green CI: red names the failing checks with their links, and unread, still running or no checks say so (I-141).
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
 - Parallel features, opt-in (`SCIO_PARALLEL_FEATURES=2` to 4; ADR 0018, issue #82). The milestone planner marks features that need nothing from the others `depends_on: []`, and the build runs them at once. Each runs in its own git worktree outside the product tree, on its own branch from the milestone head. The orchestrator alone merges each onto the milestone branch in plan order and reruns the suite on a merged tree. A merge that conflicts or turns the suite red is undone, and that feature's next attempt runs from the new head. CHANGELOG.md and NOTES.md merge with git's union driver. The default of 1 is the serial loop, unchanged. Python products on a local sandbox only.

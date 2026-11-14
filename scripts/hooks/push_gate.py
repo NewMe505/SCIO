@@ -321,13 +321,35 @@ def evaluate(command: str, cwd: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+PIPEFAIL_PREFIX = "set -o pipefail; "
+PIPEFAIL_NOTICE = (
+    "push gate: prepended `set -o pipefail;` so the piped check's own exit code counts "
+    "(I-188; it used to refuse the line)."
+)
+
+
+def with_pipefail(command: str) -> str | None:
+    """The command with ``set -o pipefail;`` in front, when it pipes a check without it,
+    else None (I-188).
+
+    It used to refuse such a line, and the refusal held: no red check read green. But
+    every session paid a turn and a retry for it. In issue #95 seven agents and the
+    orchestrator were refused about sixteen times. Rewriting gives the same guarantee for
+    free."""
+    return PIPEFAIL_PREFIX + command if pipefail_reason(command) else None
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
     except json.JSONDecodeError:
         return 0
-    command = str((data.get("tool_input") or {}).get("command", ""))
-    reason, warning = backslash_reason(command) or pipefail_reason(command), None
+    tool_input = dict(data.get("tool_input") or {})
+    command = str(tool_input.get("command", ""))
+    reason, warning = backslash_reason(command), None
+    fixed = None if reason else with_pipefail(command)
+    if fixed is not None:
+        command = fixed  # the git gates judge the command that will run
     if reason is None and "git" in command:
         reason, warning = evaluate(command, str(data.get("cwd") or os.getcwd()))
     if reason:
@@ -337,8 +359,21 @@ def main() -> int:
             "permissionDecisionReason": reason,
         }
         print(json.dumps({"hookSpecificOutput": decision}))
-    elif warning:
-        print(json.dumps({"systemMessage": warning}))
+        return 0
+    out: dict[str, object] = {}
+    if fixed is not None:
+        # updatedInput replaces the whole input, so every other field is kept. There is no
+        # permissionDecision: "allow" would auto-approve the call, so the user's permission
+        # rules judge the rewritten command as they would have judged the original.
+        out["hookSpecificOutput"] = {
+            "hookEventName": "PreToolUse",
+            "updatedInput": {**tool_input, "command": fixed},
+        }
+    notes = [n for n in (PIPEFAIL_NOTICE if fixed else None, warning) if n]
+    if notes:
+        out["systemMessage"] = " ".join(notes)
+    if out:
+        print(json.dumps(out))
     return 0
 
 

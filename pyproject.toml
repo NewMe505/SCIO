@@ -64,7 +64,7 @@ ignore = ["RUF012"]
 
 [tool.mypy]
 python_version = "3.12"
-packages = ["scio", "evals"]
+packages = ["scio", "evals", "recovery"]
 exclude = ["evals/tasks/"]  # fixture repositories are the agent's code, not ours
 strict = true
 warn_unreachable = true

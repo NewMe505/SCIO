@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s#]+)(?:#[^)]*)?\)")
 MODEL_ID_RE = re.compile(r"\b(claude-[a-z]+-\d(?:-\d)?|gpt-\d[\w.-]*)\b")
-CODE_DIRS = ("scio", "evals", "tests", "scripts")
+CODE_DIRS = ("scio", "evals", "tests", "scripts", "recovery")
 SKIP_DIRS = {
     ".git",
     ".scio",  # runtime state: checkpoints, kept trials, the live-run worktree
