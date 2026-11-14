@@ -12,6 +12,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
   - After the owner merges, moves `.scio/live-wt`, checks that the repaired SCIO can still read the halted thread, and replays the original command, so the build resumes from its checkpoint.
 
   A pure classifier keeps sign-in failures, rate limits, task faults and human stops away from repairs. Merges stay human. Setup and commands are in `docs/RECOVERY.md`.
+- `scio dashboard` reads the recovery supervisor's store read-only (issue #102):
+  - The escalated incidents from the last 14 days come first, as "needs you" with their reason, then the open ones, each linked to the build thread it interrupted.
+  - A supervised build whose process is gone (PID plus creation time) reads `stopped` instead of `in_progress`, and so does its feature attempt.
+  - `GET /api/recovery` serves the same view.
+  - The page's CSP allows scripts only from itself and the pinned Mermaid file.
 - `--outcome-file PATH` on `scio build`, `new`, `run` and `resume`. It writes one JSON object on every exit path (done, paused, halted, refused, crashed), and a crash is still re-raised unchanged.
 - `scio build --gh` reads the PR's CI on GitHub after it pushes a milestone or release PR (up to 15 minutes, ending at the first failing check) and stores it in the checkpoint (`MilestonePR.ci`, `ReleaseRecord.pr_ci`). A merge stop says "ready" only over a green CI: red names the failing checks with their links, and unread, still running or no checks say so (I-141).
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).

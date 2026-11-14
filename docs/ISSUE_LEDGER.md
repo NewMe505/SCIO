@@ -1704,3 +1704,24 @@ Template:
   - The pipefail refusal is the only one with a certain repair.
 - Guard: `test_a_piped_check_is_rewritten_to_fail_closed_not_refused` runs the real hook: the input is kept whole, and no permission decision is made. `test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal` checks that a rewritten line still faces the other gates. Guardrail 73.
 - Resolved: 2026-11-14 · Status: resolved
+
+### I-196 · The orchestrator's brief for #102 placed two facts about SCIO's own code wrongly
+- Found: 2026-11-14 · issue #102, the dashboard agent's report · the brief, not the code
+- Symptom:
+  - The brief said the page's CSP lives in `scio/dashboard/app.py`. It lives in `static/index.html`'s meta tag; `app.py` sets only `frame-ancestors`.
+  - The brief said `SCIO_RECOVERY_HOME` names the store file. It names the folder that holds `state.sqlite`.
+  - The agent checked both at the source and built the right thing, so no code was wrong.
+- Root cause: the brief was written from memory about SCIO's own code. Guardrail 22 covers third-party tools only.
+- Fix: guardrail 22 now names SCIO's own code as well. Each brief says to confirm such facts in the source, which this brief did.
+- Sweep: the #100 and #95 briefs were checked against their files. No other placement was wrong.
+- Guard: guardrail 22, `manual:`. Prose in a brief has no file a check could read.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-197 · A read-only reader of the supervisor's store left an empty WAL, so the dashboard's change feed saw a change no one made
+- Found: 2026-11-14 · issue #102, by the dashboard agent while building the store version · `scio/dashboard/supervisor.py`
+- Symptom: opening `state.sqlite` with `mode=ro` after the supervisor had closed it cleanly created an empty `state.sqlite-wal`. The version the change feed compares includes the WAL file, so it changed once for a read alone, and the feed would have pushed a spurious update.
+- Root cause: SQLite creates the WAL and SHM files for a reader of a WAL database, even a read-only one (also noted under I-127's work). A version built from file metadata has to treat an empty WAL as none.
+- Fix: the store version treats an empty WAL as absent.
+- Sweep: the dashboard's checkpoint-store version (ADR 0017 decision 3) counts rows, not file metadata, so it is not affected.
+- Guard: `test_the_store_version_changes_with_every_supervisor_write` asserts that a read leaves the version unchanged. Guardrail 79.
+- Resolved: 2026-11-14 · Status: resolved
