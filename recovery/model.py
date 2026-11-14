@@ -9,7 +9,47 @@ from __future__ import annotations
 import dataclasses
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
+
+OUTCOME_VERSION = 1
+
+
+class OutcomeFrame(TypedDict):
+    path: str
+    line: int
+    function: str
+
+
+class OutcomeException(TypedDict):
+    type: str
+    """``module.QualName`` as a traceback prints it; builtins without the module
+    (``subprocess.TimeoutExpired``, ``KeyError``)."""
+    message: str
+    frames: list[OutcomeFrame]
+    """``traceback.extract_tb`` order: outermost first, innermost last."""
+
+
+class OutcomeFile(TypedDict):
+    """The JSON object ``scio <build|new|run|resume> --outcome-file PATH`` writes on every
+    exit path (ADR 0019 decision 11). SCIO writes it and the supervisor reads it. The two
+    sides share only this documented shape, never code."""
+
+    version: int
+    command: str
+    status: Literal["done", "paused", "halted", "refused", "crashed"]
+    """``done``: finished. ``paused``: waiting at a human stop. ``halted``: ended with an
+    exit reason, a GitHub stop included. ``refused``: exit 2 before any work. ``crashed``:
+    an uncaught exception, re-raised after the file is written."""
+    exit_code: int
+    thread: str | None
+    exit_reason: str | None
+    """``feature_failed``, ``integration_failed`` ... for a halt; ``github`` for a GitHub
+    stop; None otherwise."""
+    reason: str | None
+    """The last ledger line (``reason:``) or the refusal or GitHub message."""
+    resume: str | None
+    """The resume hint SCIO printed, if any."""
+    exception: OutcomeException | None
 
 
 class FailureClass(enum.StrEnum):
