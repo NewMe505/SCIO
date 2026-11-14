@@ -1626,3 +1626,11 @@ Template:
 - Fix: not yet. ADR 0019's supervisor registers its own scheduled task, and that change will reword this paragraph to match the task's real state.
 - Sweep: the README's other claims about machine state (the user-level hook, I-178) were checked by hand in issue #93.
 - Resolved: - · Status: open
+
+### I-182 · A harness error other than a budget stop in an orchestrator node ends `scio build` with a traceback
+- Found: 2026-11-14 · issue #95, discovery for ADR 0019 · `scio/product/build.py:691-694`, `:1460-1463`, `scio/cli.py:215`
+- Symptom: found by reading, not yet reproduced. `plan_milestone` and `milestone_gate` call the model inside `try ... except BudgetExceeded` only. A `FatalError`, a `StructuredOutputError` or a `RetryableError` whose retries ran out therefore leaves the node; examples are an expired login and a usage window that is used up. `_build` catches only `GitHubError`, so the build ends with a traceback and exit 1, with no halt record and no resume hint. Feature attempts have had this guard since I-100, and orchestrator nodes do not.
+- Root cause: I-100 and I-098 guarded the feature attempt and the PR-body and router calls. Their sweep looked for a `BudgetExceeded` guard, not for every `HarnessError`.
+- Fix: not yet. It sits on the ADR 0019 drill's path. Once I-180 maps a timeout to `RetryableError`, exhausted retries in `plan_milestone` still end in this traceback. The drill's repair session is expected to reach it in its sweep. If it does not, it is fixed after the drill.
+- Sweep: `grep -n "except BudgetExceeded\|except HarnessError" scio/product/build.py` finds `BudgetExceeded` only at :693 (`plan_milestone`) and :1462 (`milestone_gate`), and `HarnessError` at :1043 and :1271 (feature attempts). The model calls in `scio new` (interviewer, product planner) are checked when this is fixed.
+- Resolved: - · Status: open

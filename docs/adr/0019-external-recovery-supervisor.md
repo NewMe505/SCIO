@@ -1,7 +1,7 @@
 # ADR 0019: An external recovery supervisor: Claude repairs SCIO, and the interrupted build resumes from its checkpoint
 
-- **Status:** Proposed. It waits for the owner's review, and no code exists yet. The decisions marked **(owner)** are open.
-- **Date:** 2026-11-13
+- **Status:** Accepted, 2026-11-14. The owner answered section 12: 1 as recommended; 2 the broader permission mode (`auto`); 3 asked which option scales and changes better, and the answer is `%LOCALAPPDATA%` with an override; 4 as recommended; 5 as recommended; 6 do the drill.
+- **Date:** 2026-11-13 (proposed), 2026-11-14 (accepted)
 - **Issue:** #95
 
 ## Context
@@ -43,7 +43,7 @@ The supervisor is a separate top-level package, `recovery/`, a sibling of `scio/
 - **No dependency on SCIO's code.** It uses the **standard library only** and **never imports `scio`**. It reaches SCIO only through processes and files: the launcher's argv, stdout, stderr and exit code, the workspace's `.scio/` files, `git`, `gh` and `claude`. A SCIO defect, an import error, a broken venv or a hang therefore cannot disable it. A test parses every module under `recovery/` and fails on any `scio` import. It reuses the boundary-scan pattern of `test_no_stack_specific_command_outside_the_toolchain_package`.
 - **What it reimplements.** It copies the patterns it needs instead of importing them: the `run_effect` shape, the secret scan and the CI-by-SHA reader. Each copy has its own test.
 
-### 2. Where the supervisor runs (owner)
+### 2. Where the supervisor runs (decided in 12.1)
 The recommendation has three parts.
 - **It is the parent process of the build.**
   - `python -m recovery run --workspace <W> -- build --product <P> --gh <R>` runs the workspace's own launcher (`sh scio.sh build ...`, named in `<W>/recovery.toml`). It uses the same working directory and the same environment.
@@ -117,7 +117,7 @@ live-wt moves only when no `python -m scio` process is running from it. The supe
   - The supervisor finds the issue by listing (guardrail 48). Its progress is one comment that it updates in place (`upsert_issue_comment`'s marker pattern).
 - **Visibility to sessions.** Every SCIO session's state-first inspection already lists the open `live-run` issues. A human session that sees `recovery` in progress there leaves the incident alone, or holds it with `python -m recovery hold <incident>`.
 
-### 7. The repair session: Claude as the external recovery engineer (owner: the tool grant)
+### 7. The repair session: Claude as the external recovery engineer (the grant is decided in 12.2)
 - **Where it works.**
   - A fresh worktree from `origin/main` at `.claude/worktrees/recovery-<incident>`, on branch `fix/<issue>-<slug>`. That path is already git-ignored and skipped by every repository-wide scan (I-155).
   - The supervisor runs `uv sync --frozen --all-extras --group dev` first (guardrail 54).
@@ -135,11 +135,10 @@ live-wt moves only when no `python -m scio` process is running from it. The supe
   2. Decide whether the cause is in SCIO. If it is not, answer `not_scio` with the evidence and change nothing.
   3. Otherwise fix it, with a regression test shown to fail on the old code, a sweep, a ledger entry and a guardrail.
   4. Run the gate and open a draft PR with `Closes #<issue>`.
-- **The grant (recommended).**
-  - Mode: `--permission-mode acceptEdits --permission-prompts none`.
-  - `--allowedTools`: `Read Glob Grep Edit Write`, `Bash(uv run python *)`, `Bash(uv sync *)`, `Bash(ruff *)`, `Bash(git status*)`, `Bash(git diff*)`, `Bash(git log*)`, `Bash(git show*)`, `Bash(git add *)`, `Bash(git commit *)`, `Bash(git push -u origin fix/*)`, `Bash(gh issue view *)`, `Bash(gh issue comment *)`, `Bash(gh pr create *)`, `Bash(gh pr view *)`, `Bash(gh pr ready *)`, `Bash(gh run *)`.
-  - `--disallowedTools`: `Bash(gh pr merge*)`, `Bash(gh api *)`, `Bash(git push --force*)`, `Bash(git push -f*)`, `Bash(git push origin main*)`, `Bash(git reset --hard*)`, `Bash(git stash*)`, `Bash(git checkout main*)`, `Bash(git worktree *)`.
-  - The push-gate hook and the repository's ruleset (a PR and a green `checks` status required on `main`) stay in force underneath.
+- **The grant (the owner's decision, 12.2).**
+  - Mode: `--permission-mode auto --permission-prompts none`, with no allow list.
+  - `--disallowedTools` is a hard limit under `auto`: `Bash(gh pr merge*)`, `Bash(gh api *)`, `Bash(git push --force*)`, `Bash(git push -f*)`, `Bash(git push origin main*)`, `Bash(git reset --hard*)`, `Bash(git stash*)`, `Bash(git checkout main*)`, `Bash(git worktree *)`.
+  - Underneath both, the push-gate hook and the repository's ruleset still apply: `main` requires a PR and a green `checks` status.
 - **Caps.**
   - A wall clock of 90 minutes, then the supervisor kills the process tree.
   - `--max-turns`, with the value measured on the first drill. A cap needs its own measurement (I-099).
@@ -218,13 +217,25 @@ Each transition is a step in the supervisor's step log, run by `run` or by `tick
   A top-level handler writes it and then re-raises, so the traceback and the exit codes stay exactly as they are; the graphcalc session reads them. The supervisor uses the file when it exists and falls back to the text markers when a broken SCIO wrote none.
 - **I-180's fix** comes from the drill (13).
 
-### 12. Open decisions (owner)
-1. **Where the supervisor runs:** parent wrapper plus a scheduled `tick` at logon and every 10 minutes (recommended), the wrapper only, or the scheduled task only.
-2. **The repair session's grant:** the allow and deny lists in 7 with `acceptEdits` (recommended), the `auto` permission mode, or no unattended grant at all (the supervisor prepares the worktree and the brief, and a person starts the session).
-3. **Where its state lives:** `%LOCALAPPDATA%/SCIO/recovery` (recommended, because a SQLite file in a OneDrive-synced folder risks sync conflicts on a busy WAL) or `<SCIO>/.scio/recovery`.
-4. **What resumes automatically:** a crash, a hang or a `feature_failed` after a merged repair, and an orphan (recommended). Never a human stop.
-5. **A repair that changes `uv.lock`:** in version 1, refuse the resume and escalate (recommended), or run `uv sync --frozen` on the main checkout first.
-6. **The live drill:** I-180 as the real defect (recommended). That means I-180 is not fixed by hand before the drill.
+### 12. The owner's decisions (2026-11-14)
+1. **Where the supervisor runs:** the parent wrapper plus a scheduled `tick` at logon and every 10 minutes.
+2. **The repair session's grant:** `--permission-mode auto --permission-prompts none`. The deny list in 7 stays as a hard limit beneath it, and the allow list is dropped. A probe confirmed that print mode accepts `auto` and completes a turn with no denials. Phase 4 then has to show, in a throwaway worktree, which of the repair's real actions `auto` allows: Edit and Write, `uv run python scripts/gate.py`, `git push -u origin fix/*` and `gh pr create --draft`. It must also show that a denied command such as `gh pr merge` is still refused. If `auto` refuses the push or the PR, that goes back to the owner; there is no silent fallback.
+3. **Where its state lives:** `%LOCALAPPDATA%/SCIO/recovery`, which `SCIO_RECOVERY_HOME` overrides. The owner asked which option scales and changes better, and this one wins on both:
+   - One store per machine serves any number of workspaces.
+   - It does not depend on any checkout, so branch switches, worktree removal and moving the repository leave it alone.
+   - OneDrive does not sync it, and syncing can corrupt a busy SQLite WAL.
+   - A `schema_version` table makes later changes migrations.
+   - The location is a single setting, so moving it, or moving to a server database, means changing one setting.
+4. **What resumes automatically:** a crash, a hang or a `feature_failed` after a merged repair, and an orphan. Never a human stop.
+5. **A repair that changes `uv.lock`:** the resume is refused and the incident escalates (version 1).
+6. **The live drill:** I-180 is the real defect, so it is not fixed by hand before the drill. The drill's fault is injected once and outside everything the run record carries, for example a switch that the workspace launcher removes after using it. Otherwise the replay would reproduce the fault, and the incident would never reach `verified`. I-182 (the orchestrator nodes' guard gap) sits on the same path, and the repair's sweep is expected to reach it.
+
+### 12a. Measured before the code (pre-flight 8, 2026-11-14)
+- A child started with `subprocess.Popen` survives when its parent is killed, whatever the creation flags (none, `CREATE_NEW_PROCESS_GROUP`, `DETACHED_PROCESS`, `CREATE_BREAKAWAY_FROM_JOB`). The shell this was measured from is not in a job that kills on close. The context Task Scheduler gives is measured in phase 6b.
+- `taskkill /T /F /PID <sh>` reaches the Python process under `sh -> env -> uv -> python`, the same chain `scio.sh` builds.
+- `run` passes the child's stdout and stderr through to its own output as well as to the files, and exits with the child's code. A graphcalc session therefore still reads `PAUSED for a human:` and the resume hints.
+- A replay from `tick` runs in Task Scheduler's environment. So the run record also keeps `PATH`, `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA`, which hold no secrets. Without them, `sh`, `uv`, `claude` and the Max login might not resolve.
+- "Standard library only" is a test, not a note. Any import under `recovery/` that is not in `sys.stdlib_module_names` and not `recovery.*` fails it. `python -S -m recovery --help`, which skips site-packages, must work.
 
 ### 13. Validation
 - **Offline, in CI** (`tests/recovery/`):
