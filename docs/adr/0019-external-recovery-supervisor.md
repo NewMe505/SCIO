@@ -167,7 +167,7 @@ live-wt moves only when no `python -m scio` process is running from it. The supe
   - Then `git -C .scio/live-wt fetch origin` and `git -C .scio/live-wt checkout --detach <sha>`, probed by `rev-parse HEAD`. The previous SHA is recorded for rollback.
   - This also moves the hook that every session runs (guardrail 68), which is one more reason for the CI precondition.
 - **Health check.** Every step must pass, or live-wt goes back to the recorded SHA and the incident escalates:
-  1. `sh scio.sh --version` exits 0 from the workspace.
+  1. `sh scio.sh --help` exits 0 from the workspace (SCIO has no `--version`; I-184).
   2. `uv.lock` is the same at the old and new SHA. The launcher runs `--no-sync` on the main venv (owner, 12.5).
   3. The halted thread loads under the new code. `scio status --product <P>` and `scio report --thread <T>` must exit 0 against **copies** of the workspace's databases (guardrail 14). A repair that changes `scio/state/models.py` and cannot read the old checkpoint stops here, before any resume.
 - **Resume** replays the recorded argv with no `--decision`, as a new supervised run linked to the incident. It is automatic only for `harness_suspect`, `hang` and `orphan` (owner, 12.4). Merge, gate, release and feature-decision stops always wait for the human.

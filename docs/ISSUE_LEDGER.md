@@ -1646,3 +1646,34 @@ Template:
   - `claude_runner` spawns `claude`, which is on both PATHs.
 - Guard: `test_a_program_on_the_child_envs_path_only_is_found`. It runs a `.cmd` (on POSIX, an executable script) that only the env's PATH holds. With `resolve_program` disabled by a monkeypatch the test fails, which was checked. Guardrail 69.
 - Resolved: 2026-11-14 · Status: resolved
+
+### I-184 · The recovery health check's first step called `scio --version`, which SCIO does not have
+- Found: 2026-11-14 · issue #95, wave agent E while implementing `recovery/runtime.py::health_check` · ADR 0019 decision 8
+- Symptom: `uv run python -m scio --version` exits 2 (`unrecognized arguments`). The health check runs before every resume, so step 1 would have failed on every real resume, and every repaired incident would have escalated at `runtime_updated`. All the offline tests used a fake launcher that accepted any argument.
+- Root cause: the ADR and the contract stub named a `--version` flag from memory. Nothing checked a command line that the supervisor sends to SCIO against SCIO's own parser, because the two packages share no code by design.
+- Fix: step 1 is `SMOKE_ARGS = ("--help",)`. It imports SCIO's CLI and exits 0 from the parser. ADR 0019 decision 8 and the runtime docstring now say `--help`.
+- Sweep: every command line `recovery/` sends to SCIO.
+  - The health check's `--help`, `status --product` and `report --thread --out` are now parsed by SCIO's real `_parser()` in a test.
+  - The `--outcome-file` that `runner.supervise` appends is accepted by `build`, `new`, `run` and `resume` (`tests/unit/test_outcome_file.py`, agent F).
+- Guard: `tests/unit/test_recovery_contract.py`. It imports both sides and replaces the launcher with SCIO's parser. `test_the_parser_check_refuses_a_flag_scio_lacks` shows that the check refuses `--version`. Guardrail 70.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-185 · The repair session inherited the workspace's `SCIO_*` settings, which would reach SCIO's own gate
+- Found: 2026-11-14 · issue #95, wave agent D's report · `recovery/repair.py::repair_env`
+- Symptom: `repair_env` removed `CLAUDECODE` and the API keys and forced `SCIO_PROVIDER_OVERRIDE=fake`. It kept every other `SCIO_*` variable of the process that starts the repair, such as `SCIO_WORKER_BACKEND=claude_code`, `SCIO_PARALLEL_FEATURES=2` and a workspace's `SCIO_CHECKPOINT_DSN`. The repair session runs `scripts/gate.py` on SCIO's own tests, and `scio.settings` reads those variables, so the gate could have run against the workspace's settings.
+- Root cause: the contract named only the variables known to break `claude -p` (ADR 0012). It did not name the ones that change SCIO's behaviour under test.
+- Fix: `repair_env` drops every `SCIO_*` variable, compared without case as on Windows, then sets `SCIO_PROVIDER_OVERRIDE=fake` and `UV_SYSTEM_CERTS=1`.
+- Sweep: every environment `recovery/` hands to a process.
+  - A replay restores the run's own recorded environment, which must keep its `SCIO_*` values.
+  - The health check runs the launcher with the run's environment plus database copies.
+  - `config.recorded_env` already drops secrets.
+- Guard: `test_the_environment_drops_secrets_and_nesting_and_stays_offline` now holds workspace `SCIO_*` settings and asserts they are gone. Guardrail 71.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-186 · The commit gate lints every changed Python file in the tree, not just the staged ones, so an orchestrator commit during a parallel wave is refused
+- Found: 2026-11-14 · issue #95, committing wave 1's finished modules while three agents were still writing · `scripts/hooks/push_gate.py` commit gate
+- Symptom: `git add <14 finished files> && git commit` was denied: "`ruff check` fails on the changed Python files". The failures were in `recovery/machine.py` and `tests/recovery/test_scrub.py`, two unstaged files that running agents had not finished. The commit would not have included them.
+- Root cause: confirmed by reading `commit_reason` (`scripts/hooks/push_gate.py:256-272`). It lints every `.py` file that `git status --porcelain --untracked-files=all` lists. That choice is deliberate. The hook runs before the whole command line, so in `git add X && git commit` nothing is staged yet when it looks, and `git diff --cached` would miss X. The cost is that one session's unfinished files block another session's commit in a shared checkout.
+- Fix: not yet. A likely fix is to lint the paths a `git add` in the same command names, the staged files, and nothing else, falling back to the whole tree for `git commit -a` or `git add -A`. A hook change reaches other sessions only when live-wt moves (guardrail 68), so it gets its own PR. Meanwhile, commit after the wave's agents finish.
+- Sweep: -
+- Resolved: - · Status: open

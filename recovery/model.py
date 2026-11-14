@@ -285,6 +285,13 @@ class RepairVerdict:
     risks: list[str] = field(default_factory=list)
     note: str = ""
     """Free text; for ``not_scio`` and ``cannot_repair`` it carries the evidence."""
+    num_turns: int | None = None
+    """The session's turns, read from Claude Code's result and never from the answer. The
+    live drill sets ``repair_max_turns`` from it (I-099)."""
+    cost_usd: float | None = None
+    """Claude Code's API-price estimate; nothing is billed on the Max login."""
+    duration_ms: int | None = None
+    session_id: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RepairVerdict:
