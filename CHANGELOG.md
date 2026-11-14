@@ -13,6 +13,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
   A pure classifier keeps sign-in failures, rate limits, task faults and human stops away from repairs. Merges stay human. Setup and commands are in `docs/RECOVERY.md`.
 - `python -m recovery watch <incident> [--follow]` shows one incident live: its state, its timeline, and the repair session's steps, read from Claude Code's transcript of the repair worktree (issue #107).
+- `scio dashboard` reads the recovery supervisor's store read-only (issue #102):
+  - The escalated incidents from the last 14 days come first, as "needs you" with their reason, then the open ones, each linked to the build thread it interrupted.
+  - A supervised build whose process is gone (PID plus creation time) reads `stopped` instead of `in_progress`, and so does its feature attempt.
+  - `GET /api/recovery` serves the same view.
+  - The page's CSP allows scripts only from itself and the pinned Mermaid file.
 - `--outcome-file PATH` on `scio build`, `new`, `run` and `resume`. It writes one JSON object on every exit path (done, paused, halted, refused, crashed), and a crash is still re-raised unchanged.
 - `scio build --gh` reads the PR's CI on GitHub after it pushes a milestone or release PR (up to 15 minutes, ending at the first failing check) and stores it in the checkpoint (`MilestonePR.ci`, `ReleaseRecord.pr_ci`). A merge stop says "ready" only over a green CI: red names the failing checks with their links, and unread, still running or no checks say so (I-141).
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
@@ -25,6 +30,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - The push-gate hook also refuses two more kinds of command: a heredoc or `python -c` script that holds a backslash, or any command with a double backslash, which the Bash tool halves before the shell runs (guardrail 17, I-176); and a check piped into another command without `set -o pipefail` (I-173).
 
 ### Fixed
+- `scio dashboard`'s live updates stop as soon as the page closes. The `/ws` loop cancelled its read of the socket at every poll, and a cancel could lose the client's disconnect, so the server kept polling a page that was gone. One read now lasts the whole connection (I-202, issue #102).
 - The push-gate hook's commit gate lints only what the commit can contain: the staged files plus the paths the command line names. It lints the whole tree on `-a`, `git add -A` or anything it cannot read. One session's unfinished files no longer block another session's commit in a shared checkout (I-186, issue #100). It also no longer skips the first file `git status` lists, whose leading space it used to strip (I-193).
 - A `claude -p` call that outlives its timeout no longer ends a build in a traceback. The recovery supervisor's first live drill found this (I-180, I-182, I-189, issue #105).
   - The call's whole process tree is killed, and the timeout is a retryable error that the harness retries.
