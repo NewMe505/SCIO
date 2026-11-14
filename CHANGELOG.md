@@ -12,6 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
   - After the owner merges, moves `.scio/live-wt`, checks that the repaired SCIO can still read the halted thread, and replays the original command, so the build resumes from its checkpoint.
 
   A pure classifier keeps sign-in failures, rate limits, task faults and human stops away from repairs. Merges stay human. Setup and commands are in `docs/RECOVERY.md`.
+- `python -m recovery watch <incident> [--follow]` shows one incident live: its state, its timeline, and the repair session's steps, read from Claude Code's transcript of the repair worktree (issue #107).
 - `scio dashboard` reads the recovery supervisor's store read-only (issue #102):
   - The escalated incidents from the last 14 days come first, as "needs you" with their reason, then the open ones, each linked to the build thread it interrupted.
   - A supervised build whose process is gone (PID plus creation time) reads `stopped` instead of `in_progress`, and so does its feature attempt.
