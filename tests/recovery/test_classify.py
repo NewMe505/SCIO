@@ -322,6 +322,53 @@ def test_a_failed_feature_line_that_is_not_exit_error_is_no_fallback() -> None:
     assert cls(ev) is FailureClass.UNKNOWN
 
 
+# --- row 9b: a HarnessError SCIO's CLI stopped on (I-182, issue #105) ---
+
+HARNESS_STOP_LINE = (
+    "scio build stopped on a harness error: StructuredOutputError: milestone_planner: "
+    "3 answers failed validation"
+)
+CLAUDE_TIMEOUT_STOP = (
+    "scio build stopped on a harness error: RetryableError: claude -p timed out after 600s; "
+    "its process tree was killed"
+)
+
+
+def test_a_harness_stop_naming_an_exception_is_harness_suspect() -> None:
+    """Before I-182 the same failure was a traceback through scio, row 8: still a repair."""
+    c = classify(halt("harness", HARNESS_STOP_LINE))
+    assert c.failure_class is FailureClass.HARNESS_SUSPECT and c.signature
+    assert c.summary.startswith("scio build stopped on StructuredOutputError: milestone_planner")
+
+
+def test_a_harness_stop_on_stderr_without_an_outcome_file_is_read_too() -> None:
+    stderr = f"{HARNESS_STOP_LINE}\nEvery finished step is checkpointed (thread b-m1).\n"
+    assert cls(Evidence(exit_code=1, stderr_tail=stderr)) is FailureClass.HARNESS_SUSPECT
+
+
+@pytest.mark.parametrize("exc", ["BudgetExceeded", "RefusalError"])
+def test_a_harness_stop_by_a_spend_cap_or_a_refusal_is_a_task_fault(exc: str) -> None:
+    line = f"scio new stopped on a harness error: {exc}: spent"
+    assert cls(halt("harness", line)) is FailureClass.TASK_FAULT
+
+
+def test_a_harness_halt_whose_line_names_no_exception_is_not_row_9b() -> None:
+    assert cls(halt("harness", "the planner gave up")) is FailureClass.UNKNOWN
+
+
+def test_a_claude_timeout_is_external_transient_wherever_it_stopped_the_run() -> None:
+    """I-180: a ``claude -p`` killed at its timeout on every retry is the provider's, not a
+    SCIO defect, at an orchestrator node (the drill's shape) or in a feature attempt."""
+    feature = (
+        "P1 attempt 1 failed: RetryableError: claude -p timed out after 1800s; its process "
+        "tree was killed; the next `scio build` starts attempt 2"
+    )
+    for ev in (halt("harness", CLAUDE_TIMEOUT_STOP), halt("feature_failed", feature)):
+        assert cls(ev) is FailureClass.EXTERNAL_TRANSIENT
+    stop = CLAUDE_TIMEOUT_STOP.replace("claude -p timed out", "claude -p stalled")
+    assert cls(halt("harness", stop)) is FailureClass.HARNESS_SUSPECT
+
+
 # --- row 10 ---
 
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from scio.aci.sandbox.base import ExecResult, Limits, resolve_under
+from scio.proctree import run_tree
 
 log = logging.getLogger(__name__)
 
@@ -132,15 +133,13 @@ class LocalSandbox:
             run_env.pop("PIP_NO_INDEX", None)
         t0 = time.perf_counter()
         try:
-            proc = subprocess.run(
+            # the whole tree at the timeout: a test's server or child process with the pipes
+            # open otherwise outlived it and, on Windows, made the timeout a hang (I-180)
+            proc = run_tree(
                 argv,
                 cwd=self.resolve(cwd) if cwd else self.root,
                 env=run_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
+                timeout_s=timeout,
                 preexec_fn=self._preexec if sys.platform != "win32" else None,
             )
         except subprocess.TimeoutExpired as exc:

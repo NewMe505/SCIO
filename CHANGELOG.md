@@ -25,6 +25,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - The push-gate hook also refuses two more kinds of command: a heredoc or `python -c` script that holds a backslash, or any command with a double backslash, which the Bash tool halves before the shell runs (guardrail 17, I-176); and a check piped into another command without `set -o pipefail` (I-173).
 
 ### Fixed
+- A `claude -p` call that outlives its timeout no longer ends a build in a traceback. The recovery supervisor's first live drill found this (I-180, I-182, I-189, issue #105).
+  - The call's whole process tree is killed, and the timeout is a retryable error that the harness retries.
+  - When the retries run out, `scio build`, `new`, `run` and `resume` stop with the cause and the command that resumes the thread at the failed node, never a traceback. The outcome is `halted`, with exit reason `harness`. This also covers any other harness error that leaves a node guarding only a budget stop, such as an expired login.
+  - The local sandbox's timeout kills the whole tree too. On Windows, a test's child process that held the pipes kept a timed-out command open.
+  - A `claude` or `gh` that cannot start is a `FatalError` or a `GitHubError`.
+  - The supervisor reads a timed-out `claude -p` as transient and the new stop line as a SCIO suspect.
 - The push-gate hook follows Git Bash paths. `cd /c/Users/...` and `git -C /c/...` pointed it at `C:/c/Users/...`, so it could neither lint a commit nor check a push, and it let both through with a warning (I-179, issue #91).
 - Every Claude Code session SCIO starts runs with `--safe-mode`, so it no longer loads the CLAUDE.md files of the product's parent directories. In the graphcalc run every coder session had been reading the operator's rules, "Never edit its code by hand" among them (I-171, issue #87).
 - A python product's CI and README Develop block install the project (`pip install -e . ruff pytest`), so the dependencies `pyproject.toml` declares reach the tests; before, CI installed only ruff and pytest, and the first feature importing an approved dependency failed the PR's CI at collection while every SCIO check passed in its sandbox venv (I-140, the graphcalc run's S6). The scaffold's `pyproject.toml` now has a setuptools `[build-system]` and lists its package, so the install works whatever directories the product adds.
