@@ -36,6 +36,7 @@ from scio.harness.types import (
     StreamEvent,
     Usage,
 )
+from scio.proctree import run_tree
 
 PROVIDER_NAME = "claude_code"
 SAFE_MODE = "--safe-mode"
@@ -50,6 +51,10 @@ STRUCTURED_MAX_TURNS = 3
 Claude Code bounces with a schema error when it misses, and the retry is another turn
 (I-077). A plain completion keeps one turn."""
 STRIPPED_ENV = ("CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+TIMEOUT_MESSAGE = "claude -p timed out"
+"""How a ``claude`` process killed at its timeout is reported (a ``RetryableError``, I-180).
+The recovery supervisor reads it as a transient failure (``recovery/classify.py``'s
+``TRANSIENT_MARKERS``; the two packages share the text, not code)."""
 RETRYABLE_ERRORS = ("rate_limit", "overloaded", "server_error", "api_retry", "timed out")
 TRANSIENT_SUBTYPES = ("error_during_execution",)
 FATAL_ERRORS = ("not logged in", "authentication", "credit balance", "budget", "invalid_request")
@@ -65,7 +70,9 @@ class ClaudeRunResult:
 Runner = Callable[..., ClaudeRunResult]
 """``runner(argv, *, cwd, stdin, timeout_s, env=None) -> ClaudeRunResult``; argv excludes the
 binary. ``env`` is the whole process environment when given (a worker turn's, with the product
-interpreter first on PATH, I-114); None means :func:`subprocess_env`."""
+interpreter first on PATH, I-114); None means :func:`subprocess_env`. A run past ``timeout_s``
+raises ``RetryableError`` after its process tree is killed, and a binary that cannot start
+raises ``FatalError``: nothing leaves a runner outside the harness's failure kinds (I-180)."""
 
 
 def subprocess_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -86,17 +93,23 @@ def claude_runner(binary: str = "claude") -> Runner:
         timeout_s: float = 600.0,
         env: Mapping[str, str] | None = None,
     ) -> ClaudeRunResult:
-        proc = subprocess.run(
-            [binary, *argv],
-            input=stdin,
-            cwd=str(cwd) if cwd else None,
-            env=dict(env) if env is not None else subprocess_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_s,
-        )
+        # Every failure here leaves as one of the harness's three kinds, never as a
+        # subprocess exception that the retry layer and every node's guard miss (I-180).
+        try:
+            proc = run_tree(
+                [binary, *argv],
+                input=stdin,
+                cwd=cwd,
+                env=env if env is not None else subprocess_env(),
+                timeout_s=timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:  # the tree is killed: a worker's Bash too
+            raise RetryableError(
+                f"{TIMEOUT_MESSAGE} after {timeout_s:g}s; its process tree was killed",
+                cause=exc,
+            ) from exc
+        except OSError as exc:  # no such binary, or not executable: no retry can help
+            raise FatalError(f"cannot start {binary}: {exc}", cause=exc) from exc
         return ClaudeRunResult(proc.returncode, proc.stdout, proc.stderr)
 
     return run

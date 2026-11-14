@@ -42,14 +42,17 @@ class Runner(Protocol):
 
 
 def GhRunner(argv: Sequence[str], *, stdin: str | None = None) -> RunResult:
-    proc = subprocess.run(
-        ["gh", *argv],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", *argv],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:  # no gh on PATH: a failed call (GitHubError), not a traceback (I-180)
+        return RunResult(127, "", f"cannot start gh: {exc}")
     return RunResult(proc.returncode, proc.stdout, proc.stderr)
 
 

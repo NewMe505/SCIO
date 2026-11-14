@@ -12,6 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
   - After the owner merges, moves `.scio/live-wt`, checks that the repaired SCIO can still read the halted thread, and replays the original command, so the build resumes from its checkpoint.
 
   A pure classifier keeps sign-in failures, rate limits, task faults and human stops away from repairs. Merges stay human. Setup and commands are in `docs/RECOVERY.md`.
+- `python -m recovery watch <incident> [--follow]` shows one incident live: its state, its timeline, and the repair session's steps, read from Claude Code's transcript of the repair worktree (issue #107).
 - `--outcome-file PATH` on `scio build`, `new`, `run` and `resume`. It writes one JSON object on every exit path (done, paused, halted, refused, crashed), and a crash is still re-raised unchanged.
 - `scio build --gh` reads the PR's CI on GitHub after it pushes a milestone or release PR (up to 15 minutes, ending at the first failing check) and stores it in the checkpoint (`MilestonePR.ci`, `ReleaseRecord.pr_ci`). A merge stop says "ready" only over a green CI: red names the failing checks with their links, and unread, still running or no checks say so (I-141).
 - `--decision recheck` at a merge stop (milestone or release) pushes the branch's new commits, for instance a `scio upgrade` made at the stop, once per head and never forced, then reads that head's CI and asks again (I-142).
@@ -25,6 +26,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ### Fixed
 - The push-gate hook's commit gate lints only what the commit can contain: the staged files plus the paths the command line names. It lints the whole tree on `-a`, `git add -A` or anything it cannot read. One session's unfinished files no longer block another session's commit in a shared checkout (I-186, issue #100). It also no longer skips the first file `git status` lists, whose leading space it used to strip (I-193).
+- A `claude -p` call that outlives its timeout no longer ends a build in a traceback. The recovery supervisor's first live drill found this (I-180, I-182, I-189, issue #105).
+  - The call's whole process tree is killed, and the timeout is a retryable error that the harness retries.
+  - When the retries run out, `scio build`, `new`, `run` and `resume` stop with the cause and the command that resumes the thread at the failed node, never a traceback. The outcome is `halted`, with exit reason `harness`. This also covers any other harness error that leaves a node guarding only a budget stop, such as an expired login.
+  - The local sandbox's timeout kills the whole tree too. On Windows, a test's child process that held the pipes kept a timed-out command open.
+  - A `claude` or `gh` that cannot start is a `FatalError` or a `GitHubError`.
+  - The supervisor reads a timed-out `claude -p` as transient and the new stop line as a SCIO suspect.
 - The push-gate hook follows Git Bash paths. `cd /c/Users/...` and `git -C /c/...` pointed it at `C:/c/Users/...`, so it could neither lint a commit nor check a push, and it let both through with a warning (I-179, issue #91).
 - Every Claude Code session SCIO starts runs with `--safe-mode`, so it no longer loads the CLAUDE.md files of the product's parent directories. In the graphcalc run every coder session had been reading the operator's rules, "Never edit its code by hand" among them (I-171, issue #87).
 - A python product's CI and README Develop block install the project (`pip install -e . ruff pytest`), so the dependencies `pyproject.toml` declares reach the tests; before, CI installed only ruff and pytest, and the first feature importing an approved dependency failed the PR's CI at collection while every SCIO check passed in its sandbox venv (I-140, the graphcalc run's S6). The scaffold's `pyproject.toml` now has a setuptools `[build-system]` and lists its package, so the install works whatever directories the product adds.

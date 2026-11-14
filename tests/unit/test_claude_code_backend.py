@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -117,17 +119,90 @@ def test_claude_runner_uses_a_given_env_else_subprocess_env(
     none and keep :func:`subprocess_env`."""
     seen: list[dict[str, str]] = []
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        seen.append(kwargs["env"])
-        return subprocess.CompletedProcess(argv, 0, "{}", "")
+    class FakePopen:
+        returncode = 0
+
+        def __init__(self, argv: list[str], **kwargs: Any) -> None:
+            seen.append(kwargs["env"])
+
+        def communicate(self, stdin: str | None = None, timeout: float | None = None) -> Any:
+            return "{}", ""
 
     monkeypatch.setenv("CLAUDECODE", "1")
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
     run = claude_runner("claude")
     run(["-p"], stdin="q", env={"PATH": "product-bin", "K": "v"})
     run(["-p"], stdin="q")
     assert seen[0] == {"PATH": "product-bin", "K": "v"}
     assert seen[1] == subprocess_env() and "CLAUDECODE" not in seen[1]
+
+
+GRANDCHILD = "import sys, time; time.sleep(5); open(sys.argv[1], 'w').write('alive')"
+"""A process the hung ``claude`` started (a worker's Bash command): it holds the pipes, and
+writes its marker unless it is killed with its parent."""
+HUNG_PARENT = (
+    "import subprocess, sys, time; "
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]]); "
+    "open(sys.argv[3], 'w').write('started'); "
+    "time.sleep(60)"
+)
+"""A ``claude`` that starts a child holding its pipes, says so, then hangs past its timeout."""
+
+
+def test_a_claude_past_its_timeout_is_retryable_and_its_process_tree_is_killed(
+    tmp_path: Path,
+) -> None:
+    """I-180, issue #105 (incident inc-20261114094856-5356c9): a ``claude -p`` that outlived
+    its timeout raised ``subprocess.TimeoutExpired``, outside the harness's three failure
+    kinds, so the harness never retried it and ``scio build`` ended in a traceback. It is a
+    ``RetryableError`` now. The whole tree is killed: on Windows ``subprocess.run`` drained
+    the pipes after killing only ``claude``, so a child holding them turned the timeout
+    into a hang, and on POSIX the child outlived it."""
+    marker, started = tmp_path / "grandchild-alive", tmp_path / "claude-started"
+    run = claude_runner(sys.executable)
+    t0 = time.monotonic()
+    with pytest.raises(RetryableError, match="claude -p timed out after 3s") as info:
+        run(["-c", HUNG_PARENT, GRANDCHILD, str(marker), str(started)], timeout_s=3.0)
+    assert time.monotonic() - t0 < 5.0  # no drain waits for the child holding the pipes
+    assert isinstance(info.value.cause, subprocess.TimeoutExpired)
+    assert started.is_file()  # the child was running when the timeout fired
+    time.sleep(max(0.0, t0 + 7.0 - time.monotonic()))  # past the child's own 5 s
+    assert not marker.exists(), "the hung claude's child outlived the timeout"
+
+
+def test_a_missing_claude_binary_is_a_fatal_error(tmp_path: Path) -> None:
+    """The I-180 sweep: an ``OSError`` from starting the binary left the harness raw too."""
+    run = claude_runner(str(tmp_path / "no-such-claude"))
+    with pytest.raises(FatalError, match="cannot start"):
+        run(["-p"], stdin="q", timeout_s=5.0)
+
+
+def test_the_harness_retries_a_timed_out_claude_call(tmp_path: Path) -> None:
+    """The drill's shape end to end, one call: the first ``claude -p`` hangs past the
+    provider's timeout and is killed, the harness retries, and the second answers."""
+    real = claude_runner(sys.executable)
+    answer = {"tier": "T1", "rationale": "r", "confidence": 0.5}
+    fake = FakeClaude([_result(structured_output=answer)])
+    attempts: list[float] = []
+
+    def runner(argv: Sequence[str], **kwargs: Any) -> ClaudeRunResult:
+        attempts.append(kwargs["timeout_s"])
+        if len(attempts) == 1:
+            return real(["-c", "import time; time.sleep(60)"], **kwargs)
+        return fake(argv, **kwargs)
+
+    settings = Settings(provider_override="claude_code")
+    config = ModelsConfig.load(settings.models_path)
+    registry = ProviderRegistry(config, settings)
+    registry.register("claude_code", ClaudeCodeProvider(runner=runner, timeout_s=1.0))
+    slept: list[float] = []
+    harness = Harness(config, registry, settings=settings, sleep=slept.append)
+    req = harness.build_request("router", system="s", messages=[Message.user("route")])
+    out = harness.structured(req, RouterOutput).value
+    assert out.tier.value == "T1"
+    assert attempts == [1.0, 1.0] and len(slept) == 1
+    (entry,) = harness.ledger.to_dict()["entries"]
+    assert entry["attempts"] == 2
 
 
 def test_provider_structured_call_is_one_restricted_turn_with_a_schema() -> None:

@@ -1,23 +1,34 @@
 """The supervisor (recovery/) and SCIO share no code, only command lines and a file shape.
 These tests import both sides and check that what the supervisor sends, SCIO's own
-parser accepts (I-184: the health check first called a `scio --version` SCIO never had)."""
+parser accepts (I-184: the health check first called a `scio --version` SCIO never had),
+and that what SCIO reports, the supervisor's classifier reads as meant (I-182)."""
 
 from __future__ import annotations
 
 import contextlib
 import io
 import sqlite3
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
+from recovery.classify import classify
 from recovery.commands import CommandResult
 from recovery.config import WorkspaceConfig
-from recovery.model import RunRecord
+from recovery.model import Evidence, FailureClass, RunRecord
 from recovery.runner import OUTCOME_SUBCOMMANDS
 from recovery.runtime import SMOKE_ARGS, health_check
-from scio.cli import _parser
+from scio.cli import HARNESS_HALT, _parser, harness_stop_line
+from scio.harness.failures import (
+    BudgetExceeded,
+    FatalError,
+    HarnessError,
+    RetryableError,
+    StructuredOutputError,
+)
+from scio.harness.providers.claude_code import claude_runner
 
 LAUNCHER = ("sh", "scio.sh")
 
@@ -107,3 +118,26 @@ def test_every_health_check_command_is_one_scios_cli_accepts(tmp_path: Path) -> 
     problems = health_check(cfg, run, tmp_path / "health", runner=launcher)
     assert problems == []
     assert [args[0] for args in launcher.seen] == ["--help", "status", "report"]
+
+
+def test_scios_harness_stops_land_in_the_classifier_rows_meant_for_them() -> None:
+    """I-180, I-182, issue #105: SCIO's stop line and its ``claude`` timeout message, each
+    made by SCIO's own code, read as the supervisor means them. A timeout the harness could
+    not retry away is transient (replay after a backoff), an expired login is auth, a model
+    that never met its schema is a SCIO suspect (repair), a spend cap is the task's."""
+    run = claude_runner(sys.executable)
+    with pytest.raises(RetryableError) as timed_out:
+        run(["-c", "import time; time.sleep(30)"], timeout_s=0.5)
+    cases: list[tuple[HarnessError, FailureClass]] = [
+        (timed_out.value, FailureClass.EXTERNAL_TRANSIENT),
+        (FatalError("claude -p failed: Not logged in (subtype=-)"), FailureClass.EXTERNAL_AUTH),
+        (
+            StructuredOutputError("milestone_planner: no valid answer", attempts=3, errors=["x"]),
+            FailureClass.HARNESS_SUSPECT,
+        ),
+        (BudgetExceeded("spent", tokens_used=1, usd_used=1.0), FailureClass.TASK_FAULT),
+    ]
+    for exc, expected in cases:
+        line = harness_stop_line("build", exc)
+        ev = Evidence(exit_code=1, halt_reason=HARNESS_HALT, last_ledger_line=line)
+        assert classify(ev).failure_class is expected, line

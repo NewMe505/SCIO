@@ -1616,8 +1616,11 @@ Template:
 - Symptom: not seen live yet; found by reading, then reproduced. `claude_runner(sys.executable)` running `time.sleep(5)` with `timeout_s=1` raises `subprocess.TimeoutExpired`, which is not a `HarnessError`. A `claude -p` process that outlives its timeout (600 s for a tool-less call, 1800 s for a worker turn) therefore escapes `scio/product/build.py`'s `except HarnessError` around a feature attempt (the I-100 guard) and every orchestrator node's guard. `scio build` ends with a traceback and exit 1, with no `feature_failed` record and no resume hint.
 - Root cause: `claude_runner` passes `timeout=` to `subprocess.run` and maps the binary's own error results (`parse_result`), but not the subprocess layer's timeout. Both the provider and the worker build their runner from it.
 - Fix: not yet. ADR 0019 (proposed) makes it the real defect for the recovery supervisor's end-to-end drill. A stub `claude` that sleeps past a short `SCIO_REQUEST_TIMEOUT_S` reproduces it offline. The expected fix is to map `TimeoutExpired` to `RetryableError` and kill the process tree, with a test.
+  - Done in I-189 (issue #105), after the drill hit it live. `claude_runner` runs through `scio.proctree.run_tree`, whose timeout kills the whole tree and bounds the drain after the kill. A timeout is a `RetryableError` (`claude -p timed out after Ns; its process tree was killed`), and a binary that cannot start is a `FatalError`.
 - Sweep: `grep -rn "TimeoutExpired" scio/` finds it caught in `aci/apps.py`, `aci/sandbox/local.py` and `aci/sandbox/docker.py`, but not in `harness/providers/claude_code.py` or `loop/claude_code_worker.py`. Every other `subprocess.run(..., timeout=` site is checked when this is fixed.
-- Resolved: - · Status: open
+  - Done in I-189, which lists every site and what was found.
+- Guard: guardrail 74.
+- Resolved: 2026-11-14 · Status: resolved (I-189, issue #105)
 
 ### I-181 · The README says the nightly live task runs daily; it has been disabled since 2026-10-12
 - Found: 2026-11-13 · issue #95, discovery · `README.md` "Nightly live suite"
@@ -1632,8 +1635,16 @@ Template:
 - Symptom: found by reading, not yet reproduced. `plan_milestone` and `milestone_gate` call the model inside `try ... except BudgetExceeded` only. A `FatalError`, a `StructuredOutputError` or a `RetryableError` whose retries ran out therefore leaves the node; examples are an expired login and a usage window that is used up. `_build` catches only `GitHubError`, so the build ends with a traceback and exit 1, with no halt record and no resume hint. Feature attempts have had this guard since I-100, and orchestrator nodes do not.
 - Root cause: I-100 and I-098 guarded the feature attempt and the PR-body and router calls. Their sweep looked for a `BudgetExceeded` guard, not for every `HarnessError`.
 - Fix: not yet. It sits on the ADR 0019 drill's path. Once I-180 maps a timeout to `RetryableError`, exhausted retries in `plan_milestone` still end in this traceback. The drill's repair session is expected to reach it in its sweep. If it does not, it is fixed after the drill.
+  - Done in I-189 (issue #105), with one guard in the CLI rather than one per node. `_build`, `_new` and `_task` catch `HarnessError` beside `_build`'s `GitHubError` and call `_Outcome.harness_stop`. It prints `scio <command> stopped on a harness error: <Type>: <message>` (`harness_stop_line`) and the command that resumes the thread. The outcome is `halted`, with exit reason `harness`.
+  - The checkpoint keeps the failed node's error, so the resume re-runs that node. The resume command has no `--decision`, since the thread no longer waits at a stop. This covers every orchestrator node at once, including any a node-by-node sweep would miss.
 - Sweep: `grep -n "except BudgetExceeded\|except HarnessError" scio/product/build.py` finds `BudgetExceeded` only at :693 (`plan_milestone`) and :1462 (`milestone_gate`), and `HarnessError` at :1043 and :1271 (feature attempts). The model calls in `scio new` (interviewer, product planner) are checked when this is fixed.
-- Resolved: - · Status: open
+  - Done in I-189. `grep -rn "harness\.structured(\|harness\.complete(" scio/` lists 13 call sites. The 11 in graph nodes guard only `BudgetExceeded`:
+    - `build.py:692` and `:1461` (`scio build`);
+    - `product/graph.py:67` and `:125` (`scio new`);
+    - the task graph's router, scope, planner, advisor, reviewer, gate and PR-body calls (`scio run` and `resume`).
+  - The other two are in `loop/agent_loop.py`, inside a worker turn whose node guards only `BudgetExceeded` too. In a product build the feature attempt catches them (I-100). All four commands now stop on the error.
+- Guard: guardrail 75.
+- Resolved: 2026-11-14 · Status: resolved (I-189, issue #105)
 
 ### I-183 · On Windows a child's own PATH does not find its program, so a tick under Task Scheduler could not start `sh scio.sh`
 - Found: 2026-11-14 · issue #95, the phase 6b Task Scheduler probe · `recovery/commands.py::run_command`
@@ -1713,6 +1724,67 @@ Template:
 - Guard: `test_a_piped_check_is_rewritten_to_fail_closed_not_refused` runs the real hook: the input is kept whole, and no permission decision is made. `test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal` checks that a rewritten line still faces the other gates. Guardrail 73.
 - Resolved: 2026-11-14 · Status: resolved
 
+### I-189 · The recovery drill's hung `claude` call ended `scio build` in a traceback (issue #105)
+- Found: 2026-11-14 · issue #105, the recovery supervisor's incident `inc-20261114094856-5356c9` (class `harness_suspect`, signature `39cc3f620be64916`), taken up by its headless repair session · `scio/harness/providers/claude_code.py:89`
+- Symptom: the ADR 0019 live drill ran `scio build --product product --decision merge` on SCIO `1019c21` with `SCIO_REQUEST_TIMEOUT_S=1`, a one-shot fault switch.
+  - The merge stop's answer went through, and M1 merged.
+  - The milestone planner's first `claude -p` call for M2 raised `subprocess.TimeoutExpired: ... timed out after 1.0 seconds` from `claude_code.py:89` inside `plan_milestone`.
+  - The run exited 1 with a traceback, and its outcome file said `crashed`.
+  - The snapshot's checkpoint copy (read through a second copy) shows thread `build-word_tools-m1` at `plan_milestone`, with M1 done and the `TimeoutExpired` as the task's pending `__error__` write.
+- Root cause: two open entries on one path.
+  - **I-180:** `claude_runner` let the subprocess layer's `TimeoutExpired` out raw, so the harness's retry, which retries only `RetryableError`, never saw it.
+  - **I-182:** `plan_milestone` guards only `BudgetExceeded`, and the CLI only `GitHubError`.
+  - Origin/main had no commit past `1019c21`.
+  - Reproduced offline on this worktree before any change. The new regression tests failed on the old code with the incident's exceptions: `TimeoutExpired` from the runner, never retried; `RetryableError` escaping `During task with name 'plan_milestone'`; `FatalError` escaping `scio new`, `run` and `resume`; a raw `FileNotFoundError` from a missing `claude`.
+- Fix:
+  - **`scio/proctree.py::run_tree`.** It keeps `subprocess.run`'s contract and changes only the timeout. The whole tree is killed (`taskkill /T /F` on Windows, the process group from `start_new_session` on POSIX), and the drain after the kill is bounded. `subprocess.run` kills only the first process and then, on Windows, drains the pipes with no limit, so a child that holds them (a worker's Bash command) turned a timeout into a hang.
+  - **`claude_runner`** runs through `run_tree`. A timeout raises `RetryableError` (`claude -p timed out after Ns; its process tree was killed`, `TIMEOUT_MESSAGE`), and an `OSError` raises `FatalError`.
+  - **The CLI.** `build`, `new`, `run` and `resume` stop on any `HarnessError` that no node caught. Each prints the cause and the command that resumes its thread at the failed node, and records outcome `halted` with exit reason `harness` (I-182).
+  - **The supervisor's classifier** (`recovery/classify.py`) gets the marker `claude -p timed out` (`external_transient`, row 6) and row 9b. Row 9b reads the new stop line as row 9 reads a feature's: `harness_suspect`, or `task_fault` for `BudgetExceeded` and `RefusalError`. Without it, a SCIO defect that used to be a traceback (row 8, a repair) would have become `unknown` (an escalation). ADR 0019's table says the same.
+- Sweep:
+  - **`grep -rnE "subprocess\.(run|Popen|check_output|check_call|call)\(" scio/`** finds 11 sites.
+    - **`aci/sandbox/local.py:135`** caught `TimeoutExpired` but had the same partial kill. Every claude_code product build runs on the local sandbox, and a product test's child that held the pipes kept a timed-out command open on Windows. Fixed: it uses `run_tree`.
+    - **`harness/github/client.py::GhRunner`** let a `FileNotFoundError` past `GitHubError`. Fixed: exit 127 with `cannot start gh`, which `_gh` raises as `GitHubError`. It has no timeout at all (I-190, open).
+    - **`aci/sandbox/docker.py`'s six calls** catch `TimeoutExpired` and `OSError`. The child is the `docker` CLI or a host `git` probe. The container's own `timeout` ends the work inside it, and no child of theirs holds the pipes. Left as they are, and allowlisted in the scan.
+    - **`aci/apps.py::start_app`** has no timeout. Its app is stopped through `RunningApp`.
+    - **`product/scaffold.py:344`** is text written into a product.
+  - **The worker** (`loop/claude_code_worker.py`) uses the same runner. A timed-out worker turn is now a `RetryableError` that ends its feature attempt through I-100's `except HarnessError`, and the supervisor reads it as transient.
+  - **The model call sites** are listed in I-182.
+- Guard: guardrails 74 and 75.
+  - **The tree kill:** `test_a_claude_past_its_timeout_is_retryable_and_its_process_tree_is_killed` and `test_a_local_timeout_kills_the_commands_whole_tree`. Each runs a parent that starts a child holding the pipes; on the old code they fail on the exception type and on a 5.08 s wait.
+  - **The retry:** `test_the_harness_retries_a_timed_out_claude_call`.
+  - **A binary that cannot start:** `test_a_missing_claude_binary_is_a_fatal_error` and `test_a_missing_gh_is_a_github_error_not_a_traceback`.
+  - **The CLI stop, in the incident's shape** (merge stop, then a planner that times out, then a resume by the printed hint that builds M2): `test_a_harness_error_in_an_orchestrator_node_stops_scio_build_with_a_resume_hint`.
+  - **The CLI stop in the other commands:** `test_a_harness_error_stops_new_run_and_resume_with_a_resume_hint_not_a_traceback`.
+  - **The SCIO-to-supervisor contract:** `test_scios_harness_stops_land_in_the_classifier_rows_meant_for_them`, which uses SCIO's real stop line and real timeout message.
+  - **Recurrence:** `test_no_subprocess_timeout_outside_run_tree` scans `scio/` with `ast`. It flags the old `claude_code.py:89` and `local.py:135`.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-190 · `GhRunner` has no timeout, so a hung `gh` holds `scio build --gh` until the supervisor's hang limit
+- Found: 2026-11-14 · issue #105, I-189's sweep · `scio/harness/github/client.py::GhRunner`
+- Symptom: found by reading, not seen live. `subprocess.run(["gh", ...])` has no `timeout=`. A `gh` call that never returns, for example over a dropped connection, blocks the node it runs in. The recovery supervisor's hang detection (45 minutes, ADR 0019) is the only thing that ends it.
+- Root cause: `GhRunner` predates every timeout rule. The per-call limit has not been chosen: `gh api` pagination and `gh pr create` take seconds, and nothing waits on `gh` itself, since CI is polled (`pr_ci`).
+- Fix: not yet. A likely fix is `run_tree` with a generous bound (such as 300 s) mapped to a failed `RunResult`, which `_gh` raises as `GitHubError`, a resumable stop. It is left out of the I-189 repair to keep that PR to the incident's path.
+- Sweep: -
+- Resolved: - · Status: open
+
+### I-191 · A throwaway inspection script in a heredoc held a double backslash, and the hook refused it
+- Found: 2026-11-14 · issue #105, the repair session's first look at the checkpoint copy · a Bash command
+- Symptom: a `python - <<'EOF'` heredoc that tried to make a temp path held `\\`. The push-gate hook refused the whole command (guardrail 17, I-176), and nothing ran.
+- Root cause: an inspection one-liner written inline in the shell, which guardrail 17 already rules out. The hook caught it before the Bash tool could halve the backslash.
+- Fix: the script went to a file under the session's temp directory with the Write tool and ran from there (`inspect_ckpt.py`).
+- Sweep: every later script in the session went through a file or the Edit tool. The one later `python -c` held no backslash.
+- Guard: guardrail 17 (`hook:push_gate`), which did its job here.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-192 · mypy refused writing the drained text onto `TimeoutExpired.stdout` and `.stderr`
+- Found: 2026-11-14 · issue #105, the first `mypy` run on `scio/proctree.py` · `run_tree`
+- Symptom: `Incompatible types in assignment (expression has type "str", variable has type "bytes | None")`. typeshed types `TimeoutExpired.stdout` and `.stderr` as `bytes | None`, even though the process was started with `text=True`.
+- Root cause: the attributes were assumed to follow the process's text mode. Only `output` is typed `str | bytes | None`.
+- Fix: `run_tree` raises a new `TimeoutExpired(cmd, timeout, output=, stderr=)` with the drained text, whose constructor takes text, `from None`. Its callers read `exc.stdout` and `exc.stderr` through `_text`, which takes either type.
+- Sweep: `grep -rn "\.stdout, .*\.stderr = \|exc\.stdout =\|exc\.stderr =" scio/ recovery/` finds no other assignment.
+- Guard: guardrail 74 (`symbol:run_tree`); the gate's `mypy` step refuses the construct.
+
 ### I-193 · The commit gate never linted the first file `git status` listed, because the hook stripped its leading space
 - Found: 2026-11-14 · issue #100, by the agent rewriting the commit gate · `scripts/hooks/push_gate.py::_run`
 - Symptom: with ` M a.py` first in `git status --porcelain`, the gate never linted `a.py`, not even on `git commit -a`. Every changed file after the first one was linted as expected.
@@ -1720,6 +1792,15 @@ Template:
 - Fix: `_run` uses `rstrip()`, so column parsing sees the line as git wrote it.
 - Sweep: `grep -rn '\[3:\]\|\[:2\]' --include=*.py .` finds the `_git` and `git_out` helpers in `scio/product/build.py`, `scio/aci/tools.py` and `scio/product/upgrade.py`, which also strip. They parse with `split()` or only test for empty output, so they are not affected.
 - Guard: the `a_bad.py` cases in `test_the_commit_gate_lints_what_the_commit_can_hold`, which fail when `strip()` is put back (11 cases). Guardrail 77.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-194 · `recovery watch` could not find a Windows worktree's transcript on Linux; `Path(...).name` does not split a backslash path there
+- Found: 2026-11-14 · PR #108 (issue #107), CI run 43583884387 on Linux. Green locally on Windows. · `recovery/watch.py::transcript_for`
+- Symptom: `test_a_differently_spelled_parent_still_finds_the_worktrees_transcript` failed on CI with `assert None == PosixPath(...)`. The fallback lookup takes the worktree's own name and matches project directories ending in its key. On Linux, `Path(r"C:\Users\...\recovery-inc-1").name` is the whole string, because PosixPath does not split on backslashes, so nothing matched.
+- Root cause: pathlib parts were taken from a path string written for another OS. The worktree path comes from the supervisor's store, where Windows wrote it, while the code and its tests may run on any OS.
+- Fix: the name is split on both separators (`re.split(r"[\\/]+", ...)`).
+- Sweep: `grep -rn "Path([^)]*)\.name\|Path([^)]*)\.parts\|Path([^)]*)\.parent" recovery/` finds only this site. `classify.scio_module_path` already splits frame paths on both separators, which was agent B's choice in the wave.
+- Guard: `test_a_windows_worktree_path_finds_its_transcript_on_any_os` runs on every OS. It bites on Linux, where the bug lives, and CI is that runner. Guardrail 78.
 - Resolved: 2026-11-14 · Status: resolved
 
 ### I-198 · `scio build` may auto-commit a quoted name or a rename line as one path (suspected)
