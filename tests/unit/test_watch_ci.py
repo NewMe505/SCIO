@@ -46,6 +46,24 @@ def test_a_short_sha_is_resolved_to_the_full_one_github_reports() -> None:
     assert len(full) == 40 and wc.full_sha(full[:7]) == full
 
 
+def test_a_full_sha_made_on_github_is_taken_as_given() -> None:
+    """I-199: `gh pr update-branch` makes the merge commit on GitHub, and the watcher
+    crashed resolving it here (`git rev-parse` exit 128). A full SHA is now taken as
+    given; it never has to exist in this clone."""
+    wc = _load()
+    remote_only = "AB" * 20
+    assert wc.full_sha(remote_only) == remote_only.lower()
+
+
+def test_an_unresolvable_short_sha_ends_with_a_message_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wc = _load()
+    monkeypatch.setattr("sys.argv", ["watch_ci.py", "--sha", "0000000"])
+    assert wc.main() == 2
+    assert "cannot resolve 0000000" in capsys.readouterr().err
+
+
 def test_the_watcher_lists_runs_of_one_workflow_on_one_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

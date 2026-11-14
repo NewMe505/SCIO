@@ -50,9 +50,18 @@ def run_for_head(branch: str, sha: str, workflow: str) -> dict[str, object] | No
     return next((r for r in rows if str(r.get("headSha")) == sha), None)
 
 
+FULL_SHA_LENGTH = 40
+
+
 def full_sha(rev: str | None) -> str:
-    """The full SHA of ``rev`` (default ``HEAD``): GitHub reports full SHAs, so a short one
-    given on the command line would never match and the watcher would time out (I-172)."""
+    """The full SHA of ``rev`` (default ``HEAD``).
+
+    GitHub reports full SHAs, so a short one given on the command line would never match
+    and the watcher would time out (I-172). A full 40-hex SHA is taken as given and never
+    looked up here. GitHub may have made that commit (`gh pr update-branch`), so it need
+    not exist in this clone (I-199)."""
+    if rev and len(rev) == FULL_SHA_LENGTH and all(c in "0123456789abcdefABCDEF" for c in rev):
+        return rev.lower()
     return _out(["git", "rev-parse", "--verify", f"{rev or 'HEAD'}^{{commit}}"])
 
 
@@ -62,7 +71,15 @@ def main() -> int:
     ap.add_argument("--branch", help="the pushed branch (default: the current one)")
     ap.add_argument("--workflow", default="ci", help="the workflow's name (default: ci)")
     args = ap.parse_args()
-    sha = full_sha(args.sha)
+    try:
+        sha = full_sha(args.sha)
+    except subprocess.CalledProcessError:
+        print(
+            f"watch_ci: cannot resolve {args.sha or 'HEAD'} here; `git fetch` first, or pass "
+            "the full 40-character SHA (I-199)",
+            file=sys.stderr,
+        )
+        return 2
     branch = args.branch or _out(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     deadline = time.monotonic() + APPEAR_TIMEOUT_S
     run = run_for_head(branch, sha, args.workflow)

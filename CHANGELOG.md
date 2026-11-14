@@ -31,6 +31,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ### Fixed
 - `scio dashboard`'s live updates stop as soon as the page closes. The `/ws` loop cancelled its read of the socket at every poll, and a cancel could lose the client's disconnect, so the server kept polling a page that was gone. One read now lasts the whole connection (I-202, issue #102).
+- The push-gate hook's commit gate lints only what the commit can contain: the staged files plus the paths the command line names. It lints the whole tree on `-a`, `git add -A` or anything it cannot read. One session's unfinished files no longer block another session's commit in a shared checkout (I-186, issue #100). It also no longer skips the first file `git status` lists, whose leading space it used to strip (I-193).
 - A `claude -p` call that outlives its timeout no longer ends a build in a traceback. The recovery supervisor's first live drill found this (I-180, I-182, I-189, issue #105).
   - The call's whole process tree is killed, and the timeout is a retryable error that the harness retries.
   - When the retries run out, `scio build`, `new`, `run` and `resume` stop with the cause and the command that resumes the thread at the failed node, never a traceback. The outcome is `halted`, with exit reason `harness`. This also covers any other harness error that leaves a node guarding only a budget stop, such as an expired login.
