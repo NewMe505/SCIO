@@ -157,6 +157,11 @@ def build_world(tmp: Path, home: Path) -> World:
     (seed / "scio").mkdir()
     (seed / "scio" / "__init__.py").write_text("", encoding="utf-8", newline="\n")
     (seed / "scio" / "stage.py").write_text(BUGGY_STAGE, encoding="utf-8", newline="\n")
+    # This SCIO knows --outcome-file, so the supervisor reads the outcome file (the
+    # primary path). Without this file it reads the text instead (I-187's fallback).
+    (seed / "scio" / "cli.py").write_text(
+        'FLAGS = ["--outcome-file"]\n', encoding="utf-8", newline="\n"
+    )
     (seed / "docs").mkdir()
     (seed / "docs" / "ISSUE_LEDGER.md").write_text("# ledger\n", encoding="utf-8", newline="\n")
     (seed / ".gitignore").write_text("__pycache__/\n", encoding="utf-8", newline="\n")
@@ -309,6 +314,9 @@ def test_a_harness_crash_is_repaired_merged_and_the_build_resumes_without_duplic
     first = supervise(world)
     assert first.status is RunStatus.EXITED and first.exit_code == 1
     assert world.work_log() == ["S1"]  # S1 done and checkpointed, S2 crashed
+    outcome = json.loads(Path(first.outcome_path).read_text(encoding="utf-8"))
+    assert outcome["status"] == "crashed"
+    assert outcome["exception"]["type"] == "subprocess.TimeoutExpired"
 
     incident = machine.on_run_finished(first, deps)
     assert incident is not None and incident.open

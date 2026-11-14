@@ -1677,3 +1677,30 @@ Template:
 - Fix: not yet. A likely fix is to lint the paths a `git add` in the same command names, the staged files, and nothing else, falling back to the whole tree for `git commit -a` or `git add -A`. A hook change reaches other sessions only when live-wt moves (guardrail 68), so it gets its own PR. Meanwhile, commit after the wave's agents finish.
 - Sweep: -
 - Resolved: - · Status: open
+
+### I-187 · The supervisor handed `--outcome-file` to a SCIO older than the flag, which would refuse every run
+- Found: 2026-11-14 · issue #95, while planning the live drill · `recovery/runner.py`
+- Symptom: `runner.supervise` appended `--outcome-file <path>` to every `build`, `new`, `run` and `resume`. The flag exists only from this branch on. The live-wt that graphcalc and the drill run from is `e5294d1`, which does not have it. argparse refuses an unknown flag with exit 2 before any work, so every supervised run against that SCIO would have ended at once as `refused`. The offline tests all used a SCIO that knew the flag.
+- Root cause: the supervisor and SCIO deploy separately. The supervisor runs from its own pinned worktree, and SCIO runs from live-wt, which moves only after merges, so either can be older than the other. The design assumed SCIO was always at least as new as the supervisor.
+- Fix: `runner.outcome_flag_supported(live_wt)` appends the flag only when `<live_wt>/scio/cli.py` names it. It reads a file and starts no process. Without the flag the supervisor reads the run's text, the same fallback it uses when a broken SCIO writes no outcome file.
+- Sweep: the other arguments the supervisor sends SCIO are the health check's `--help`, `status --product` and `report --thread --out`. All of them predate this branch, and `tests/unit/test_recovery_contract.py` parses them with SCIO's parser (I-184). The replay argv is the run's own recorded argv, minus `--decision`.
+- Guard: `test_a_scio_older_than_the_outcome_flag_is_never_handed_it`. The end-to-end test's stand-in SCIO knows the flag and checks the outcome file, and before this change it had passed on the text fallback alone. Guardrail 72.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-188 · The pipefail guard refused the same mistake about sixteen times in one pass; it now repairs the line
+- Found: 2026-11-14 · issue #95, the owner's request ("can we make sure this doesn't happen again") · `scripts/hooks/push_gate.py`
+- Symptom: in the issue #95 wave, every one of the seven agents and the orchestrator piped a check (pytest, mypy, a check into `tail` or `grep`) without `set -o pipefail`. The hook refused each line, about sixteen times in all. Each refusal cost a turn and a retry. The rule was in every agent's brief, in pre-flight item 10 and in guardrail 64, and it was still broken.
+- Root cause: the guard was a refusal, and a refusal only stops a mistake that people will go on making. Piping a long check into `tail` is the natural way to keep its output short. A rule that runs against the natural move is broken at a steady rate, whatever the briefs say.
+- Fix: when a line pipes a check without pipefail, the hook returns `updatedInput` with `set -o pipefail; ` in front of the command, plus a one-line notice, instead of a denial.
+  - Per the Claude Code hooks docs (read for this fix), `updatedInput` replaces the whole input, so every other field is kept.
+  - It sets no `permissionDecision`, because `"allow"` would auto-approve the call. The user's permission rules judge the rewritten command.
+  - The git gates judge the rewritten command, and the backslash refusal (I-176) stays a denial, since a mangled backslash cannot be repaired.
+  - It takes effect for every session when live-wt moves after the merge. Until then the user-level hook copy in live-wt still refuses, and a `deny` beats a rewrite (guardrail 68).
+- Sweep: every refusal in the hook was checked for one that could be a repair instead.
+  - **The bare `git stash`** is refused, because no correct form can be guessed.
+  - **The backslash refusals** stay, because the intended text is unknown.
+  - **The push gate** stays, because only waiting fixes a running CI.
+  - **The commit lint gate** stays, because a lint failure needs an edit.
+  - The pipefail refusal is the only one with a certain repair.
+- Guard: `test_a_piped_check_is_rewritten_to_fail_closed_not_refused` runs the real hook: the input is kept whole, and no permission decision is made. `test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal` checks that a rewritten line still faces the other gates. Guardrail 73.
+- Resolved: 2026-11-14 · Status: resolved

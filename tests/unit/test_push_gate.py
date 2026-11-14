@@ -216,6 +216,54 @@ def test_a_check_piped_without_pipefail_is_refused() -> None:
         assert pg.pipefail_reason(line) is None, line
 
 
+def _hook(tool_input: dict[str, object]) -> dict[str, object]:
+    payload = {"tool_name": "Bash", "tool_input": tool_input, "cwd": str(REPO_ROOT)}
+    r = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "hooks" / "push_gate.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(r.stdout) if r.stdout.strip() else {}
+
+
+def test_a_piped_check_is_rewritten_to_fail_closed_not_refused() -> None:
+    """I-188: the refusal cost every session a turn and a retry, about sixteen times in
+    issue #95. The hook now prepends `set -o pipefail;`. It keeps every other field of
+    the input, since updatedInput replaces the whole object, and it sets no
+    permissionDecision, since "allow" would auto-approve the call."""
+    tool_input = {
+        "command": "uv run python -m pytest -n 16 2>&1 | tail -3",
+        "description": "Run the tests",
+        "timeout": 600000,
+    }
+    out = _hook(tool_input)
+    spec = out["hookSpecificOutput"]
+    assert isinstance(spec, dict)
+    assert spec == {
+        "hookEventName": "PreToolUse",
+        "updatedInput": {**tool_input, "command": "set -o pipefail; " + tool_input["command"]},
+    }
+    assert "permissionDecision" not in spec
+    assert "I-188" in str(out["systemMessage"])
+
+
+def test_a_line_that_needs_no_rewrite_prints_nothing() -> None:
+    for command in ("set -o pipefail; uv run python -m pytest | tail -3", "git log | head -3"):
+        assert _hook({"command": command}) == {}, command
+
+
+def test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal() -> None:
+    stash = _hook({"command": "uv run ruff check . | head && git stash"})
+    spec = stash["hookSpecificOutput"]
+    assert isinstance(spec, dict) and spec["permissionDecision"] == "deny"
+    backslash = _hook({"command": "uv run python -m pytest | grep 'a\\\\b'"})
+    spec = backslash["hookSpecificOutput"]
+    assert isinstance(spec, dict) and spec["permissionDecision"] == "deny"
+    assert "updatedInput" not in spec
+
+
 def test_the_hook_refuses_a_backslash_heredoc_without_any_git_in_it() -> None:
     """The heredoc check runs before the git checks, which skip a line without `git`."""
     payload = {

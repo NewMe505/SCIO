@@ -20,6 +20,23 @@ from recovery.store import Store
 OUTCOME_SUBCOMMANDS: tuple[str, ...] = ("build", "new", "run", "resume")
 """SCIO subcommands that accept ``--outcome-file``. The supervisor appends it only to these."""
 
+OUTCOME_FLAG = "--outcome-file"
+
+
+def outcome_flag_supported(live_wt: Path) -> bool:
+    """Whether the SCIO that live-wt holds knows ``--outcome-file`` (ADR 0019 decision 11).
+
+    A SCIO older than the flag refuses it with exit 2 before doing anything (I-187). So
+    the flag is appended only when ``<live_wt>/scio/cli.py`` names it. Without it the
+    supervisor reads the run's text instead, the same fallback it uses when a broken SCIO
+    writes no outcome file. This reads a file and starts no process, because the check
+    runs before every launch."""
+    try:
+        return OUTCOME_FLAG in (live_wt / "scio" / "cli.py").read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 PRODUCT_FLAGS: tuple[str, ...] = ("--product", "--dir")
 """The SCIO flags that name the product directory (``build``/``status`` and ``new``)."""
 
@@ -194,7 +211,7 @@ def _supervise_child(
     kill: Callable[[int], None],
 ) -> RunRecord:
     command = list(cfg.launcher) + run.argv
-    if run.argv and run.argv[0] in OUTCOME_SUBCOMMANDS:
+    if run.argv and run.argv[0] in OUTCOME_SUBCOMMANDS and outcome_flag_supported(cfg.live_wt):
         command += ["--outcome-file", run.outcome_path]
     stdout_path, stderr_path = Path(run.stdout_path), Path(run.stderr_path)
     streams = [(stdout_path, sys.stdout), (stderr_path, sys.stderr)]

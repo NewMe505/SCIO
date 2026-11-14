@@ -106,11 +106,19 @@ def stub(tmp_path: Path) -> Path:
 
 
 def _cfg(
-    tmp_path: Path, stub: Path, *, hang_after_s: float = NORMAL_EXIT_HANG_S
+    tmp_path: Path,
+    stub: Path,
+    *,
+    hang_after_s: float = NORMAL_EXIT_HANG_S,
+    scio_knows_outcome_file: bool = True,
 ) -> WorkspaceConfig:
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
     repo = tmp_path / "SCIO"
+    cli = repo / ".scio" / "live-wt" / "scio" / "cli.py"
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    flag = '"--outcome-file"' if scio_knows_outcome_file else '"--decision"'
+    cli.write_text(f"FLAGS = [{flag}]\n", encoding="utf-8", newline="\n")
     return WorkspaceConfig(
         workspace=ws,
         launcher=(sys.executable, str(stub)),
@@ -196,6 +204,17 @@ def test_the_outcome_flag_is_appended_only_for_build_new_run_and_resume(
     assert _child_argv(run) == expected
     saved = store.get_run(run.run_id)
     assert saved is not None and "--outcome-file" not in saved.argv
+
+
+def test_a_scio_older_than_the_outcome_flag_is_never_handed_it(tmp_path: Path, stub: Path) -> None:
+    """I-187: a SCIO from before --outcome-file refuses an unknown flag with exit 2 before
+    doing anything. The supervisor appends the flag only when live-wt's SCIO has it, and
+    otherwise falls back to reading the run's text."""
+    cfg = _cfg(tmp_path, stub, scio_knows_outcome_file=False)
+    store, home = Store(tmp_path / "s.sqlite"), tmp_path / "home"
+    run = _run(cfg, store, home, ["build", "--product", "P"], "ok")
+    assert _child_argv(run) == ["build", "--product", "P"]
+    assert run.exit_code == 0
 
 
 def test_output_is_echoed_and_lands_in_the_run_files(
