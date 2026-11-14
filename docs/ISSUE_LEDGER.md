@@ -1743,7 +1743,7 @@ Template:
   - When the overdue poll timer fires in the same loop iteration, it cancels the receiver after the item was handed over. The disconnect is lost, and the loop polls until the session is torn down.
   - Load makes the loop wake late, so the timer and the message land together more often.
   - A repro script opened and closed the socket 300 times with a 1 ms poll while another gate ran. One session was still polling 250 ms after the close.
-- Fix: one read of the socket (`_until_disconnect`) lives as long as the connection. Each poll waits on it with `asyncio.wait(..., timeout=)`, which never cancels it, and it is cancelled only after the loop ends. The loop no longer depends on how the ASGI server's `receive` handles a cancel.
+- Fix: one read of the socket (`_until_disconnect`) lives as long as the connection. Each poll waits on it with `asyncio.wait(..., timeout=)`, which never cancels it, and it is cancelled only after the loop ends. The loop no longer depends on how the ASGI server's `receive` handles a cancel. The same repro on the fixed loop, again beside a running gate, gave 0 sessions out of 300.
 - Sweep: `grep -rn "timeout_at\|asyncio.timeout(\|wait_for(" scio/ recovery/` finds no other timed await. The only other `wait_for` calls are Playwright's, in `tests/live/`.
 - Guard: `test_the_poll_loop_never_cancels_a_pending_receive` drives `_push_changes` with a stand-in socket that counts cancelled reads: 1 read and 0 cancels over nine polls. Against the old loop it failed with `(9, 9) == (1, 0)`. Guardrail 83.
 - Resolved: 2026-11-14 · Status: resolved
