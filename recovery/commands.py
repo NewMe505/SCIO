@@ -8,6 +8,7 @@ records argv and returns canned results. This mirrors SCIO's ``GhRunner`` and
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -63,6 +64,21 @@ def kill_tree(pid: int) -> None:
             os.kill(pid, signal.SIGKILL)
 
 
+def resolve_program(argv0: str, env: Mapping[str, str] | None) -> str:
+    """Resolve ``argv0`` the way the child's own environment would.
+
+    On Windows, CreateProcess finds a bare program name on the **parent's** PATH and
+    ignores the PATH in ``env`` (measured, I-183). A tick started by Task Scheduler has no
+    ``sh`` on its PATH, but a replay's recorded environment does. So when ``env`` is given
+    and ``argv0`` has no directory part, look it up on ``env``'s PATH first. Every spawn in
+    this package goes through here."""
+    if env is None or os.path.dirname(argv0):
+        return argv0
+    path = next((v for k, v in env.items() if k.upper() == "PATH"), None)
+    found = shutil.which(argv0, path=path) if path else None
+    return found or argv0
+
+
 def run_command(
     argv: Sequence[str],
     *,
@@ -75,9 +91,12 @@ def run_command(
     - a missing binary returns code 127;
     - a timeout kills the whole process tree and returns ``timed_out=True`` with code -1.
     """
+    if not argv:
+        return CommandResult(127, "", "empty argv")
+    resolved = [resolve_program(argv[0], env), *argv[1:]]
     try:
         proc = subprocess.Popen(
-            list(argv),
+            resolved,
             cwd=str(cwd) if cwd is not None else None,
             env=dict(env) if env is not None else None,
             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,

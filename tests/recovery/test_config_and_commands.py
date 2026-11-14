@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -65,6 +66,23 @@ def test_a_config_missing_a_key_or_with_an_unknown_limit_is_refused(tmp_path: Pa
             tmp_path,
             {"launcher": ["x"], "scio_repo": "r", "scio_gh_repo": "o/r", "limits": {"nope": 1}},
         )
+
+
+def test_a_program_on_the_child_envs_path_only_is_found(tmp_path: Path) -> None:
+    """I-183: on Windows the parent's PATH, not the child env's, finds argv[0]. A tick
+    under Task Scheduler (no sh on its PATH) must still start the recorded env's sh."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    if sys.platform == "win32":
+        (bindir / "recoveryprobe.cmd").write_text("@echo found\n", encoding="utf-8", newline="\n")
+    else:
+        prog = bindir / "recoveryprobe"
+        prog.write_text("#!/bin/sh\necho found\n", encoding="utf-8", newline="\n")
+        prog.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+    result = run_command(["recoveryprobe"], env=env)
+    assert result.ok and result.stdout.strip() == "found", result
 
 
 def test_the_default_runner_reports_codes_a_missing_binary_and_a_timeout() -> None:

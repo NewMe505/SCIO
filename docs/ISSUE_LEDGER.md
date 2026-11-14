@@ -1634,3 +1634,15 @@ Template:
 - Fix: not yet. It sits on the ADR 0019 drill's path. Once I-180 maps a timeout to `RetryableError`, exhausted retries in `plan_milestone` still end in this traceback. The drill's repair session is expected to reach it in its sweep. If it does not, it is fixed after the drill.
 - Sweep: `grep -n "except BudgetExceeded\|except HarnessError" scio/product/build.py` finds `BudgetExceeded` only at :693 (`plan_milestone`) and :1462 (`milestone_gate`), and `HarnessError` at :1043 and :1271 (feature attempts). The model calls in `scio new` (interviewer, product planner) are checked when this is fixed.
 - Resolved: - · Status: open
+
+### I-183 · On Windows a child's own PATH does not find its program, so a tick under Task Scheduler could not start `sh scio.sh`
+- Found: 2026-11-14 · issue #95, the phase 6b Task Scheduler probe · `recovery/commands.py::run_command`
+- Symptom: a temporary scheduled task (registered, run once, then deleted) reported that `shutil.which("sh")` was None on its PATH, while `uv`, `claude`, `gh`, `git` and `python` resolved. A probe whose own PATH lacked `sh` then ran `subprocess.run(["sh", "-c", "echo found"], env=<env whose PATH has sh>)` and got `[WinError 2] The system cannot find the file specified`. The same call with `shutil.which("sh", path=<that PATH>)` as argv[0] printed `found`. A `recovery tick` starts the health check and the replay with the run's recorded environment, so each would have failed with a missing `sh`.
+- Root cause: on Windows `subprocess` passes a bare argv[0] to CreateProcess, which searches the parent process's PATH and never the `env` given for the child. POSIX `execvpe` uses the child's PATH, so the code reads as if it works.
+- Fix: `commands.resolve_program(argv0, env)` looks a bare name up on the env's PATH, and `run_command` uses it. The process agent's `procs.spawn` and `procs.spawn_detached` use it too.
+- Sweep: every spawn that passes `env=`. `grep -rn "Popen(\|subprocess.run(" recovery/ scio/` found the following:
+  - `recovery/commands.py` is fixed here, and `recovery/procs.py` is fixed in the same wave.
+  - SCIO's local sandbox already resolves with the command's own PATH (`resolve_command(..., path=)`, `scio/aci/sandbox/local.py:80`, I-081).
+  - `claude_runner` spawns `claude`, which is on both PATHs.
+- Guard: `test_a_program_on_the_child_envs_path_only_is_found`. It runs a `.cmd` (on POSIX, an executable script) that only the env's PATH holds. With `resolve_program` disabled by a monkeypatch the test fails, which was checked. Guardrail 69.
+- Resolved: 2026-11-14 · Status: resolved
