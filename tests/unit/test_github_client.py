@@ -369,6 +369,18 @@ def test_gh_failure_raises_github_error() -> None:
         client.default_branch()
 
 
+def test_a_missing_gh_is_a_github_error_not_a_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The I-180 sweep (issue #105): a ``gh`` that cannot start raised ``FileNotFoundError``
+    past the ``GitHubError`` every caller handles (``scio build`` stops on it, I-113)."""
+
+    def no_gh(argv: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(2, "The system cannot find the file specified", argv[0])
+
+    monkeypatch.setattr(subprocess, "run", no_gh)
+    with pytest.raises(GitHubError, match="cannot start gh"):
+        GitHubClient("o/r").default_branch()
+
+
 def test_ensure_milestone_and_issue_are_idempotent_by_title(
     gh: tuple[GitHubClient, FakeGh],
 ) -> None:

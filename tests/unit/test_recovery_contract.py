@@ -1,7 +1,8 @@
 """The supervisor (recovery/) and SCIO share no code, only command lines and a file shape.
 These tests import both sides and check that what the supervisor sends, SCIO's own
 parser accepts (I-184: the health check first called a `scio --version` SCIO never had),
-and that what the supervisor writes to its store, the dashboard reads back (issue #102)."""
+that what the supervisor writes to its store, the dashboard reads back (issue #102), and
+that what SCIO reports, the supervisor's classifier reads as meant (I-182)."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import dataclasses
 import io
 import os
 import sqlite3
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import closing
@@ -20,10 +22,12 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from recovery import procs
+from recovery.classify import classify
 from recovery.commands import CommandResult
 from recovery.config import HOME_ENV, WorkspaceConfig, recovery_home
 from recovery.model import (
     TERMINAL,
+    Evidence,
     FailureClass,
     Incident,
     IncidentState,
@@ -34,10 +38,18 @@ from recovery.model import (
 from recovery.runner import OUTCOME_SUBCOMMANDS
 from recovery.runtime import SMOKE_ARGS, health_check
 from recovery.store import SCHEMA_VERSION, Store
-from scio.cli import _parser
+from scio.cli import HARNESS_HALT, _parser, harness_stop_line
 from scio.dashboard import liveness, supervisor
 from scio.dashboard.data import INCIDENT_EVENTS, CheckpointDataSource
 from scio.graph.checkpointer import serializer
+from scio.harness.failures import (
+    BudgetExceeded,
+    FatalError,
+    HarnessError,
+    RetryableError,
+    StructuredOutputError,
+)
+from scio.harness.providers.claude_code import claude_runner
 from scio.state.models import Budget, ProductBuildState
 
 LAUNCHER = ("sh", "scio.sh")
@@ -350,3 +362,26 @@ def test_the_two_sides_agree_on_the_schema_the_states_and_the_process_key() -> N
     assert theirs.matches(ProcessKey(me, ours))
     assert liveness.alive(me, theirs.created) is True
     assert liveness.MATCH_S == 1.0 and ProcessKey(me, 0.0).matches(ProcessKey(me, 0.99))
+
+
+def test_scios_harness_stops_land_in_the_classifier_rows_meant_for_them() -> None:
+    """I-180, I-182, issue #105: SCIO's stop line and its ``claude`` timeout message, each
+    made by SCIO's own code, read as the supervisor means them. A timeout the harness could
+    not retry away is transient (replay after a backoff), an expired login is auth, a model
+    that never met its schema is a SCIO suspect (repair), a spend cap is the task's."""
+    run = claude_runner(sys.executable)
+    with pytest.raises(RetryableError) as timed_out:
+        run(["-c", "import time; time.sleep(30)"], timeout_s=0.5)
+    cases: list[tuple[HarnessError, FailureClass]] = [
+        (timed_out.value, FailureClass.EXTERNAL_TRANSIENT),
+        (FatalError("claude -p failed: Not logged in (subtype=-)"), FailureClass.EXTERNAL_AUTH),
+        (
+            StructuredOutputError("milestone_planner: no valid answer", attempts=3, errors=["x"]),
+            FailureClass.HARNESS_SUSPECT,
+        ),
+        (BudgetExceeded("spent", tokens_used=1, usd_used=1.0), FailureClass.TASK_FAULT),
+    ]
+    for exc, expected in cases:
+        line = harness_stop_line("build", exc)
+        ev = Evidence(exit_code=1, halt_reason=HARNESS_HALT, last_ledger_line=line)
+        assert classify(ev).failure_class is expected, line

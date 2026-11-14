@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from scio.aci.sandbox.base import ExecResult, Limits, PathEscapeError, resolve_u
 from scio.aci.sandbox.docker import DockerSandbox
 from scio.aci.sandbox.e2b import E2BSandbox
 from scio.aci.sandbox.local import LocalSandbox
+from tests.unit.test_claude_code_backend import GRANDCHILD, HUNG_PARENT
 
 # ---------- path rules ----------
 
@@ -49,6 +51,21 @@ def test_local_exec_read_write_and_timeout(tmp_path: Path) -> None:
     assert missing.exit_code == 127
     with pytest.raises(PathEscapeError):
         sb.read_text("/etc/passwd" if sys.platform != "win32" else "C:\\Windows\\win.ini")
+
+
+def test_a_local_timeout_kills_the_commands_whole_tree(tmp_path: Path) -> None:
+    """The I-180 sweep (issue #105): the local sandbox, which every claude_code product build
+    runs on, timed out with ``subprocess.run`` too. A command's child that held the pipes
+    (a test's server) outlived it, and on Windows held the timeout open until it exited."""
+    marker, started = tmp_path / "grandchild-alive", tmp_path / "parent-started"
+    sb = LocalSandbox(tmp_path / "root")
+    t0 = time.monotonic()
+    r = sb.exec(["python", "-c", HUNG_PARENT, GRANDCHILD, str(marker), str(started)], timeout_s=3)
+    assert r.timed_out and r.exit_code == 124
+    assert time.monotonic() - t0 < 5.0  # no drain waits for the child holding the pipes
+    assert started.is_file()  # the child was running when the timeout fired
+    time.sleep(max(0.0, t0 + 7.0 - time.monotonic()))  # past the child's own 5 s
+    assert not marker.exists(), "the timed-out command's child outlived it"
 
 
 # ---------- docker (no daemon needed) ----------

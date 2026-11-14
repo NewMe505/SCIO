@@ -36,6 +36,7 @@ from scio.graph.nodes.common import acceptance_from_issue_body
 from scio.graph.run import RunOutcome, resume_graph, run_graph
 from scio.graph.run_context import RunContext, product_sandbox_backend
 from scio.harness.core import Harness
+from scio.harness.failures import HarnessError
 from scio.settings import get_settings
 from scio.state.models import LedgerEntry, TaskSpec
 
@@ -47,6 +48,18 @@ recovery."""
 
 OUTCOME_COMMANDS = ("build", "new", "run", "resume")
 """The subcommands that take ``--outcome-file``."""
+
+HARNESS_HALT = "harness"
+"""The outcome file's ``exit_reason`` when a ``HarnessError`` that no node caught stopped
+the command (I-182)."""
+
+
+def harness_stop_line(command: str, exc: HarnessError) -> str:
+    """The line ``scio <command>`` prints, and records as its outcome's ``reason``, when a
+    ``HarnessError`` that no node caught stops it (I-182). The recovery supervisor parses it
+    (``HARNESS_STOP`` in ``recovery/classify.py``), so its shape is a contract."""
+    detail = " ".join(str(exc).split())[:500]
+    return f"scio {command} stopped on a harness error: {type(exc).__name__}: {detail}"
 
 
 @dataclass
@@ -107,6 +120,27 @@ class _Outcome:
 
     def crashed(self, exc: BaseException) -> dict[str, Any]:
         return self.payload(_uncaught_exit_code(exc), _exception_record(exc))
+
+    def harness_stop(self, exc: HarnessError, *, thread: str, resume: str) -> int:
+        """A ``HarnessError`` that no node caught (a ``claude -p`` that timed out on every
+        retry, I-180; an expired login; a schema the model never met) stops the command
+        with its cause and the command that resumes the thread, never a traceback (I-182).
+        The checkpoint holds every finished node and the failed one's error, so the resume
+        re-runs that node; no ``--decision``, since the thread no longer waits at a stop."""
+        stopped = harness_stop_line(self.command, exc)
+        print(
+            f"{stopped}\nEvery finished step is checkpointed (thread {thread}). Fix the cause "
+            f"if it needs a fix, then resume with: {resume}",
+            file=sys.stderr,
+        )
+        self.thread = thread
+        self.status, self.exit_reason, self.reason, self.resume = (
+            "halted",
+            HARNESS_HALT,
+            stopped,
+            resume,
+        )
+        return 1
 
 
 def _exception_record(exc: BaseException) -> dict[str, Any]:
@@ -392,6 +426,12 @@ def _build(args: argparse.Namespace, rec: _Outcome) -> int:
         print(f"{stopped}\n{hint}", file=sys.stderr)
         rec.status, rec.exit_reason, rec.reason, rec.resume = "halted", "github", stopped, hint
         return 1
+    except HarnessError as exc:
+        # The orchestrator's own model calls (milestone planner and gate) guard only a budget
+        # stop; a feature attempt's failure ends that attempt inside the graph (I-100).
+        return rec.harness_stop(
+            exc, thread=thread, resume=f"scio build --product {args.product} --thread {thread}"
+        )
     finally:
         ctx.close()
     _print_build(outcome)
@@ -539,6 +579,8 @@ def _new(args: argparse.Namespace, rec: _Outcome) -> int:
         else:
             prompt = args.prompt or f"bootstrap from {args.spec}"
             outcome = run_product(ctx, prompt=prompt, gh_repo=args.gh, spec_md=spec_md)
+    except HarnessError as exc:  # the interviewer and the planner guard only a budget stop
+        return rec.harness_stop(exc, thread=thread, resume=f"scio new --thread {thread}")
     finally:
         ctx.close()
     _print_product(outcome)
@@ -711,13 +753,19 @@ def _task(args: argparse.Namespace, rec: _Outcome) -> int:
         print(f"wrote {json_path}")
         print(f"wrote {md_path}")
         return 0
-    if args.cmd == "run":
-        task = parse_spec(
-            args.spec.read_text(encoding="utf-8"), repo_url=args.repo, issue=args.issue
-        )
-        outcome = run_graph(ctx, task)
-    else:
-        outcome = resume_graph(ctx, args.decision)
+    try:
+        if args.cmd == "run":
+            task = parse_spec(
+                args.spec.read_text(encoding="utf-8"), repo_url=args.repo, issue=args.issue
+            )
+            outcome = run_graph(ctx, task)
+        else:
+            outcome = resume_graph(ctx, args.decision)
+    except HarnessError as exc:  # every task-graph node guards only a budget stop (I-098)
+        resume = f"scio resume --thread {thread}"
+        if args.sandbox:
+            resume += f" --sandbox {args.sandbox}"
+        return rec.harness_stop(exc, thread=thread, resume=resume)
     _print(outcome)
     s = outcome.state
     return rec.ended(
