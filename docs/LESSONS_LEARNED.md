@@ -73,6 +73,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 65. **Always** put a module loaded from a file path into `sys.modules` before `exec_module`; `@dataclass` looks its module up there (I-174). Guard: `test:test_the_local_ci_line_runs_python_tools_as_modules`
 66. **Never** put `# fmt: skip` inside a bracket; it holds only at the end of a statement, and ruff's RUF028 refuses the rest (I-175). Guard: `hook:push_gate` (its commit gate runs `ruff check`, whose `RUF` rules are selected in `pyproject.toml`)
 67. **Never** let a gate fail open on a path spelling it can read: the hook turns Git Bash's `/c/...` into `C:/...` before it runs git there. A hook warning that says `could not` means the command went through unchecked, so read it and rerun the command in a form the gate follows (I-179). Guard: `symbol:native_dir`, `test:test_the_gate_runs_git_where_a_git_bash_path_points`
+68. **Never** rely on project config alone for a gate every session needs. A session started outside the repository loads no project hooks, CLAUDE.md or memory, so the owner's user settings run SCIO's hook too. That copy runs from `.scio/live-wt`, so a hook change reaches other sessions when live-wt moves (I-178). Guard: `hook:push_gate`, `manual:` the user-level entry lives in `~/.claude/settings.json`, outside the repository. It was proven by a `claude -p` session in a non-repository folder whose bare `git stash` was denied.
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
@@ -761,4 +762,5 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 
 ### After the merge (issue #91)
 - The live check of the new hook found two things. The session had restarted outside the repository and was running no hooks at all (I-178, open, the owner's decision). Fed by hand, the hook script also showed that its push and commit gates had failed open on every `cd /c/...` line: 8 commits unlinted and 3 pushes unchecked in this pass, each with a warning nobody read (I-179, fixed).
-- Still to verify, in a session started in the SCIO directory: a live `printf %s 'x\\y'`, a backslash heredoc and a piped `mypy | tail -1` are each denied. That also confirms I-176's premise, that the hook sees a command before the Bash tool halves it.
+- Verified live on 2026-11-13, in a session started in the SCIO directory: a `printf %s 'x\\y'`, a backslash heredoc and a piped `mypy | tail -1` were each denied with the hook's message. That confirms I-176's premise, that the hook sees a command before the Bash tool halves it. After `cd /c/...`, a `git push --dry-run` went through with no "could not check" warning (I-179).
+- I-178 resolved by the owner's decision (issue #93): the user settings run the hook from `.scio/live-wt` in every session. A `claude -p` session started in a non-repository folder had its bare `git stash` denied.
