@@ -322,7 +322,7 @@ def test_the_hook_is_wired_in_the_project_settings() -> None:
 
 
 def test_the_commit_gate_lints_every_changed_python_file(tmp_path: Path) -> None:
-    """I-106: ``git add ... && git commit`` stages in the same line, so staged, modified and
+    """I-106: on the whole tree (``git commit -a``, ``git add -A``), staged, modified and
     untracked files all count; deleted files and non-Python files do not."""
     pg = _load()
     for rel in ("a.py", "b.py", "new.py", "notes.md", "moved.py"):
@@ -370,8 +370,115 @@ def test_the_commit_gate_only_runs_where_ruff_is_configured(tmp_path: Path) -> N
 
 def test_evaluate_holds_a_commit_for_lint(monkeypatch: pytest.MonkeyPatch) -> None:
     pg = _load()
-    monkeypatch.setattr(pg, "commit_reason", lambda cwd: "ruff check fails (I-106)")
+    monkeypatch.setattr(pg, "commit_reason", lambda cwd, scope=None: "ruff check fails (I-106)")
     reason, _ = pg.evaluate("git add -A && git commit -q -m 'x'", ".")
     assert reason == "ruff check fails (I-106)"
-    monkeypatch.setattr(pg, "commit_reason", lambda cwd: None)
+    monkeypatch.setattr(pg, "commit_reason", lambda cwd, scope=None: None)
     assert pg.evaluate("git add -A && git commit -q -m 'x'", ".") == (None, None)
+
+
+def _git(repo: Path, *args: str) -> None:
+    identity = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", *identity, *args], cwd=repo, check=True, capture_output=True)
+
+
+@pytest.fixture(scope="module")
+def staged_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """``clean.py`` staged; ``bad.py``, ``my bad.py`` and ``pkg/bad.py`` untracked with a lint
+    error; ``a_bad.py`` tracked with an unstaged lint error, so `git status` starts with
+    `` M a_bad.py``. The gate never runs the line, so the cases share the repository."""
+    repo = tmp_path_factory.mktemp("staged")
+    files = {
+        "pyproject.toml": "[tool.ruff]\n",
+        "a_bad.py": "x = 1\n",
+        "clean.py": "x = 1\n",
+        "bad.py": "import os\n",
+        "my bad.py": "import os\n",
+        "pkg/bad.py": "import os\n",
+    }
+    for rel, text in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text, encoding="utf-8", newline="\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "pyproject.toml", "a_bad.py")
+    _git(repo, "commit", "-q", "--no-verify", "-m", "init")
+    (repo / "a_bad.py").write_text("import os\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "clean.py")
+    return repo
+
+
+WHOLE_TREE = ["a_bad.py", "bad.py", "clean.py", "my bad.py", "pkg/bad.py"]
+
+
+@pytest.mark.parametrize(
+    ("line", "linted"),
+    [
+        # I-186: an unstaged file with a lint error no longer blocks a commit of other files.
+        ("git add clean.py && git commit -m x", ["clean.py"]),
+        ("git commit -m 'fix (I-186)'", ["clean.py"]),  # nothing added: the staged files
+        ("git add bad.py && git commit -m x", ["bad.py", "clean.py"]),
+        ("git add a_bad.py && git commit -m x", ["a_bad.py", "clean.py"]),  # status: " M a_bad.py"
+        ("git add pkg && git commit -m x", ["clean.py", "pkg/bad.py"]),  # a directory
+        ("cd pkg && git add bad.py && git commit -m x", ["clean.py", "pkg/bad.py"]),
+        ("git -C pkg add bad.py && git commit -m x", ["clean.py", "pkg/bad.py"]),
+        ('git add -- "my bad.py" && git commit -m x', ["clean.py", "my bad.py"]),
+        ("git add 'clean.py' 2>&1 && git commit -q -m x > /dev/null", ["clean.py"]),
+        (
+            "git add clean.py && git commit -m \"$(cat <<'EOF'\nfix: x (I-186)\nEOF\n)\"",
+            ["clean.py"],
+        ),
+        ("git commit -m x -- bad.py", ["bad.py", "clean.py"]),  # commit takes it from the tree
+        ("git rm -q gone.py && git commit -m x", ["clean.py"]),  # rm stages no tree content
+        ("git commit -a -m x", WHOLE_TREE),
+        ("git commit -qam x", WHOLE_TREE),
+        ("git commit --all -m x", WHOLE_TREE),
+        ("git add -A && git commit -m x", WHOLE_TREE),
+        ("git add . && git commit -m x", WHOLE_TREE),
+        ("git add -u && git commit -m x", WHOLE_TREE),
+        ("git add $FILES && git commit -m x", WHOLE_TREE),  # the shell expands it, not the hook
+        ("git ls-files -o | xargs git add && git commit -m x", WHOLE_TREE),
+        ("git aa && git commit -m x", WHOLE_TREE),  # an alias may stage anything
+        ("git add ../elsewhere.py && git commit -m x", WHOLE_TREE),  # git refuses the pathspec
+    ],
+)
+def test_the_commit_gate_lints_what_the_commit_can_hold(
+    staged_repo: Path, monkeypatch: pytest.MonkeyPatch, line: str, linted: list[str]
+) -> None:
+    """I-186: the hook runs before the line, so it reads what the line stages. It lints the
+    staged files and what a ``git add`` (or the commit) names; ``-a``, ``-A``, ``.``, ``-u``
+    and any line it cannot read lint the whole tree, the safe direction."""
+    pg = _load()
+    seen: list[list[str]] = []
+
+    def fake_ruff(files: list[str], run: object) -> str | None:
+        seen.append(sorted(files))
+        return "ruff check fails (I-106)" if any("bad" in f for f in files) else None
+
+    monkeypatch.setattr(pg, "lint_reason", fake_ruff)
+    reason, warning = pg.evaluate(line, str(staged_repo))
+    assert seen == [linted] and warning is None
+    assert (reason is not None) == any("bad" in f for f in linted)
+
+
+@pytest.mark.parametrize(
+    ("sub", "args", "paths"),
+    [
+        ("add", ["a.py", "src"], ["a.py", "src"]),
+        ("add", ["-v", "--", "-a.py", "b c.py"], ["-a.py", "b c.py"]),
+        ("add", ["-A"], None),
+        ("add", ["-fu"], None),
+        ("add", ["--all", "a.py"], None),
+        ("add", ["--pathspec-from-file=list.txt"], None),
+        ("add", ["{a,b}.py"], None),
+        ("commit", ["-m", "-a", "a.py"], ["a.py"]),  # -a is -m's value
+        ("commit", ["-qam", "x"], None),
+        ("commit", ["-uall", "-m", "x"], []),  # "all" is -u's value
+        ("commit", ["-mx", "--amend", "--no-edit"], []),
+        ("commit", ["--author", "A <a@b.c>", "-F", "-", "2>&1"], []),
+        ("commit", ["--patch"], None),
+    ],
+)
+def test_work_tree_paths_reads_git_add_and_git_commit(
+    sub: str, args: list[str], paths: list[str] | None
+) -> None:
+    assert _load().work_tree_paths(sub, args) == paths

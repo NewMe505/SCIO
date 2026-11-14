@@ -25,6 +25,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - The push-gate hook also refuses two more kinds of command: a heredoc or `python -c` script that holds a backslash, or any command with a double backslash, which the Bash tool halves before the shell runs (guardrail 17, I-176); and a check piped into another command without `set -o pipefail` (I-173).
 
 ### Fixed
+- The push-gate hook's commit gate lints only what the commit can contain: the staged files plus the paths the command line names. It lints the whole tree on `-a`, `git add -A` or anything it cannot read. One session's unfinished files no longer block another session's commit in a shared checkout (I-186, issue #100). It also no longer skips the first file `git status` lists, whose leading space it used to strip (I-193).
 - A `claude -p` call that outlives its timeout no longer ends a build in a traceback. The recovery supervisor's first live drill found this (I-180, I-182, I-189, issue #105).
   - The call's whole process tree is killed, and the timeout is a retryable error that the harness retries.
   - When the retries run out, `scio build`, `new`, `run` and `resume` stop with the cause and the command that resumes the thread at the failed node, never a traceback. The outcome is `halted`, with exit reason `harness`. This also covers any other harness error that leaves a node guarding only a budget stop, such as an expired login.

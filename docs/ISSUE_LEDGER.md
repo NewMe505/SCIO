@@ -1685,9 +1685,17 @@ Template:
 - Found: 2026-11-14 · issue #95, committing wave 1's finished modules while three agents were still writing · `scripts/hooks/push_gate.py` commit gate
 - Symptom: `git add <14 finished files> && git commit` was denied: "`ruff check` fails on the changed Python files". The failures were in `recovery/machine.py` and `tests/recovery/test_scrub.py`, two unstaged files that running agents had not finished. The commit would not have included them.
 - Root cause: confirmed by reading `commit_reason` (`scripts/hooks/push_gate.py:256-272`). It lints every `.py` file that `git status --porcelain --untracked-files=all` lists. That choice is deliberate. The hook runs before the whole command line, so in `git add X && git commit` nothing is staged yet when it looks, and `git diff --cached` would miss X. The cost is that one session's unfinished files block another session's commit in a shared checkout.
-- Fix: not yet. A likely fix is to lint the paths a `git add` in the same command names, the staged files, and nothing else, falling back to the whole tree for `git commit -a` or `git add -A`. A hook change reaches other sessions only when live-wt moves (guardrail 68), so it gets its own PR. Meanwhile, commit after the wave's agents finish.
-- Sweep: -
-- Resolved: - · Status: open
+- Fix (issue #100): `evaluate` collects a scope of `(dir, pathspecs)` from each `git add` before the commit and from the commit's own paths, relative to any `cd` or `-C`. `commit_files` lints the staged files (`git diff --cached --name-only --diff-filter=ACMR -z`) plus `git status --porcelain -- <specs>`. The gate falls back to linting the whole tree, which is the safe direction, in these cases:
+  - `git commit -a`, `--all` or `-qam`;
+  - `git add -A`, `-u`, `.` or `-p`;
+  - `--pathspec-from-file`;
+  - an unexpanded shell word (`$FILES`, `{a,b}.py`), `xargs git add`, or an unknown git subcommand or alias;
+  - a pathspec git refuses.
+
+  It reaches other sessions when live-wt moves after the merge (guardrail 68).
+- Sweep: `grep -rn 'status.*--porcelain\|"--porcelain"\|untracked-files\|diff.*--cached\|"--cached"' --include=*.py .` Nothing else chooses a commit's lint scope from the working tree. `scio/product/build.py:267` picks the files to auto-commit, which is a different job. It reads quoted names and renames from porcelain, and is recorded separately.
+- Guard: `test_the_commit_gate_lints_what_the_commit_can_hold` (22 cases in a real git repository) and `test_work_tree_paths_reads_git_add_and_git_commit` (13 cases). All 35 fail on the old hook. Guardrail 76.
+- Resolved: 2026-11-14 · Status: resolved
 
 ### I-187 · The supervisor handed `--outcome-file` to a SCIO older than the flag, which would refuse every run
 - Found: 2026-11-14 · issue #95, while planning the live drill · `recovery/runner.py`
@@ -1776,6 +1784,16 @@ Template:
 - Fix: `run_tree` raises a new `TimeoutExpired(cmd, timeout, output=, stderr=)` with the drained text, whose constructor takes text, `from None`. Its callers read `exc.stdout` and `exc.stderr` through `_text`, which takes either type.
 - Sweep: `grep -rn "\.stdout, .*\.stderr = \|exc\.stdout =\|exc\.stderr =" scio/ recovery/` finds no other assignment.
 - Guard: guardrail 74 (`symbol:run_tree`); the gate's `mypy` step refuses the construct.
+
+### I-193 · The commit gate never linted the first file `git status` listed, because the hook stripped its leading space
+- Found: 2026-11-14 · issue #100, by the agent rewriting the commit gate · `scripts/hooks/push_gate.py::_run`
+- Symptom: with ` M a.py` first in `git status --porcelain`, the gate never linted `a.py`, not even on `git commit -a`. Every changed file after the first one was linted as expected.
+- Root cause: `_run` returned `stdout.strip()`, which removed the leading space of the first porcelain line. `changed_python_files` then cut the path at column 3 and read ` M a.py`'s remainder `M a.py` as `.py`, a file that does not exist, so it was skipped.
+- Fix: `_run` uses `rstrip()`, so column parsing sees the line as git wrote it.
+- Sweep: `grep -rn '\[3:\]\|\[:2\]' --include=*.py .` finds the `_git` and `git_out` helpers in `scio/product/build.py`, `scio/aci/tools.py` and `scio/product/upgrade.py`, which also strip. They parse with `split()` or only test for empty output, so they are not affected.
+- Guard: the `a_bad.py` cases in `test_the_commit_gate_lints_what_the_commit_can_hold`, which fail when `strip()` is put back (11 cases). Guardrail 77.
+- Resolved: 2026-11-14 · Status: resolved
+
 ### I-194 · `recovery watch` could not find a Windows worktree's transcript on Linux; `Path(...).name` does not split a backslash path there
 - Found: 2026-11-14 · PR #108 (issue #107), CI run 43583884387 on Linux. Green locally on Windows. · `recovery/watch.py::transcript_for`
 - Symptom: `test_a_differently_spelled_parent_still_finds_the_worktrees_transcript` failed on CI with `assert None == PosixPath(...)`. The fallback lookup takes the worktree's own name and matches project directories ending in its key. On Linux, `Path(r"C:\Users\...\recovery-inc-1").name` is the whole string, because PosixPath does not split on backslashes, so nothing matched.
@@ -1783,4 +1801,21 @@ Template:
 - Fix: the name is split on both separators (`re.split(r"[\\/]+", ...)`).
 - Sweep: `grep -rn "Path([^)]*)\.name\|Path([^)]*)\.parts\|Path([^)]*)\.parent" recovery/` finds only this site. `classify.scio_module_path` already splits frame paths on both separators, which was agent B's choice in the wave.
 - Guard: `test_a_windows_worktree_path_finds_its_transcript_on_any_os` runs on every OS. It bites on Linux, where the bug lives, and CI is that runner. Guardrail 78.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-198 · `scio build` may auto-commit a quoted name or a rename line as one path (suspected)
+- Found: 2026-11-14 · issue #100, noted by the agent while sweeping porcelain readers · `scio/product/build.py:267`
+- Symptom: not reproduced. The code that picks files to auto-commit reads `git status --porcelain` lines and keeps column 3 onwards. Porcelain quotes a path that holds spaces or special characters (`"a b.py"`) and writes a rename as `old -> new`, so either would reach `git add` as one malformed path.
+- Root cause: to confirm with a test.
+- Fix: not yet. The likely fix is `git status --porcelain -z`, which writes neither quotes nor arrows.
+- Sweep: -
+- Resolved: - · Status: open
+
+### I-199 · `watch_ci.py` crashed on a commit GitHub had made, because it resolved every SHA locally
+- Found: 2026-11-14 · watching PR #108 after `gh pr update-branch 108` · `scripts/watch_ci.py::full_sha`
+- Symptom: `watch_ci.py --sha 88f20a57...` ended in a traceback: `git rev-parse --verify 88f20a57...^{commit}` returned exit 128. `gh pr update-branch` had made the merge commit on GitHub, so this clone did not have it yet. The PR's CI went unwatched until a `git fetch` and a rerun.
+- Root cause: `full_sha` resolved every SHA through the local clone. That is right for a short SHA (I-172) and needless for a full one. And `main` let the `CalledProcessError` escape.
+- Fix: a full 40-hex SHA is taken as given, lower-cased, with no lookup. A short SHA that cannot be resolved ends with exit 2 and the message "`git fetch` first, or pass the full 40-character SHA".
+- Sweep: every `git rev-parse --verify` in `scripts/` and `recovery/`. `recovery/runtime.py` resolves a target only after `fetch origin`, and `push_gate.py` resolves only local refs.
+- Guard: `test_a_full_sha_made_on_github_is_taken_as_given` (the old code raised `CalledProcessError`) and `test_an_unresolvable_short_sha_ends_with_a_message_not_a_traceback`. Guardrail 80.
 - Resolved: 2026-11-14 · Status: resolved
