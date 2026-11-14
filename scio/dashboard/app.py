@@ -218,8 +218,10 @@ async def _push_changes(
 ) -> None:
     """Accept, take the baseline, send the hello, then poll every ``poll_interval_s`` and push
     a :class:`ChangeEvent` only when something changed. The baseline comes before the hello: a
-    change that lands after the page got the hello is always pushed. Between polls the socket
-    is read, so a closed tab ends the loop at once; what the client sends is ignored. With a
+    change that lands after the page got the hello is always pushed. One receive reads the
+    socket the whole time and is never cancelled while the loop runs, so a closed tab ends the
+    loop at once, however the server's receive handles a cancel (I-202). What the client
+    sends is ignored. With a
     ``recovery`` source the hello says so, and a poll that finds the supervisor's store
     changed pushes ``recovery``."""
     await websocket.accept()
@@ -228,23 +230,36 @@ async def _push_changes(
     store = await _store_version(recovery, "", streaks)
     hello = ChangeEvent(at=datetime.now(UTC), recovery=recovery is not None)
     await websocket.send_text(hello.model_dump_json())
-    loop = asyncio.get_running_loop()
+    # One read of the socket lives as long as the connection and is never cancelled while it
+    # does: a receive cancelled at each poll can lose the disconnect handed to it in the same
+    # loop iteration (anyio's memory stream does), and the loop would then poll forever (I-202).
+    leaving = asyncio.ensure_future(_until_disconnect(websocket))
+    try:
+        while True:
+            done, _ = await asyncio.wait({leaving}, timeout=poll_interval_s)
+            if done:
+                leaving.result()  # a receive that failed raises here
+                return
+            current = await _snapshot(source, previous, streaks)
+            event = diff_versions(previous, current)
+            previous = current
+            now = await _store_version(recovery, store, streaks)
+            event.recovery, store = now != store, now
+            if event.changed or event.removed or event.recovery:
+                await websocket.send_text(event.model_dump_json())
+    finally:
+        leaving.cancel()  # the loop is over: losing a message no longer matters
+        await asyncio.wait({leaving})
+        if not leaving.cancelled():
+            leaving.exception()  # retrieved, so asyncio logs no "never retrieved"
+
+
+async def _until_disconnect(websocket: WebSocket) -> None:
+    """Read the socket until the client leaves; what the client sends is ignored."""
     while True:
-        try:
-            async with asyncio.timeout_at(loop.time() + poll_interval_s):
-                while True:
-                    message = await websocket.receive()
-                    if message["type"] == "websocket.disconnect":
-                        return
-        except TimeoutError:
-            pass
-        current = await _snapshot(source, previous, streaks)
-        event = diff_versions(previous, current)
-        previous = current
-        now = await _store_version(recovery, store, streaks)
-        event.recovery, store = now != store, now
-        if event.changed or event.removed or event.recovery:
-            await websocket.send_text(event.model_dump_json())
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
 
 
 def create_app(

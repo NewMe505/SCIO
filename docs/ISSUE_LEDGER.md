@@ -1734,3 +1734,25 @@ Template:
 - Sweep: the dashboard's checkpoint-store version (ADR 0017 decision 3) counts rows, not file metadata, so it is not affected.
 - Guard: `test_the_store_version_changes_with_every_supervisor_write` asserts that a read leaves the version unchanged. Guardrail 79.
 - Resolved: 2026-11-14 · Status: resolved
+
+### I-202 · The dashboard's `/ws` loop cancelled its read of the socket at every poll, and a cancel could lose the client's disconnect
+- Found: 2026-11-14 · issue #102, the gate on the branch with `main` merged in · `scio/dashboard/app.py::_push_changes`
+- Symptom: in the 16-worker gate, `test_ws_stops_polling_once_the_client_leaves` failed with "the server kept polling after the client left": the poll count still moved 5 s after `ws.close()`. Run alone it passed 3 times out of 3. #102 did not touch that path, since the test's fixture source has no recovery store.
+- Root cause: between polls the loop awaited `websocket.receive()` under `asyncio.timeout_at`, so every poll cancelled a pending receive. Starlette's test client delivers messages through an anyio memory stream.
+  - anyio 4.15.1's `send_nowait` hands an item to a waiting receiver unless that receiver already has a cancel pending.
+  - When the overdue poll timer fires in the same loop iteration, it cancels the receiver after the item was handed over. The disconnect is lost, and the loop polls until the session is torn down.
+  - Load makes the loop wake late, so the timer and the message land together more often.
+  - A repro script opened and closed the socket 300 times with a 1 ms poll while another gate ran. One session was still polling 250 ms after the close.
+- Fix: one read of the socket (`_until_disconnect`) lives as long as the connection. Each poll waits on it with `asyncio.wait(..., timeout=)`, which never cancels it, and it is cancelled only after the loop ends. The loop no longer depends on how the ASGI server's `receive` handles a cancel.
+- Sweep: `grep -rn "timeout_at\|asyncio.timeout(\|wait_for(" scio/ recovery/` finds no other timed await. The only other `wait_for` calls are Playwright's, in `tests/live/`.
+- Guard: `test_the_poll_loop_never_cancels_a_pending_receive` drives `_push_changes` with a stand-in socket that counts cancelled reads: 1 read and 0 cancels over nine polls. Against the old loop it failed with `(9, 9) == (1, 0)`. Guardrail 83.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-203 · An inspection-and-edit heredoc held `\n` escapes, and the push-gate hook refused it
+- Found: 2026-11-14 · issue #102, adding three imports to `tests/unit/test_dashboard_app.py` · the session, not the code
+- Symptom: a `python - <<'EOF'` script whose `str.replace` literals held `\n` was denied by the hook under guardrail 17. Nothing was written.
+- Root cause: the same lapse as I-191. A batch of small edits went into one shell script, out of habit, and its string literals needed newlines.
+- Fix: the three imports went in through the Edit tool.
+- Sweep: none needed. The hook refuses every such command, so none got through.
+- Guard: guardrail 17 (`hook:push_gate`), which held. Its rule now cites this id too.
+- Resolved: 2026-11-14 · Status: resolved

@@ -5,6 +5,7 @@ site can frame the page."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import sqlite3
@@ -12,21 +13,21 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 pytest.importorskip("fastapi")
 
 # ruff exempts pytest.importorskip from E402: the imports below need the dashboard extra
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
 from starlette.testclient import WebSocketDenialResponse, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from scio.dashboard.app import FRAME_HEADERS, create_app, is_same_origin
+from scio.dashboard.app import FRAME_HEADERS, _push_changes, create_app, is_same_origin
 from scio.dashboard.contract import ChangeEvent, ThreadDetail, ThreadSummary, ThreadVersion
 from tests.dashboard_support import DETAIL_FILES, FixtureDataSource, load_fixture
 
@@ -454,6 +455,57 @@ def test_ws_stops_polling_once_the_client_leaves(
                 break
             assert time.monotonic() < deadline, "the server kept polling after the client left"
             polls = now
+
+
+class _CountingSocket:
+    """A stand-in for the server's WebSocket. ``receive`` blocks until ``leave()``, and every
+    read that was cancelled is counted; ``send_text`` keeps what was pushed."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.reads = 0
+        self.cancelled_reads = 0
+        self._gone = asyncio.Event()
+
+    async def accept(self) -> None:
+        return None
+
+    async def send_text(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def receive(self) -> dict[str, Any]:
+        self.reads += 1
+        try:
+            await self._gone.wait()
+        except asyncio.CancelledError:
+            self.cancelled_reads += 1
+            raise
+        return {"type": "websocket.disconnect", "code": 1000}
+
+    def leave(self) -> None:
+        self._gone.set()
+
+
+def test_the_poll_loop_never_cancels_a_pending_receive(source: FixtureDataSource) -> None:
+    """I-202: the loop cancelled ``websocket.receive()`` at every poll. Starlette's test
+    client hands messages over through an anyio memory stream, which can drop an item handed
+    to a receiver in the same loop iteration as its cancel. Under the gate's load that lost
+    the client's disconnect, and the server polled until the test gave up. One read must now
+    span every poll, never cancelled, and the client's leaving must end the loop."""
+
+    async def scenario() -> _CountingSocket:
+        ws = _CountingSocket()
+        loop = asyncio.create_task(_push_changes(cast(WebSocket, ws), source, 0.001))
+        while source.calls.count("versions:SCIO") < 10:  # the baseline and nine polls
+            await asyncio.sleep(0.001)
+        assert (ws.reads, ws.cancelled_reads) == (1, 0)
+        ws.leave()
+        await asyncio.wait_for(loop, timeout=WAIT)
+        return ws
+
+    ws = asyncio.run(scenario())
+    assert (ws.reads, ws.cancelled_reads) == (1, 0)
+    assert ChangeEvent.model_validate_json(ws.sent[0]).changed == []  # the hello came first
 
 
 def test_ws_skips_a_failing_root_and_keeps_the_socket(
