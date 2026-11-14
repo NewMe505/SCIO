@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from recovery import config, history, machine, procs, runner
+from recovery import config, history, machine, procs, runner, watch
 from recovery.config import WorkspaceConfig
 from recovery.model import Incident, IncidentState, RunRecord, RunStatus
 from recovery.store import Store
@@ -64,6 +64,20 @@ def build_parser() -> argparse.ArgumentParser:
     hold.add_argument("incident")
     rel = sub.add_parser("release", help="resume a held incident")
     rel.add_argument("incident")
+
+    watch_cmd = sub.add_parser(
+        "watch",
+        help="an incident's state, timeline and repair session, live",
+        description=(
+            "Prints the incident's header and timeline, and the last steps of the Claude "
+            "Code repair session working in its worktree. With --follow, it then prints only "
+            "what is new until the incident is closed or escalated (Ctrl+C stops it)."
+        ),
+    )
+    watch_cmd.add_argument("incident")
+    watch_cmd.add_argument("--follow", action="store_true", help="keep printing what is new")
+    watch_cmd.add_argument("--last", type=int, default=20, help="session steps to show first")
+    watch_cmd.add_argument("--interval", type=float, default=5.0, help="seconds between polls")
     return p
 
 
@@ -292,6 +306,27 @@ def _incidents(args: argparse.Namespace) -> int:
     return 0
 
 
+def _watch(args: argparse.Namespace) -> int:
+    store = Store.at_home(_home())
+    try:
+        if store.get_incident(args.incident) is None:
+            _err(f"recovery watch: no incident {args.incident} (python -m recovery status)")
+            return 2
+        if not args.follow:
+            for line in watch.render(store, args.incident, last=args.last):
+                print(line)
+            return 0
+        try:
+            watch.follow(
+                store, args.incident, out=sys.stdout, last=args.last, interval_s=args.interval
+            )
+        except KeyboardInterrupt:
+            print("stopped watching")
+        return 0
+    finally:
+        store.close()
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": _run,
     "tick": _tick,
@@ -299,6 +334,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "incidents": _incidents,
     "hold": _hold,
     "release": _release,
+    "watch": _watch,
 }
 
 
