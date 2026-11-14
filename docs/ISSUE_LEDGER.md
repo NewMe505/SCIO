@@ -1588,3 +1588,21 @@ Template:
 - Guard: guardrail 17 (`hook:push_gate`) now cites I-177; its test `test_a_backslash_in_a_heredoc_or_a_python_c_script_is_refused` keeps a single-backslash `grep` argument allowed on purpose.
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-178 · The hooks do not run in a session started outside the repository
+- Found: 2026-11-08 · issue #91, the live check of PR #90's hook after its merge
+- Symptom: `printf %s 'x\\y'` and a piped `mypy | tail -1` ran with no refusal. Fed by hand, `main`'s `scripts/hooks/push_gate.py` denies the same payloads, and `git stash` too. The session's last hook record is 2026-11-08T01:13:53Z; it restarted at 01:18:41Z with `C:\Users\playa` as its working directory.
+- Root cause: the hook is wired in the project's `.claude/settings.json`, which a session loads only when it starts in the repository. The restart also dropped SCIO's CLAUDE.md and the project memory ("Instructions no longer present"). So a CLAUDE.md line or a memory note cannot guard this: they don't load in that session either. Not verified: the session's own hook list (`/hooks`) was not read.
+- Fix: none yet. Only user-level config (`~/.claude/settings.json`) loads in every session. A user-level entry for this hook would also apply its refusals to the owner's other projects' sessions, so it is the owner's decision. Until then, a SCIO session starts in the SCIO directory.
+- Sweep: the protections that live only in project config (`grep -n command .claude/settings.json`): this one hook.
+- Resolved: - · Status: open
+
+### I-179 · The push and commit gates let commands through when they followed a Git Bash path
+- Found: 2026-11-08 · issue #91, reading the session's hook records during I-178
+- Symptom: 11 hook warnings in one session, each announced and then ignored: `commit gate could not run ruff, commit allowed: [WinError 267] The directory name is invalid` (8) and `push gate could not check CI, push allowed: [WinError 267] ...` (3). Reproduced against `main`'s hook with `cd /c/Users/.../SCIO && git commit`, `... && git push` and `git -C /c/... push`.
+- Root cause: `evaluate` follows `cd <dir>` and `git -C <dir>` with `os.path.join(cwd, dir)`. Git Bash spells `C:/Users/x` as `/c/Users/x`, and on Windows `os.path.join` keeps the drive, giving `C:/c/Users/x`, which does not exist. The gate's own git call failed, and by design a gate that cannot check lets the command through with a warning. The warnings arrived as system messages, and none was acted on; that is the systemic half.
+- Fix: `native_dir` turns a Git Bash drive path into its Windows form before the gate uses it, for `cd` targets and `git -C` directories alike. After the fix, the same probe's commit ran ruff, and its push was checked (denied, since `main`'s CI was still running).
+- Impact: the 3 unchecked pushes were `fix/87`'s first push (no run to wait for) and pushes of `docs/81` and `feat/82`, whose previous runs had finished green, so the gate would have let each through. The 8 unlinted commits all reached `main` through green CI lint.
+- Sweep: every place the hook builds a directory (`grep -n "os.path.join(here" scripts/hooks/push_gate.py`): the `cd` and `-C` joins, both fixed. A directory written as a variable (`git -C $M`) still can't be followed; it stays a warning and an allowed command.
+- Guard: `test_a_git_bash_drive_path_becomes_a_path_windows_can_run_git_in` and `test_the_gate_runs_git_where_a_git_bash_path_points` (both forms; `windows=True`, so they run on Linux CI); guardrail 67
+- Resolved: 2026-11-08 · Status: resolved
+

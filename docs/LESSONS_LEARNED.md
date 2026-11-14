@@ -72,6 +72,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 64. **Never** pipe a check into another command without `set -o pipefail` on the line; better, run the gate, which logs each step to a file and needs no pipe (I-018, I-173). Guard: `hook:push_gate`, `test:test_a_check_piped_without_pipefail_is_refused`
 65. **Always** put a module loaded from a file path into `sys.modules` before `exec_module`; `@dataclass` looks its module up there (I-174). Guard: `test:test_the_local_ci_line_runs_python_tools_as_modules`
 66. **Never** put `# fmt: skip` inside a bracket; it holds only at the end of a statement, and ruff's RUF028 refuses the rest (I-175). Guard: `hook:push_gate` (its commit gate runs `ruff check`, whose `RUF` rules are selected in `pyproject.toml`)
+67. **Never** let a gate fail open on a path spelling it can read: the hook turns Git Bash's `/c/...` into `C:/...` before it runs git there. A hook warning that says `could not` means the command went through unchecked, so read it and rerun the command in a form the gate follows (I-179). Guard: `symbol:native_dir`, `test:test_the_gate_runs_git_where_a_git_bash_path_points`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
@@ -757,3 +758,7 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 - Ran one after another but could have run in parallel: the local tests and evals, and CI's tests and evals (both fixed here); the measurement runs of this pass ran in one background chain while the docs were written.
 - Repeated friction: a hook fix protects only after it merges, because the session runs the main checkout's hook; the pipefail habit continued while the check that refuses it was being written. Lint failed on first drafts again (RUF028, then an E501 in the hook's own message), each caught before its commit by a chain that could fail.
 - Improvements: (1) `scripts/gate.py` replaces the chained line, so no check is piped at all (I-173); (2) the next cut is CI's tests job, whose runner has 4 cores (`nproc` in #89's log) against this machine's 24. Running the product-build tests as a job of their own is the next thing to measure.
+
+### After the merge (issue #91)
+- The live check of the new hook found two things. The session had restarted outside the repository and was running no hooks at all (I-178, open, the owner's decision). Fed by hand, the hook script also showed that its push and commit gates had failed open on every `cd /c/...` line: 8 commits unlinted and 3 pushes unchecked in this pass, each with a warning nobody read (I-179, fixed).
+- Still to verify, in a session started in the SCIO directory: a live `printf %s 'x\\y'`, a backslash heredoc and a piped `mypy | tail -1` are each denied. That also confirms I-176's premise, that the hook sees a command before the Bash tool halves it.

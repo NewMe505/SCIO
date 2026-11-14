@@ -7,8 +7,10 @@ reaches GitHub.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -99,6 +101,45 @@ def test_evaluate_finds_git_inside_a_compound_line(monkeypatch: pytest.MonkeyPat
     assert pg.evaluate("git stash", ".")[0]
     assert pg.evaluate("echo git push", ".") == (None, None)  # git is an argument, not the command
     assert pg.evaluate("git status && git log -1", ".") == (None, None)
+
+
+def test_a_git_bash_drive_path_becomes_a_path_windows_can_run_git_in() -> None:
+    """I-179: `cd /c/Users/x && git push` made the gate join `C:/c/Users/x`, which does not
+    exist. The gate's git call raised WinError 267, and the gate let the command through: 8
+    commits unlinted and 3 pushes unchecked in one session. `windows=True` runs on Linux CI."""
+    pg = _load()
+    assert pg.native_dir("/c/Users/x", windows=True) == "C:/Users/x"
+    assert pg.native_dir("/d", windows=True) == "D:/"
+    for unchanged in ("C:/Users/x", "sub", "../x", "/cd/x", "/usr/lib", "$M"):
+        assert pg.native_dir(unchanged, windows=True) == unchanged, unchanged
+    assert pg.native_dir("/c/Users/x", windows=False) == "/c/Users/x"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "cd /c/x/SCIO && git -C sub push -q origin feat/91",
+        "git -C /c/x/SCIO/sub push -q origin feat/91",
+    ],
+)
+def test_the_gate_runs_git_where_a_git_bash_path_points(
+    monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    pg = _load()
+    seen: list[str] = []
+    monkeypatch.setattr(pg, "native_dir", functools.partial(pg.native_dir, windows=True))
+
+    def fake_latest(branch: str, cwd: str) -> dict[str, Any] | None:
+        seen.append(cwd)
+        return RED
+
+    monkeypatch.setattr(pg, "latest_run", fake_latest)
+    reason, warning = pg.evaluate(line, "C:/start")
+    assert reason and "concluded failure" in reason and warning is None
+    cwd = seen[0].replace("\\", "/")
+    assert "/c/x" not in cwd and cwd.endswith("x/SCIO/sub"), cwd  # was C:/c/x/SCIO/sub
+    if os.name == "nt":
+        assert cwd.startswith("C:/x/SCIO"), cwd
 
 
 def test_a_heredoc_that_mentions_git_is_text_not_a_command() -> None:
