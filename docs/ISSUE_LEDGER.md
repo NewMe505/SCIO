@@ -1611,3 +1611,18 @@ Template:
 - Guard: `test_a_git_bash_drive_path_becomes_a_path_windows_can_run_git_in` and `test_the_gate_runs_git_where_a_git_bash_path_points` (both forms; `windows=True`, so they run on Linux CI); guardrail 67
 - Resolved: 2026-11-08 · Status: resolved
 
+### I-180 · A hung `claude` process ends a build with a traceback, not a resumable stop
+- Found: 2026-11-13 · issue #95, read-only discovery for the external recovery supervisor · `scio/harness/providers/claude_code.py:89`
+- Symptom: not seen live yet; found by reading, then reproduced. `claude_runner(sys.executable)` running `time.sleep(5)` with `timeout_s=1` raises `subprocess.TimeoutExpired`, which is not a `HarnessError`. A `claude -p` process that outlives its timeout (600 s for a tool-less call, 1800 s for a worker turn) therefore escapes `scio/product/build.py`'s `except HarnessError` around a feature attempt (the I-100 guard) and every orchestrator node's guard. `scio build` ends with a traceback and exit 1, with no `feature_failed` record and no resume hint.
+- Root cause: `claude_runner` passes `timeout=` to `subprocess.run` and maps the binary's own error results (`parse_result`), but not the subprocess layer's timeout. Both the provider and the worker build their runner from it.
+- Fix: not yet. ADR 0019 (proposed) makes it the real defect for the recovery supervisor's end-to-end drill. A stub `claude` that sleeps past a short `SCIO_REQUEST_TIMEOUT_S` reproduces it offline. The expected fix is to map `TimeoutExpired` to `RetryableError` and kill the process tree, with a test.
+- Sweep: `grep -rn "TimeoutExpired" scio/` finds it caught in `aci/apps.py`, `aci/sandbox/local.py` and `aci/sandbox/docker.py`, but not in `harness/providers/claude_code.py` or `loop/claude_code_worker.py`. Every other `subprocess.run(..., timeout=` site is checked when this is fixed.
+- Resolved: - · Status: open
+
+### I-181 · The README says the nightly live task runs daily; it has been disabled since 2026-10-12
+- Found: 2026-11-13 · issue #95, discovery · `README.md` "Nightly live suite"
+- Symptom: the README says the dev machine runs `SCIO nightly live evals` at 03:17 daily. `Get-ScheduledTask` reads `State: Disabled`, last run 2026-10-12 03:17 with result 2. Nothing in the repository records that it was disabled. It stopped when live runs moved to the Max login on the Claude Code backend (ADR 0012), and `scripts/nightly_live.py` uses the API-key path.
+- Root cause: machine state described in prose, with nothing that reads the machine.
+- Fix: not yet. ADR 0019's supervisor registers its own scheduled task, and that change will reword this paragraph to match the task's real state.
+- Sweep: the README's other claims about machine state (the user-level hook, I-178) were checked by hand in issue #93.
+- Resolved: - · Status: open
