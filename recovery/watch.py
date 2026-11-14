@@ -61,7 +61,10 @@ def transcript_for(worktree: str | Path, env: Mapping[str, str] | None = None) -
     projects = claude_home(env) / "projects"
     candidates = [projects / project_key(worktree)]
     if not candidates[0].is_dir() and projects.is_dir():
-        tail = project_key(Path(worktree).name)
+        # The worktree's own name, split on both separators. On Linux, Path does not split
+        # a Windows path, so Path(...).name would return the whole string (I-194).
+        name = re.split(r"[\\/]+", str(worktree).rstrip("\\/"))[-1]
+        tail = project_key(name)
         candidates = sorted(p for p in projects.iterdir() if p.is_dir() and p.name.endswith(tail))
     files = [f for d in candidates if d.is_dir() for f in d.glob("*.jsonl")]
     return max(files, key=lambda f: f.stat().st_mtime) if files else None

@@ -90,6 +90,15 @@ def test_a_differently_spelled_parent_still_finds_the_worktrees_transcript(
     assert watch.transcript_for(WORKTREE) == found
 
 
+def test_a_windows_worktree_path_finds_its_transcript_on_any_os(claude_dir: Path) -> None:
+    """I-194: CI on Linux failed this lookup. Path() there does not split on backslashes, so
+    a Windows worktree's "name" was the whole string. This test runs on every OS."""
+    found = _transcript(claude_dir, ["{}"], key="other-parent--claude-worktrees-recovery-inc-1")
+    assert watch.transcript_for(WORKTREE) == found
+    posix = "/home/me/SCIO/.claude/worktrees/recovery-inc-1/"
+    assert watch.transcript_for(posix) == found
+
+
 def test_no_transcript_is_none_not_an_error(claude_dir: Path) -> None:
     assert watch.transcript_for(WORKTREE) is None
 
