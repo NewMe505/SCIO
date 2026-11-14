@@ -231,7 +231,11 @@ Each transition is a step in the supervisor's step log, run by `run` or by `tick
 6. **The live drill:** I-180 is the real defect, so it is not fixed by hand before the drill. The drill's fault is injected once and outside everything the run record carries, for example a switch that the workspace launcher removes after using it. Otherwise the replay would reproduce the fault, and the incident would never reach `verified`. I-182 (the orchestrator nodes' guard gap) sits on the same path, and the repair's sweep is expected to reach it.
 
 ### 12a. Measured before the code (pre-flight 8, 2026-11-14)
-- A child started with `subprocess.Popen` survives when its parent is killed, whatever the creation flags (none, `CREATE_NEW_PROCESS_GROUP`, `DETACHED_PROCESS`, `CREATE_BREAKAWAY_FROM_JOB`). The shell this was measured from is not in a job that kills on close. The context Task Scheduler gives is measured in phase 6b.
+- A child started with `subprocess.Popen` survives when its parent is killed, whatever the creation flags (none, `CREATE_NEW_PROCESS_GROUP`, `DETACHED_PROCESS`, `CREATE_BREAKAWAY_FROM_JOB`). The shell this was measured from is not in a job that kills on close.
+- Under Task Scheduler, measured with a temporary task that was registered, run once and deleted:
+  - The process is in no job, and `CREATE_BREAKAWAY_FROM_JOB` is refused (`[WinError 5]`). The fallback without it works, and the detached child outlived the task.
+  - The task's PATH has `uv`, `claude`, `gh`, `git` and `python`, but **no `sh`**.
+  - On Windows a bare argv[0] is found on the parent's PATH, never the child env's. So every spawn resolves its program against the env it runs with (`commands.resolve_program`, I-183, guardrail 69).
 - `taskkill /T /F /PID <sh>` reaches the Python process under `sh -> env -> uv -> python`, the same chain `scio.sh` builds.
 - `run` passes the child's stdout and stderr through to its own output as well as to the files, and exits with the child's code. A graphcalc session therefore still reads `PAUSED for a human:` and the resume hints.
 - A replay from `tick` runs in Task Scheduler's environment. So the run record also keeps `PATH`, `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA`, which hold no secrets. Without them, `sh`, `uv`, `claude` and the Max login might not resolve.

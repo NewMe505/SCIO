@@ -782,10 +782,18 @@ scio/
 │   ├── configs/                 # A/B: sonnet_only.yaml, sonnet_opus_advisor.yaml, opus_only.yaml
 │   ├── runner.py                # n≥5 trials; pass@1, pass^k, tokens, $, latency, advisor rates
 │   └── report.py
+├── recovery/                    # ADR 0019: the external recovery supervisor; stdlib only, never imports scio
+│   ├── runner.py                # supervises `scio build` as its parent: lease, output files, hang kill
+│   ├── classify.py              # pure failure classifier (flip tests), signatures
+│   ├── machine.py               # incident state machine; `tick` reconciles orphans and incidents
+│   ├── repair.py                # headless Claude Code repair session in a fresh worktree; claim checks
+│   ├── runtime.py               # live-wt move with probe and rollback; health check before a resume
+│   └── store.py                 # SQLite under %LOCALAPPDATA%/SCIO/recovery: runs, incidents, step log, leases
 ├── tests/
 │   ├── unit/
 │   ├── integration/             # full graph on the Fake provider, offline
-│   └── durability/              # crash mid-run → resume → zero duplicated side effects
+│   ├── durability/              # crash mid-run → resume → zero duplicated side effects
+│   └── recovery/                # the supervisor's tests, including the stdlib-only boundary scan
 ├── scripts/
 │   ├── gen_mermaid.py           # compiled graph → docs/ARCHITECTURE.md diagrams
 │   ├── check_docs.py            # links, runnable samples, diagram drift, public-API doc coverage

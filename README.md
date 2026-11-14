@@ -219,6 +219,7 @@ M2 settings: `SCIO_CHECKPOINT_DSN` (`memory://`, `sqlite:///.scio/checkpoints.sq
 - [docs/PRODUCT_MODE.md](docs/PRODUCT_MODE.md): roadmap M6–M11, from single tasks to building product-ready software from a prompt in any stack
 - [docs/IDEAS_TRIAGE.md](docs/IDEAS_TRIAGE.md): ROI triage of proposed improvements against live data
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): how to watch SCIO: GitHub, an OpenTelemetry trace viewer, `scio dashboard`, the CLI views
+- [docs/RECOVERY.md](docs/RECOVERY.md): the external recovery supervisor: setup, running a build under it, what it does with each failure, where its state lives
 - [docs/adr/](docs/adr/): Architecture Decision Records (0001 topology and models, 0002 harness conventions, 0003 idempotent effects and sandbox tiers, 0004 loop and verification, 0005 escalation policy, 0006 thresholds from data, 0007 product mode, 0008 advisor review of high-impact diffs, 0009 toolchain profiles, 0010 product graph and bootstrap, 0011 milestone loop, 0012 Claude Code backend, 0013 product runtime, 0014 second stack: node-ts and profile detection, 0015 product-ready: quality bar, release gate, product evals, 0016 post-M11 follow-ups: GitHub-mode merges and releases, upgrade, sandbox image per stack, run_app in a container, 0017 a live read-only dashboard, 0018 parallel features in worktrees, merged by one integrator, 0019 an external recovery supervisor: Claude repairs SCIO and the interrupted build resumes)
 - [CONTRIBUTING.md](CONTRIBUTING.md): branching, commits, PRs, docs-as-code
 - [CHANGELOG.md](CHANGELOG.md)
