@@ -1674,9 +1674,17 @@ Template:
 - Found: 2026-11-14 · issue #95, committing wave 1's finished modules while three agents were still writing · `scripts/hooks/push_gate.py` commit gate
 - Symptom: `git add <14 finished files> && git commit` was denied: "`ruff check` fails on the changed Python files". The failures were in `recovery/machine.py` and `tests/recovery/test_scrub.py`, two unstaged files that running agents had not finished. The commit would not have included them.
 - Root cause: confirmed by reading `commit_reason` (`scripts/hooks/push_gate.py:256-272`). It lints every `.py` file that `git status --porcelain --untracked-files=all` lists. That choice is deliberate. The hook runs before the whole command line, so in `git add X && git commit` nothing is staged yet when it looks, and `git diff --cached` would miss X. The cost is that one session's unfinished files block another session's commit in a shared checkout.
-- Fix: not yet. A likely fix is to lint the paths a `git add` in the same command names, the staged files, and nothing else, falling back to the whole tree for `git commit -a` or `git add -A`. A hook change reaches other sessions only when live-wt moves (guardrail 68), so it gets its own PR. Meanwhile, commit after the wave's agents finish.
-- Sweep: -
-- Resolved: - · Status: open
+- Fix (issue #100): `evaluate` collects a scope of `(dir, pathspecs)` from each `git add` before the commit and from the commit's own paths, relative to any `cd` or `-C`. `commit_files` lints the staged files (`git diff --cached --name-only --diff-filter=ACMR -z`) plus `git status --porcelain -- <specs>`. The gate falls back to linting the whole tree, which is the safe direction, in these cases:
+  - `git commit -a`, `--all` or `-qam`;
+  - `git add -A`, `-u`, `.` or `-p`;
+  - `--pathspec-from-file`;
+  - an unexpanded shell word (`$FILES`, `{a,b}.py`), `xargs git add`, or an unknown git subcommand or alias;
+  - a pathspec git refuses.
+
+  It reaches other sessions when live-wt moves after the merge (guardrail 68).
+- Sweep: `grep -rn 'status.*--porcelain\|"--porcelain"\|untracked-files\|diff.*--cached\|"--cached"' --include=*.py .` Nothing else chooses a commit's lint scope from the working tree. `scio/product/build.py:267` picks the files to auto-commit, which is a different job. It reads quoted names and renames from porcelain, and is recorded separately.
+- Guard: `test_the_commit_gate_lints_what_the_commit_can_hold` (22 cases in a real git repository) and `test_work_tree_paths_reads_git_add_and_git_commit` (13 cases). All 35 fail on the old hook. Guardrail 76.
+- Resolved: 2026-11-14 · Status: resolved
 
 ### I-187 · The supervisor handed `--outcome-file` to a SCIO older than the flag, which would refuse every run
 - Found: 2026-11-14 · issue #95, while planning the live drill · `recovery/runner.py`
@@ -1704,3 +1712,20 @@ Template:
   - The pipefail refusal is the only one with a certain repair.
 - Guard: `test_a_piped_check_is_rewritten_to_fail_closed_not_refused` runs the real hook: the input is kept whole, and no permission decision is made. `test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal` checks that a rewritten line still faces the other gates. Guardrail 73.
 - Resolved: 2026-11-14 · Status: resolved
+
+### I-193 · The commit gate never linted the first file `git status` listed, because the hook stripped its leading space
+- Found: 2026-11-14 · issue #100, by the agent rewriting the commit gate · `scripts/hooks/push_gate.py::_run`
+- Symptom: with ` M a.py` first in `git status --porcelain`, the gate never linted `a.py`, not even on `git commit -a`. Every changed file after the first one was linted as expected.
+- Root cause: `_run` returned `stdout.strip()`, which removed the leading space of the first porcelain line. `changed_python_files` then cut the path at column 3 and read ` M a.py`'s remainder `M a.py` as `.py`, a file that does not exist, so it was skipped.
+- Fix: `_run` uses `rstrip()`, so column parsing sees the line as git wrote it.
+- Sweep: `grep -rn '\[3:\]\|\[:2\]' --include=*.py .` finds the `_git` and `git_out` helpers in `scio/product/build.py`, `scio/aci/tools.py` and `scio/product/upgrade.py`, which also strip. They parse with `split()` or only test for empty output, so they are not affected.
+- Guard: the `a_bad.py` cases in `test_the_commit_gate_lints_what_the_commit_can_hold`, which fail when `strip()` is put back (11 cases). Guardrail 77.
+- Resolved: 2026-11-14 · Status: resolved
+
+### I-198 · `scio build` may auto-commit a quoted name or a rename line as one path (suspected)
+- Found: 2026-11-14 · issue #100, noted by the agent while sweeping porcelain readers · `scio/product/build.py:267`
+- Symptom: not reproduced. The code that picks files to auto-commit reads `git status --porcelain` lines and keeps column 3 onwards. Porcelain quotes a path that holds spaces or special characters (`"a b.py"`) and writes a rename as `old -> new`, so either would reach `git add` as one malformed path.
+- Root cause: to confirm with a test.
+- Fix: not yet. The likely fix is `git status --porcelain -z`, which writes neither quotes nor arrows.
+- Sweep: -
+- Resolved: - · Status: open
