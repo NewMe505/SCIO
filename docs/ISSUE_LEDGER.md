@@ -1593,9 +1593,13 @@ Template:
 - Symptom: `printf %s 'x\\y'` and a piped `mypy | tail -1` ran with no refusal. Fed by hand, `main`'s `scripts/hooks/push_gate.py` denies the same payloads, and `git stash` too. The session's last hook record is 2026-11-08T01:13:53Z; it restarted at 01:18:41Z with `C:\Users\playa` as its working directory.
 - Root cause: the hook is wired in the project's `.claude/settings.json`, which a session loads only when it starts in the repository. The restart also dropped SCIO's CLAUDE.md and the project memory ("Instructions no longer present"). So a CLAUDE.md line or a memory note cannot guard this: they don't load in that session either. Confirmed on 2026-11-13 by contrast: the same conversation, resumed in a session started in the SCIO directory, had the hook deny a double backslash, a backslash heredoc and a piped `mypy | tail -1`.
 - Meanwhile, without the hooks: `git push ... 2>&1 | grep -v "^remote:"; echo "push=$?"` printed `push=1`, grep's status, though the push had landed. That is I-173's habit again, in a session where nothing checks it (issue #91 comment).
-- Fix: none yet. Only user-level config (`~/.claude/settings.json`) loads in every session. A user-level entry for this hook would also apply its refusals to the owner's other projects' sessions, so it is the owner's decision. Until then, a SCIO session starts in the SCIO directory.
-- Sweep: the protections that live only in project config (`grep -n command .claude/settings.json`): this one hook.
-- Resolved: - · Status: open
+- Fix (the owner's decision, 2026-11-13, issue #93): `~/.claude/settings.json` runs the hook in every session, any project. Its command is `H=".../SCIO/.scio/live-wt/scripts/hooks/push_gate.py"; [ -f "$H" ] && python "$H" || true`.
+  - It runs the pinned `.scio/live-wt` copy, which only ever holds merged code, so a hook change reaches other projects' sessions when live-wt moves, never mid-edit.
+  - A missing script exits 0. Python's "can't open file" exits 2, and exit 2 from a PreToolUse hook blocks the command, so without the guard a moved folder would block every Bash command.
+  - Proven with a `claude -p` session started in a non-repository folder: the hook fired (a temporary sentinel line recorded it), and a bare `git stash` was denied with the hook's message.
+  - In a SCIO session both entries run, the project's and the user's: a denial shows twice, and a push or commit is checked twice in parallel.
+- Sweep: the protections that live only in project config (`grep -n command .claude/settings.json`): this one hook, now also at user level.
+- Resolved: 2026-11-13 · Status: resolved
 
 ### I-179 · The push and commit gates let commands through when they followed a Git Bash path
 - Found: 2026-11-08 · issue #91, reading the session's hook records during I-178
