@@ -244,7 +244,10 @@ class Incident:
     backoff_until: float | None = None
     ledger_id: str = ""
     escalation: str = ""
-    """Why it needs a human; set when the state becomes ``ESCALATED``."""
+    """Why it needs a human. Set when the state becomes ``ESCALATED``. On an incident that
+    is not ESCALATED yet, a non-empty value is a pending escalation: the circuit breaker or
+    a replay ending with the same signature sets it, and the next ``advance`` acts on it
+    once the snapshot and the issue exist."""
     held_from: IncidentState | None = None
     """The state to return to when a ``HELD`` incident is released."""
 

@@ -41,10 +41,12 @@ The supervisor never merges. It never answers a human stop (merge, gate, release
      (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10))
    )
    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 3)
+     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)
    Register-ScheduledTask -TaskName "SCIO recovery tick" -Action $action -Trigger $triggers -Settings $settings
    ```
    The task's PATH has no `sh`. A replay therefore runs with the environment recorded from the original run, and every program is looked up on that environment's PATH (I-183).
+
+   The 4-hour limit covers one tick running both repair attempts back to back, 2 × 90 minutes. A tick that is busy with a repair holds the tick lease, so the next scheduled ticks return at once (`IgnoreNew`).
 
 ## Run a build under supervision
 
