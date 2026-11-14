@@ -4,6 +4,10 @@
  * listens on the /ws WebSocket for ChangeEvents. Every string from the API can be model
  * output, so the DOM is built with createElement and textContent only: nothing here writes
  * HTML from data or evaluates code (tests/live/test_dashboard_page.py scans for it).
+ *
+ * GET /api/recovery (the recovery supervisor's runs and open incidents, issue #102) is read
+ * only once a /ws hello said the server has it (ChangeEvent.recovery), and from then on with
+ * every refresh: a server without it is never asked.
  */
 "use strict";
 
@@ -17,6 +21,7 @@
     in_progress: "in progress",
     waiting: "waiting",
     crashed: "crashed",
+    stopped: "stopped",
     done: "done",
     halted: "halted",
     error: "error",
@@ -25,11 +30,13 @@
   const LIT_STYLE = {
     waiting: "fill:#fcd34d,stroke:#92400e,stroke-width:3px,color:#1f1300",
     crashed: "fill:#fca5a5,stroke:#991b1b,stroke-width:3px,color:#2a0606",
+    stopped: "fill:#e9d5ff,stroke:#6b21a8,stroke-width:3px,color:#2e1065",
     halted: "fill:#fca5a5,stroke:#991b1b,stroke-width:3px,color:#2a0606",
     done: "fill:#86efac,stroke:#166534,stroke-width:3px,color:#052e16",
     error: "fill:#d1d5db,stroke:#374151,stroke-width:3px,color:#111827",
     in_progress: "fill:#93c5fd,stroke:#1e40af,stroke-width:3px,color:#0b1b3f",
   };
+  const STOPPED_FALLBACK = "its supervised process is gone";
 
   const state = {
     roots: [],
@@ -46,6 +53,9 @@
     mermaid: "loading", // loading | ready | failed
     svgCache: new Map(),
     graphSeq: 0,
+    recoveryOn: false, // the /ws hello said the server reads a recovery supervisor store
+    recovery: null, // the last RecoveryView
+    recoveryError: null, // why the last /api/recovery fetch failed
   };
 
   // ---------------------------------------------------------------- DOM helpers
@@ -292,6 +302,152 @@
     ]);
   }
 
+  // ---------------------------------------------------------------- the recovery supervisor
+
+  // the latest supervised run of a thread, or of its build: a feature run runs in its build's
+  // process, so it stops with it
+  function runFor(summary) {
+    const runs = list(state.recovery && state.recovery.runs);
+    const of = (threadId) => runs.find((r) => r.root === summary.root && r.thread_id === threadId);
+    return of(summary.thread_id) || (summary.parent_thread ? of(summary.parent_thread) : undefined);
+  }
+
+  function stopReason(summary) {
+    const run = runFor(summary);
+    return run && run.stopped ? run.stopped : STOPPED_FALLBACK;
+  }
+
+  function stoppedBox(summary) {
+    const run = runFor(summary);
+    const meta = [];
+    if (run) {
+      meta.push("supervised run ", mono(run.run_id));
+      if (run.incident_id) meta.push(" · incident ", mono(run.incident_id));
+    }
+    return el("div", { class: "stopped-box" }, [
+      badge("stopped"),
+      el("span", { class: "stopped-reason", text: " " + stopReason(summary) }),
+      meta.length ? el("p", { class: "meta" }, meta) : null,
+    ]);
+  }
+
+  function incidentThread(incident) {
+    if (!incident.build_thread) return el("span", { class: "muted", text: "—" });
+    if (incident.present && incident.root) {
+      return el("a", { class: "incident-thread tid", href: threadHref(incident.root, incident.build_thread), text: incident.build_thread });
+    }
+    return el("span", { class: "incident-thread muted mono", title: "not a thread of these workspaces", text: incident.build_thread });
+  }
+
+  function issueText(incident) {
+    const parts = [];
+    if (incident.issue_number) parts.push("issue #" + incident.issue_number);
+    if (incident.pr_number) parts.push("PR #" + incident.pr_number);
+    return parts.length ? parts.join(" · ") : "—";
+  }
+
+  function incidentDetails(incident) {
+    const events = list(incident.events);
+    const parts = [];
+    if (incident.escalation) parts.push(el("p", { class: "escalation" }, [el("strong", { text: "Needs a human: " }), el("span", { text: incident.escalation })]));
+    if (incident.frame) parts.push(el("p", { class: "meta" }, ["innermost SCIO frame ", mono(incident.frame)]));
+    parts.push(el("p", { class: "meta" }, ["workspace ", mono(incident.workspace), " · opened ", timeEl(incident.created_at)]));
+    if (events.length) {
+      parts.push(el("details", { class: "incident-events", "data-key": "incident:" + incident.incident_id }, [
+        el("summary", { text: "last " + events.length + (events.length === 1 ? " event" : " events") }),
+        el("ul", { class: "events" }, events.map((e) => el("li", {}, [clockEl(e.at), " ", el("span", { text: e.text })]))),
+      ]));
+    }
+    return parts;
+  }
+
+  function incidentRows(incident) {
+    const id = incident.incident_id;
+    const escalating = incident.escalation || incident.state === "escalated";
+    const stateBadge = el("span", { class: "badge i-state" + (escalating ? " i-escalating" : ""), text: dash(incident.state) });
+    return [
+      el("tr", { class: "incident", "data-incident": id }, [
+        td([mono(id), incident.summary ? el("div", { class: "title", text: incident.summary }) : null], "c-incident"),
+        td(stateBadge, "c-state"),
+        td(dash(incident.failure_class), "c-class"),
+        td(issueText(incident), "c-issue"),
+        td(int(incident.attempts) + " / " + int(incident.replays), "num"),
+        td(incidentThread(incident), "c-thread"),
+        td(timeEl(incident.updated_at), "c-updated"),
+      ]),
+      el("tr", { class: "sub incident-sub", "data-sub-for-incident": id }, el("td", { colspan: "7" }, el("div", { class: "sub-inner" }, incidentDetails(incident)))),
+    ];
+  }
+
+  function recoverySection() {
+    const r = state.recovery;
+    const section = el("section", { class: "recovery-section", "data-recovery": r ? (r.present ? "present" : "absent") : "unknown" }, [
+      el("h2", { class: "root-name" }, [
+        el("span", { text: "Recovery supervisor" }),
+        r && r.store ? el("span", { class: "root-path", text: r.store }) : null,
+      ]),
+    ]);
+    if (state.recoveryError) section.append(el("p", { class: "error-box recovery-fetch-error", text: "Could not fetch the supervisor's view (" + state.recoveryError + "); showing the last one." }));
+    if (!r) return section;
+    if (!r.present) {
+      section.append(el("p", { class: "muted recovery-none", text: "No recovery supervisor store." }));
+      return section;
+    }
+    if (r.error) section.append(el("p", { class: "error-box recovery-error" }, [el("strong", { text: "The store could not be read in full: " }), el("span", { text: r.error })]));
+    // escalated incidents first: the supervisor has handed them to the owner
+    const groups = [
+      { key: "needs-you", label: "needs you", note: " escalated in the last 14 days", rows: list(r.escalated) },
+      { key: "open", label: "open", note: " the supervisor is working on these", rows: list(r.incidents) },
+    ].filter((g) => g.rows.length);
+    if (!groups.length) {
+      section.append(el("p", { class: "muted recovery-quiet", text: "No open or recently escalated incidents." }));
+      return section;
+    }
+    const headers = [
+      { text: "Incident", cls: "c-incident" },
+      { text: "State" },
+      { text: "Class" },
+      { text: "Issue · PR" },
+      { text: "Repairs / replays", cls: "num" },
+      { text: "Build thread", cls: "c-thread" },
+      { text: "Updated" },
+    ];
+    const tableNode = el("table", { class: "grid incidents" }, [
+      el("thead", {}, el("tr", {}, headers.map((h) => el("th", { scope: "col", class: h.cls || null, text: h.text })))),
+    ]);
+    for (const g of groups) {
+      tableNode.append(el("tbody", { "data-group": g.key }, [
+        el("tr", { class: "group" }, el("th", { colspan: "7", scope: "rowgroup" }, el("span", { class: "group-label" }, [
+          el("strong", { text: g.label }),
+          el("span", { text: " · " + g.rows.length + " ·" + g.note }),
+        ]))),
+        ...g.rows.flatMap(incidentRows),
+      ]));
+    }
+    section.append(el("div", { class: "table-wrap" }, tableNode));
+    return section;
+  }
+
+  // the incidents that interrupted this thread, or its build: the escalated ones first
+  function incidentBoxes(summary) {
+    const r = state.recovery;
+    const all = r ? [...list(r.escalated), ...list(r.incidents)] : [];
+    const mine = all.filter(
+      (i) => i.root === summary.root && i.build_thread && (i.build_thread === summary.thread_id || i.build_thread === summary.parent_thread),
+    );
+    return mine.map((i) =>
+      el("div", { class: "incident-box", "data-incident": i.incident_id }, [
+        el("p", { class: "incident-line" }, [
+          el("strong", { text: "Recovery incident " }),
+          mono(i.incident_id),
+          " · " + dash(i.state) + " · " + dash(i.failure_class) + " · " + issueText(i),
+        ]),
+        i.summary ? el("p", { class: "meta", text: i.summary }) : null,
+        i.escalation ? el("p", { class: "escalation" }, [el("strong", { text: "Needs a human: " }), el("span", { text: i.escalation })]) : null,
+      ]),
+    );
+  }
+
   // ---------------------------------------------------------------- bars (inline SVG)
 
   function bars(map, label, extraLabel) {
@@ -486,6 +642,7 @@
     const statusCell = badge(t.status);
     if (t.status === "crashed" && t.crash) statusCell.setAttribute("title", t.crash);
     if (t.status === "waiting" && t.waiting && t.waiting.question) statusCell.setAttribute("title", t.waiting.question);
+    if (t.status === "stopped") statusCell.setAttribute("title", stopReason(t));
     const rows = [
       el("tr", { class: rowClass, "data-thread": ref }, [
         td([
@@ -503,6 +660,7 @@
     let sub = null;
     if (t.status === "waiting" || t.waiting) sub = waitingBox(t);
     else if (t.status === "crashed") sub = crashBox(t, "crash:" + ref);
+    else if (t.status === "stopped") sub = stoppedBox(t);
     else if (t.status === "error") sub = errorBox(t);
     if (sub) {
       rows.push(
@@ -560,7 +718,7 @@
   function statusSummary(threads) {
     const counts = new Map();
     for (const t of threads) counts.set(t.status, (counts.get(t.status) || 0) + 1);
-    const order = ["waiting", "crashed", "halted", "in_progress", "done", "error"];
+    const order = ["waiting", "crashed", "stopped", "halted", "in_progress", "done", "error"];
     const chips = order.filter((s) => counts.has(s)).map((s) => el("span", { class: "chip" }, [badge(s), " " + counts.get(s)]));
     const roots = new Set(threads.map((t) => t.root));
     return el("p", { class: "summary-line" }, [
@@ -580,6 +738,7 @@
     }
     if (!roots.length) frag.append(el("p", { class: "muted", text: "No workspaces. Start the dashboard with --root <dir>." }));
     for (const root of roots) frag.append(rootSection(root, byRoot.get(root.name) || []));
+    if (state.recoveryOn) frag.append(recoverySection());
     return frag;
   }
 
@@ -613,7 +772,9 @@
     ]);
     if (s.waiting || s.status === "waiting") head.append(waitingBox(s));
     if (s.status === "crashed") head.append(crashBox(s, "crash:head"));
+    if (s.status === "stopped") head.append(stoppedBox(s));
     if (s.error) head.append(errorBox(s));
+    for (const box of incidentBoxes(s)) head.append(box);
     return head;
   }
 
@@ -1041,11 +1202,30 @@
     return false;
   }
 
+  // never rejects: a failed fetch keeps the last view and says why in its section
+  function fetchRecovery() {
+    return getJSON("/api/recovery").then(
+      (data) => ({ data: data }),
+      (err) => ({ error: err && err.message ? err.message : String(err) }),
+    );
+  }
+
   async function refreshOnce(req) {
     const before = state.threads;
-    const [roots, threads] = await Promise.all([getJSON("/api/roots"), getJSON("/api/threads")]);
+    const wantRecovery = state.recoveryOn;
+    const [roots, threads, recovery] = await Promise.all([
+      getJSON("/api/roots"),
+      getJSON("/api/threads"),
+      wantRecovery ? fetchRecovery() : Promise.resolve(null),
+    ]);
     state.roots = list(roots);
     state.threads = list(threads);
+    if (recovery && recovery.data) {
+      state.recovery = recovery.data;
+      state.recoveryError = null;
+    } else if (recovery) {
+      state.recoveryError = recovery.error;
+    }
     if (!state.graphsLoaded) {
       try {
         await loadGraphs();
@@ -1060,7 +1240,11 @@
     }
     const k = key(route.root, route.id);
     const stale = !state.detail || state.detail.key !== k;
-    if (!(req.all || stale || openThreadAffected(req.keys, before))) return;
+    if (!(req.all || stale || openThreadAffected(req.keys, before))) {
+      // the open thread is unchanged, but its incident or stop reason may not be
+      if (req.recovery) renderThread(true);
+      return;
+    }
     const detail = await loadDetail(route);
     if (state.route.view !== "thread" || key(state.route.root, state.route.id) !== detail.key) return;
     state.detail = detail;
@@ -1068,8 +1252,9 @@
   }
 
   function requestRefresh(req) {
-    const pending = state.pending || { all: false, keys: new Set() };
+    const pending = state.pending || { all: false, recovery: false, keys: new Set() };
     if (req.all) pending.all = true;
+    if (req.recovery) pending.recovery = true;
     for (const k of req.keys || []) pending.keys.add(k);
     state.pending = pending;
     document.documentElement.dataset.refresh = "busy";
@@ -1137,15 +1322,23 @@
       } catch (err) {
         return;
       }
+      const recovery = Boolean(message && message.recovery === true);
       if (!greeted) {
-        // the hello: anything may have changed while this socket was down
+        // the hello: anything may have changed while this socket was down; it also says
+        // whether this server reads a recovery supervisor store
         greeted = true;
         live.attempt = 0;
         setConn("live");
-        requestRefresh({ all: true });
+        state.recoveryOn = recovery;
+        if (!recovery) {
+          state.recovery = null;
+          state.recoveryError = null;
+        }
+        requestRefresh({ all: true, recovery: recovery });
         return;
       }
-      requestRefresh({ keys: [...refsOf(message && message.changed), ...refsOf(message && message.removed)] });
+      if (recovery) state.recoveryOn = true;
+      requestRefresh({ keys: [...refsOf(message && message.changed), ...refsOf(message && message.removed)], recovery: recovery });
     });
     socket.addEventListener("close", () => {
       if (live.socket !== socket) return;

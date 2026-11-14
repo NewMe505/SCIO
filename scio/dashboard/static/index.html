@@ -4,9 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <!-- Thread text is model output: scripts only from here and the pinned CDN file, no inline
-       script or handlers. Mermaid's SVG carries its own <style>, hence 'unsafe-inline' styles. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'">
+  <!-- Thread text is model output: scripts only from here and the one pinned Mermaid file (its
+       full URL, so no other cdnjs file runs; a new version changes it with the tag below), no
+       inline script or handlers. Mermaid's SVG carries its own <style>, hence 'unsafe-inline'
+       styles. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <title>SCIO dashboard</title>
   <link rel="icon" href="data:,">

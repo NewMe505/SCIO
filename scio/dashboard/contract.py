@@ -16,14 +16,21 @@ HTTP surface (every route is a read; there is no write route)::
     GET /api/threads[?root=NAME]         -> list[ThreadSummary], newest update first
     GET /api/threads/{root}/{thread_id}  -> ThreadDetail; 404 for an unknown root or thread
     GET /api/graphs                      -> list[GraphDiagram]
-    WS  /ws                              -> ChangeEvent: one hello with nothing in it on
-                                            connect, then one per poll that found a change
+    GET /api/recovery                    -> RecoveryView: the recovery supervisor's runs of
+                                            the threads in view, its open incidents and its
+                                            escalated ones of the last 14 days (issue #102);
+                                            an empty view from a source that is not a
+                                            RecoverySource
+    WS  /ws                              -> ChangeEvent: one hello with no thread in it on
+                                            connect (``recovery`` true when the source reads
+                                            a supervisor store), then one per poll that found
+                                            a change
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,7 +45,7 @@ the build's required input, so a build that stopped before its first feature sti
 ``scio run`` or a feature run inside a build. Decided by the checkpoint's channels, never by
 the name: the same rules as ``scio report`` (I-066, I-108)."""
 
-ThreadStatus = Literal["in_progress", "waiting", "crashed", "done", "halted", "error"]
+ThreadStatus = Literal["in_progress", "waiting", "crashed", "stopped", "done", "halted", "error"]
 """Derived once, by the data layer, so the API and the page never re-derive it, in this order:
 ``error`` when the checkpoint could not be read with its kind's model; ``crashed`` when the
 latest checkpoint has a pending ``__error__`` write (the process died in a node; a resume
@@ -47,8 +54,13 @@ before that, I-133); ``waiting`` when a stop is pending: an ``__interrupt__`` wr
 ``__resume__`` write on the same checkpoint (an answered stop whose node is running again
 reads ``in_progress``; exact because every SCIO node interrupts at most once); ``halted`` when
 ``exit_reason`` is set and is not ``success``, or the phase is ``halted``; ``done`` when the
-phase is ``done``; otherwise ``in_progress``. A process killed without an exception also
-reads ``in_progress``: ``updated_at`` says how long it has been quiet."""
+phase is ``done``; ``stopped`` when the recovery supervisor ran the thread and its process is
+gone (issue #102): the latest supervised run of the thread, or of a feature run's build, in
+the root's workspace (refused runs aside) is ``running`` with its PID dead or reused (PID
+plus creation time), or the supervisor recorded it ``orphaned``, ``killed_hang`` or
+``exited`` with a non-zero code; otherwise ``in_progress``. ``stopped`` replaces only
+``in_progress``. A process killed without an exception and not supervised still reads
+``in_progress``: ``updated_at`` says how long it has been quiet."""
 
 
 class Workspace(BaseModel):
@@ -129,8 +141,9 @@ class FeatureLink(BaseModel):
     """The run's ``FeatureRun.status``: running, passed, failed or skipped. For a feature
     thread of this build that has no ``FeatureRun`` yet (the attempt in progress: SCIO records
     a run only when its attempt ends), ``running``, or the thread's own status when it has
-    stopped: ``waiting``, ``crashed`` or ``halted`` (the live graphcalc build's P4 waited at
-    ``advisor_cap`` with no run recorded)."""
+    stopped: ``waiting``, ``crashed``, ``halted`` or ``stopped`` (the live graphcalc build's P4
+    waited at ``advisor_cap`` with no run recorded; a supervised build whose process is gone
+    takes its attempt with it)."""
     present: bool
     """The feature thread has a checkpoint in the same root (the page links it only then)."""
 
@@ -219,6 +232,11 @@ class ThreadVersion(BaseModel):
     to wait; nor a crash, nor a parallel task's progress."""
     ledger_bytes: int = 0
     """The size of the thread's cost ledger file; 0 when there is none."""
+    supervisor: str = ""
+    """The thread's latest supervised run (its build's, for a feature run) as the data layer
+    reads it: the run id, its status and whether it counts as stopped; "" when the
+    supervisor has no run of it. A supervised process that dies writes nothing anywhere, so
+    only this field shows the thread turning ``stopped``."""
 
 
 class ThreadRef(BaseModel):
@@ -236,6 +254,97 @@ class ChangeEvent(BaseModel):
     """Threads whose :class:`ThreadVersion` differs from the last poll, new threads included."""
     removed: list[ThreadRef] = Field(default_factory=list)
     at: datetime
+    recovery: bool = False
+    """The page fetches ``/api/recovery``. On the hello: the source reads a supervisor store,
+    so the page shows its section and refetches it with every refresh from then on. On a
+    later event: the store changed (:meth:`RecoverySource.recovery_version`). A server that
+    never sets it is never asked for ``/api/recovery``."""
+
+
+class SupervisedRun(BaseModel):
+    """The recovery supervisor's latest run of a thread in view (issue #102, ADR 0019): a
+    ``runs`` row of its store whose workspace is the root and whose build thread is the
+    thread. A feature run has none of its own; it runs in its build's process."""
+
+    root: str
+    """``Workspace.name``."""
+    thread_id: str
+    """The run's build thread."""
+    run_id: str
+    status: str
+    """The supervisor's: ``running``, ``exited``, ``killed_hang`` or ``orphaned``."""
+    alive: bool | None = None
+    """For a ``running`` run: its process still runs, by PID and creation time, so a reused
+    PID reads gone. None for a run that ended, or when this machine cannot tell."""
+    pid: int = 0
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    incident_id: str | None = None
+    """The incident this run opened, or the one it replays."""
+    stopped: str | None = None
+    """Why the thread counts as stopped; None while the run runs and after a clean exit. The
+    thread reads ``stopped`` only where it would otherwise read ``in_progress``."""
+
+
+class IncidentEvent(BaseModel):
+    at: datetime
+    text: str
+
+
+class RecoveryIncident(BaseModel):
+    """One incident of the supervisor: an open one (state not ``closed`` or ``escalated``),
+    or a recently escalated one (:attr:`RecoveryView.escalated`)."""
+
+    incident_id: str
+    state: str
+    """``recovery.model.IncidentState``: ``detected`` ... ``held``."""
+    failure_class: str
+    """``recovery.model.FailureClass``: ``harness_suspect``, ``hang``, ``orphan`` ..."""
+    summary: str = ""
+    frame: str = ""
+    """The innermost frame under ``scio/`` (``scio/<path>.py:<function>``), when known."""
+    issue_number: int | None = None
+    pr_number: int | None = None
+    attempts: int = 0
+    """Repair sessions started."""
+    replays: int = 0
+    """Resumes started without a repair."""
+    escalation: str = ""
+    """Why it needs a human; set before the state becomes ``escalated``."""
+    workspace: str
+    created_at: datetime
+    updated_at: datetime
+    build_thread: str = ""
+    """The build thread it interrupted: the ``runs`` row of its first failed run; "" when
+    that run names none."""
+    root: str | None = None
+    """The root whose path is ``workspace``, when one is."""
+    present: bool = False
+    """``build_thread`` has a checkpoint in ``root`` (the page links it only then)."""
+    events: list[IncidentEvent] = Field(default_factory=list)
+    """Its timeline's last entries, oldest first."""
+
+
+class RecoveryView(BaseModel):
+    """The recovery supervisor's store as the dashboard reads it, read-only (issue #102)."""
+
+    store: str | None = None
+    """The store's path; None when the server reads no store."""
+    present: bool = False
+    """The store file exists. Without it the section reads "no recovery supervisor store"."""
+    error: str | None = None
+    """Why the store, or some of its rows, could not be read; what could be read still
+    shows."""
+    runs: list[SupervisedRun] = Field(default_factory=list)
+    """The latest supervised run of each build thread in the roots' workspaces."""
+    incidents: list[RecoveryIncident] = Field(default_factory=list)
+    """The open incidents, newest update first."""
+    escalated: list[RecoveryIncident] = Field(default_factory=list)
+    """The escalated incidents whose ``updated_at`` is within the last 14 days
+    (``scio.dashboard.supervisor.ESCALATED_WINDOW_S``), newest update first: the supervisor
+    handed each to the owner, so the page lists them first, as "needs you", with the reason
+    (``escalation``). Closed incidents are never listed."""
 
 
 class UnknownRoot(KeyError):
@@ -268,4 +377,19 @@ class DataSource(Protocol):
     def versions(self, root: str) -> dict[str, ThreadVersion]:
         """Thread id -> its version: two grouped queries (checkpoints, writes) and one
         ``stat`` per ledger, cheap enough to call every second. Raises :class:`UnknownRoot`."""
+        ...
+
+
+@runtime_checkable
+class RecoverySource(Protocol):
+    """What the API reads of the recovery supervisor, beside a :class:`DataSource`: a source
+    that also has these methods (``CheckpointDataSource`` has) serves ``/api/recovery`` and
+    says so in the ``/ws`` hello. Neither method raises for a missing or unreadable store:
+    that is part of the view."""
+
+    def recovery(self) -> RecoveryView: ...
+
+    def recovery_version(self) -> str:
+        """Changes whenever the supervisor writes its store; cheap enough to call every
+        second."""
         ...

@@ -27,7 +27,9 @@
   --blue-fg: #1b4bb0;
   --grey-bg: #e6e8eb;
   --grey-fg: #464e58;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --stop-bg: #f1e6fd;
+  --stop-fg: #5b2196;
+  --mono:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -57,6 +59,8 @@
     --blue-fg: #accaff;
     --grey-bg: #2a3038;
     --grey-fg: #bcc4ce;
+    --stop-bg: #2f1a47;
+    --stop-fg: #d9b8ff;
   }
 }
 
@@ -211,7 +215,8 @@ main {
   color: var(--text);
 }
 
-/* ---- badges: waiting amber, crashed or halted red, done green, in progress blue, error grey */
+/* ---- badges: waiting amber, crashed or halted red, stopped purple, done green, in progress
+   blue, error grey */
 
 .badge {
   display: inline-block;
@@ -239,6 +244,12 @@ main {
 .f-halted {
   background: var(--red-bg);
   color: var(--red-fg);
+}
+
+.s-stopped,
+.f-stopped {
+  background: var(--stop-bg);
+  color: var(--stop-fg);
 }
 
 .s-done,
@@ -477,6 +488,87 @@ tr.sub.child td {
   overflow-wrap: anywhere;
 }
 
+.stopped-box,
+.incident-box {
+  border-left: 4px solid var(--stop-fg);
+  background: var(--stop-bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.incident-box p {
+  margin: 0;
+}
+
+.incident-box .meta {
+  margin-top: 4px;
+}
+
+.escalation {
+  margin: 4px 0 0;
+  color: var(--red-fg);
+  overflow-wrap: anywhere;
+}
+
+/* ---- the recovery supervisor's section */
+
+.recovery-section {
+  margin-bottom: 24px;
+}
+
+.incidents td {
+  white-space: nowrap;
+}
+
+.incidents .c-incident {
+  white-space: normal;
+  min-width: 12rem;
+  max-width: 28rem;
+}
+
+.i-escalating {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.incidents tbody[data-group="needs-you"] .group-label strong {
+  color: var(--red-fg);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+}
+
+/* a workspace path or a frame is one long word on a phone */
+.incident-sub .mono,
+.stopped-box .mono,
+.incident-box .mono {
+  overflow-wrap: anywhere;
+}
+
+.incident-events {
+  margin-top: 4px;
+}
+
+.incident-events summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.events {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.events li {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+
 /* ---- thread pages */
 
 .card {
@@ -506,6 +598,10 @@ tr.sub.child td {
 .head.st-crashed,
 .head.st-halted {
   border-color: var(--red-fg);
+}
+
+.head.st-stopped {
+  border-color: var(--stop-fg);
 }
 
 .eyebrow {

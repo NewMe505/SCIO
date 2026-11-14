@@ -9,19 +9,28 @@ holds a transaction stops a live writer's WAL checkpoint and the WAL then grows 
 The main DB file never changes; on a DB no writer has open, SQLite still leaves its empty
 ``-wal`` and ``-shm`` index files behind, which the next writer takes over. A file path is built
 from a thread id only once the DB lists that thread, so an id that came from a URL never
-reaches the filesystem."""
+reaches the filesystem.
+
+The recovery supervisor's store (``state.sqlite``, ADR 0019) is read the same way, from where
+the supervisor keeps it (:func:`scio.dashboard.supervisor.store_path`, resolved on each read
+unless the source was given a path): its runs make a supervised thread whose process is gone
+read ``stopped``, and :meth:`CheckpointDataSource.recovery` serves its open incidents (issue
+#102). A missing store is no error; an unreadable one is skipped and logged once per streak,
+and never fails a root's threads (guardrail 30)."""
 
 from __future__ import annotations
 
 import functools
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
 import threading
+import time
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,10 +41,15 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Send
 from pydantic import BaseModel, ValidationError
 
+from scio.dashboard import liveness, supervisor
 from scio.dashboard.contract import (
     FeatureLink,
     GraphDiagram,
+    IncidentEvent,
+    RecoveryIncident,
+    RecoveryView,
     StopInfo,
+    SupervisedRun,
     ThreadDetail,
     ThreadKind,
     ThreadStatus,
@@ -72,9 +86,12 @@ KIND_GRAPH: dict[ThreadKind, str] = {
     "bootstrap": "product_new",
     "task": "t0",
 }
-STOPPED: tuple[ThreadStatus, ...] = ("waiting", "crashed", "halted")
+STOPPED: tuple[ThreadStatus, ...] = ("waiting", "crashed", "halted", "stopped")
 """The statuses of a feature attempt's thread that its build link shows instead of
 ``running``."""
+INCIDENT_EVENTS = 5
+"""How many of an incident's last timeline entries the recovery view carries."""
+log = logging.getLogger(__name__)
 _OLDEST = datetime.min.replace(tzinfo=UTC)
 _LATEST_SQL = (
     "select thread_id, max(checkpoint_id) from checkpoints where checkpoint_ns = '' "
@@ -243,12 +260,13 @@ def _running(saver: SqliteSaver, latest: dict[str, str], build: _Thread) -> list
     return sorted(out, key=lambda r: (int(r.feature_id[1:]), r.attempt))
 
 
-def _attempt_status(t: _Thread) -> str:
+def _attempt_status(t: _Thread, gone: bool = False) -> str:
     """An attempt with no ``FeatureRun`` is ``running`` unless its thread has stopped, so a
     paused or dead attempt never reads as busy (the live graphcalc P4 waited at ``advisor_cap``).
+    ``gone``: its build's supervised process is gone, which takes the attempt with it.
     ``done`` or ``error`` with no run recorded yet still read ``running``."""
     next_nodes = _next_nodes(t.channels) if t.state is not None else []
-    status = _status(t.state, _stop(t.pending, next_nodes), _crash(t.pending))
+    status = _status(t.state, _stop(t.pending, next_nodes), _crash(t.pending), gone)
     return status if status in STOPPED else "running"
 
 
@@ -328,8 +346,11 @@ def _status(
     state: ProductBuildState | ProductState | SCIOState | None,
     stop: StopInfo | None,
     crash: str | None,
+    gone: bool = False,
 ) -> ThreadStatus:
-    """The order of the contract's ``ThreadStatus``: the API and the page never re-derive it."""
+    """The order of the contract's ``ThreadStatus``: the API and the page never re-derive it.
+    ``gone``: the thread's supervised run counts as stopped (:class:`_Supervised`), which
+    replaces only ``in_progress``."""
     if state is None:
         return "error"
     if crash is not None:
@@ -341,7 +362,103 @@ def _status(
         return "halted"
     if state.phase == "done":
         return "done"
+    if gone:
+        return "stopped"
     return "in_progress"
+
+
+@dataclass(frozen=True)
+class _Supervised:
+    """A build thread's latest supervised run, its process's liveness read once."""
+
+    root: str
+    run: supervisor.StoredRun
+    alive: bool | None
+    stopped: str | None
+
+    @property
+    def token(self) -> str:
+        """What ``ThreadVersion.supervisor`` compares: a new run, a new status, or a process
+        that died changes it."""
+        return f"{self.run.run_id}:{self.run.status}:{'stopped' if self.stopped else 'on'}"
+
+    def view(self, thread_id: str) -> SupervisedRun:
+        run = self.run
+        return SupervisedRun(
+            root=self.root,
+            thread_id=thread_id,
+            run_id=run.run_id,
+            status=run.status,
+            alive=self.alive,
+            pid=run.pid,
+            exit_code=run.exit_code,
+            started_at=supervisor.at(run.started_at),
+            ended_at=supervisor.at(run.ended_at),
+            incident_id=run.incident_id,
+            stopped=self.stopped,
+        )
+
+
+Supervision = dict[str, _Supervised]
+"""Build thread id -> its latest supervised run, for one root."""
+
+
+def _supervised(
+    ws: Workspace, runs: list[supervisor.StoredRun], alive: Callable[[int, float], bool | None]
+) -> Supervision:
+    """The latest run of each build thread in ``ws``. A running run's process is checked only
+    by a real key: the supervisor saves a run with PID 0 before it starts the child, and
+    creation time 0 when it could not read one, and neither means the process is gone."""
+    out: Supervision = {}
+    for thread, run in supervisor.latest_runs(runs, ws.path).items():
+        known = run.status == supervisor.RUNNING and run.pid > 0 and run.pid_created > 0
+        live = alive(run.pid, run.pid_created) if known else None
+        out[thread] = _Supervised(ws.name, run, live, supervisor.stop_reason(run, live))
+    return out
+
+
+def _supervising(sup: Supervision, thread_id: str, parent: str | None) -> _Supervised | None:
+    """The run of ``thread_id``, else of its build ``parent``: a feature run runs in its
+    build's process, so it stops with it."""
+    return sup.get(thread_id) or (sup.get(parent) if parent else None)
+
+
+def _token(sup: Supervision, thread_id: str) -> str:
+    """``ThreadVersion.supervisor`` for ``thread_id``: its own run's, else the longest build
+    thread's it extends, so an open feature thread refreshes when its build's process dies.
+    By the id alone (``versions`` reads no checkpoint); at worst one more refetch."""
+    builds = [b for b in sup if thread_id == b or thread_id.startswith(b + "-")]
+    return sup[max(builds, key=len)].token if builds else ""
+
+
+def _reason(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+class _Streak:
+    """Logs a source that cannot be read once per failure streak (guardrail 30): the first
+    failure at warning, the repeats at debug, the recovery at info. Thread-safe: the API's
+    threadpool and the WebSocket's polls share one source."""
+
+    def __init__(self, what: str) -> None:
+        self._what = what
+        self._failing = False
+        self._lock = threading.Lock()
+
+    def failed(self, path: Path, exc: BaseException) -> None:
+        with self._lock:
+            first, self._failing = not self._failing, True
+        level = logging.WARNING if first else logging.DEBUG
+        log.log(
+            level, "dashboard: %s %s cannot be read, skipped: %s", self._what, path, _reason(exc)
+        )
+
+    def succeeded(self, path: Path) -> None:
+        with self._lock:
+            if not self._failing:
+                return
+            self._failing = False
+        log.info("dashboard: %s %s reads again", self._what, path)
 
 
 def _ledger_path(ws: Workspace, thread_id: str) -> Path | None:
@@ -436,12 +553,16 @@ def _product(parent: _Thread | None) -> str | None:
     return state.spec.name if isinstance(state, ProductBuildState) and state.spec else None
 
 
-def _summary(ws: Workspace, t: _Thread, parent: _Thread | None) -> ThreadSummary:
+def _summary(
+    ws: Workspace, t: _Thread, parent: _Thread | None, supervised: _Supervised | None = None
+) -> ThreadSummary:
+    """``supervised``: the thread's supervised run, or its build's (:func:`_supervising`)."""
     state = t.state
     next_nodes = _next_nodes(t.channels) if state is not None else []
     stop = _stop(t.pending, next_nodes)
     crash = _crash(t.pending)
-    status = _status(state, stop, crash)
+    gone = supervised is not None and supervised.stopped is not None
+    status = _status(state, stop, crash, gone)
     graph, title, product, usd = KIND_GRAPH[t.kind], "", _product(parent), 0.0
     if isinstance(state, ProductBuildState):
         milestone, spec = state.milestone, state.spec
@@ -488,9 +609,11 @@ def _build_detail(
     state: ProductBuildState,
     listed: set[str],
     running: list[_Running],
+    gone: bool = False,
 ) -> ThreadDetail:
     """``summary.usd`` stays the figure ``scio report`` prints (finished runs); the attempts in
-    progress add to ``cost_by_role``, ``cost_by_feature`` and ``running_usd`` only."""
+    progress add to ``cost_by_role``, ``cost_by_feature`` and ``running_usd`` only. ``gone``:
+    the build's supervised process is gone, and its attempts with it."""
     own = _entries(ws, summary.thread_id)
     finished = [
         e
@@ -532,7 +655,7 @@ def _build_detail(
                     feature_id=a.feature_id,
                     attempt=a.attempt,
                     thread_id=a.thread.thread_id,
-                    status=_attempt_status(a.thread),
+                    status=_attempt_status(a.thread, gone),
                     present=True,
                 )
                 for a in running
@@ -589,16 +712,35 @@ def _diagrams() -> tuple[GraphDiagram, ...]:
 
 
 class CheckpointDataSource:
-    """:class:`scio.dashboard.contract.DataSource` over SQLite checkpoint DBs."""
+    """:class:`scio.dashboard.contract.DataSource` over SQLite checkpoint DBs, and a
+    :class:`~scio.dashboard.contract.RecoverySource` over the recovery supervisor's store.
 
-    def __init__(self, workspaces: Sequence[Workspace]) -> None:
+    ``recovery_store``: the store's file; by default where the supervisor keeps it, resolved
+    from the environment on each read (:func:`scio.dashboard.supervisor.store_path`).
+    ``alive(pid, created)``: a supervised process's liveness (:func:`liveness.alive`).
+    ``clock``: now, in seconds since the epoch, for the escalated incidents' window."""
+
+    def __init__(
+        self,
+        workspaces: Sequence[Workspace],
+        *,
+        recovery_store: Path | None = None,
+        alive: Callable[[int, float], bool | None] = liveness.alive,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self._workspaces = list(workspaces)
         self._by_name = {w.name: w for w in self._workspaces}
         if len(self._by_name) != len(self._workspaces):
             raise ValueError("every root needs its own name (it is the URL segment)")
+        self._recovery_store = recovery_store
+        self._alive = alive
+        self._clock = clock
+        self._store_streak = _Streak("the recovery supervisor's store")
 
     @classmethod
-    def from_roots(cls, roots: Sequence[Path]) -> CheckpointDataSource:
+    def from_roots(
+        cls, roots: Sequence[Path], *, recovery_store: Path | None = None
+    ) -> CheckpointDataSource:
         """One workspace per directory, at the default locations, names made unique."""
         taken: set[str] = set()
         out: list[Workspace] = []
@@ -610,7 +752,132 @@ class CheckpointDataSource:
                 name = f"{base}-{n}"
             taken.add(name)
             out.append(workspace(path, name=name))
-        return cls(out)
+        return cls(out, recovery_store=recovery_store)
+
+    # ---- the recovery supervisor's store
+
+    def _store(self) -> Path:
+        return self._recovery_store if self._recovery_store is not None else supervisor.store_path()
+
+    def _runs(self) -> list[supervisor.StoredRun]:
+        """Every run that started; none without a store, or (logged once per streak) when
+        the store cannot be read: a thread then reads as if no supervisor ran it."""
+        path = self._store()
+        if not path.is_file():
+            return []
+        try:
+            with closing(_connect(path)) as conn:
+                supervisor.check_schema(conn)
+                runs = supervisor.read_runs(conn)
+        except (sqlite3.Error, OSError, supervisor.StoreError) as exc:
+            self._store_streak.failed(path, exc)
+            return []
+        self._store_streak.succeeded(path)
+        return runs
+
+    def _supervision(self, ws: Workspace) -> Supervision:
+        return _supervised(ws, self._runs(), self._alive)
+
+    def _listed(self, ws: Workspace) -> set[str]:
+        """The root's thread ids; none when its DB is missing or cannot be read."""
+        db = Path(ws.checkpoints)
+        if not db.is_file():
+            return set()
+        try:
+            with closing(_connect(db)) as conn:
+                return set(_latest(conn))
+        except sqlite3.Error:
+            return set()
+
+    def recovery(self) -> RecoveryView:
+        """The supervisor's open incidents, and its escalated ones updated within
+        :data:`~scio.dashboard.supervisor.ESCALATED_WINDOW_S` ("needs you"), each newest
+        update first and linked to the build thread it interrupted; and the latest run of each
+        build thread in the roots' workspaces. Closed incidents are left out. Never raises: a
+        missing store is ``present`` False, and an unreadable one sets ``error`` (logged once
+        per streak)."""
+        path = self._store()
+        view = RecoveryView(store=str(path), present=path.is_file())
+        if not view.present:
+            return view
+        since = self._clock() - supervisor.ESCALATED_WINDOW_S
+        try:
+            with closing(_connect(path)) as conn:
+                supervisor.check_schema(conn)
+                runs = supervisor.read_runs(conn)
+                open_, escalated, skipped = supervisor.read_incidents(
+                    conn, events=INCIDENT_EVENTS, escalated_since=since
+                )
+        except (sqlite3.Error, OSError, supervisor.StoreError) as exc:
+            self._store_streak.failed(path, exc)
+            return view.model_copy(update={"error": _reason(exc)})
+        self._store_streak.succeeded(path)
+        listed: dict[str, set[str]] = {}
+        groups: list[list[RecoveryIncident]] = []
+        for read in (open_, escalated):
+            group = [self._incident(i, thread, events, listed) for i, thread, events in read]
+            skipped += group.count(None)
+            groups.append([i for i in group if i is not None])
+        supervised = [
+            s.view(thread)
+            for ws in self._workspaces
+            for thread, s in sorted(_supervised(ws, runs, self._alive).items())
+        ]
+        error = f"{skipped} incident row(s) could not be read" if skipped else None
+        return view.model_copy(
+            update={
+                "runs": supervised,
+                "incidents": groups[0],
+                "escalated": groups[1],
+                "error": error,
+            }
+        )
+
+    def _incident(
+        self,
+        incident: supervisor.StoredIncident,
+        thread: str,
+        events: list[tuple[float, str]],
+        listed: dict[str, set[str]],
+    ) -> RecoveryIncident | None:
+        """The incident as the page shows it; None when its times are nonsense. ``listed``
+        caches each root's thread ids across the incidents of one read."""
+        created, updated = supervisor.at(incident.created_at), supervisor.at(incident.updated_at)
+        if created is None or updated is None:
+            return None
+        ws = next(
+            (w for w in self._workspaces if supervisor.same_path(w.path, incident.workspace)),
+            None,
+        )
+        if ws is not None and thread and ws.name not in listed:
+            listed[ws.name] = self._listed(ws)
+        return RecoveryIncident(
+            incident_id=incident.incident_id,
+            state=incident.state,
+            failure_class=incident.failure_class,
+            summary=incident.summary,
+            frame=incident.innermost_scio_frame,
+            issue_number=incident.issue_number,
+            pr_number=incident.pr_number,
+            attempts=incident.attempts,
+            replays=incident.replays,
+            escalation=incident.escalation,
+            workspace=incident.workspace,
+            created_at=created,
+            updated_at=updated,
+            build_thread=thread,
+            root=ws.name if ws is not None else None,
+            present=ws is not None and thread in listed.get(ws.name, set()),
+            events=[
+                IncidentEvent(at=when, text=text)
+                for t, text in events
+                if (when := supervisor.at(t)) is not None
+            ],
+        )
+
+    def recovery_version(self) -> str:
+        """The store's and its WAL's size and modification time: a ``stat`` each."""
+        return supervisor.store_version(self._store())
 
     def _workspace(self, root: str) -> Workspace:
         try:
@@ -632,12 +899,14 @@ class CheckpointDataSource:
             return []
         with _reader(db) as (conn, saver):
             threads = [_load(saver, tid, cid) for tid, cid in _latest(conn).items()]
+        sup = self._supervision(ws) if threads else {}
         by_id = {t.thread_id: t for t in threads}
         builds = [t.thread_id for t in threads if t.kind == "build"]
         summaries = []
         for t in threads:
             pid = _parent_id(t.thread_id, builds) if t.kind == "task" else None
-            summaries.append(_summary(ws, t, by_id[pid] if pid else None))
+            parent = by_id[pid] if pid else None
+            summaries.append(_summary(ws, t, parent, _supervising(sup, t.thread_id, pid)))
         return _newest_first(summaries)
 
     def thread(self, root: str, thread_id: str) -> ThreadDetail:
@@ -659,10 +928,13 @@ class CheckpointDataSource:
                     if candidate.kind == "build":
                         parent = candidate
                         break
-        summary = _summary(ws, t, parent)
+        parent_id = parent.thread_id if parent else None
+        supervised = _supervising(self._supervision(ws), thread_id, parent_id)
+        summary = _summary(ws, t, parent, supervised)
         state = t.state
         if isinstance(state, ProductBuildState):
-            return _build_detail(ws, summary, state, set(latest), running)
+            gone = supervised is not None and supervised.stopped is not None
+            return _build_detail(ws, summary, state, set(latest), running, gone)
         if isinstance(state, ProductState):
             return _bootstrap_detail(ws, summary, state)
         if isinstance(state, SCIOState):
@@ -681,11 +953,13 @@ class CheckpointDataSource:
         with closing(_connect(db)) as conn:
             latest = _latest(conn)
             writes = {str(tid): int(n) for tid, n in _rows(conn, _WRITES_SQL)}
+        sup = self._supervision(ws) if latest else {}
         return {
             tid: ThreadVersion(
                 checkpoint_id=cid,
                 writes=writes.get(tid, 0),
                 ledger_bytes=_ledger_bytes(ws, tid),
+                supervisor=_token(sup, tid),
             )
             for tid, cid in latest.items()
         }

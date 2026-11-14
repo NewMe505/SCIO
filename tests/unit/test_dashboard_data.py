@@ -46,6 +46,15 @@ P1, P2 = f"{BUILD}-p1-a1", f"{BUILD}-p2-a1"
 NEW = "new-1"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_recovery_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The sources here read the supervisor's store from the environment (issue #102): never
+    this machine's own."""
+    monkeypatch.setenv("SCIO_RECOVERY_HOME", str(tmp_path_factory.mktemp("no-recovery-home")))
+
+
 @dataclass(frozen=True)
 class Built:
     source: CheckpointDataSource

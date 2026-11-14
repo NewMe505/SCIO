@@ -7,7 +7,12 @@ that cannot be read never hides the others: the threads list skips it and logs w
 binds 127.0.0.1, yet any web page the user visits can reach it: ``TrustedHostMiddleware``
 refuses a foreign ``Host`` (DNS rebinding), ``/ws`` accepts only the page this server served
 (``Origin`` equal to ``Host``, so not another local dev server either), and every response
-forbids framing. Needs the ``dashboard`` extra; the CLI imports this module lazily."""
+forbids framing. Needs the ``dashboard`` extra; the CLI imports this module lazily.
+
+A source that is also a :class:`~scio.dashboard.contract.RecoverySource` (the checkpoint data
+source is) serves the recovery supervisor's view on ``/api/recovery`` (issue #102). Its
+``/ws`` hello carries ``recovery``, and so does each later event that found the supervisor's
+store changed, so the page asks for that view only from a server that has it."""
 
 from __future__ import annotations
 
@@ -31,6 +36,8 @@ from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 from scio.dashboard.contract import (
     ChangeEvent,
     DataSource,
+    RecoverySource,
+    RecoveryView,
     ThreadRef,
     ThreadSummary,
     ThreadVersion,
@@ -183,15 +190,44 @@ async def _snapshot(source: DataSource, previous: Snapshot, streaks: FailureStre
     return current
 
 
-async def _push_changes(websocket: WebSocket, source: DataSource, poll_interval_s: float) -> None:
+RECOVERY_STORE = "the recovery supervisor's store"
+"""The name a failing :meth:`RecoverySource.recovery_version` is logged under."""
+
+
+async def _store_version(
+    recovery: RecoverySource | None, previous: str, streaks: FailureStreaks
+) -> str:
+    """The supervisor store's version; ``previous`` when there is no recovery source or the
+    read raises (logged once per streak), so a failing read never reads as a change."""
+    if recovery is None:
+        return previous
+    try:
+        version = await asyncio.to_thread(recovery.recovery_version)
+    except Exception as exc:
+        streaks.failed(RECOVERY_STORE, exc)
+        return previous
+    streaks.succeeded(RECOVERY_STORE)
+    return version
+
+
+async def _push_changes(
+    websocket: WebSocket,
+    source: DataSource,
+    poll_interval_s: float,
+    recovery: RecoverySource | None = None,
+) -> None:
     """Accept, take the baseline, send the hello, then poll every ``poll_interval_s`` and push
     a :class:`ChangeEvent` only when something changed. The baseline comes before the hello: a
     change that lands after the page got the hello is always pushed. Between polls the socket
-    is read, so a closed tab ends the loop at once; what the client sends is ignored."""
+    is read, so a closed tab ends the loop at once; what the client sends is ignored. With a
+    ``recovery`` source the hello says so, and a poll that finds the supervisor's store
+    changed pushes ``recovery``."""
     await websocket.accept()
     streaks = FailureStreaks("polling")  # per connection: each socket logs its own streaks
     previous = await _snapshot(source, {}, streaks)
-    await websocket.send_text(ChangeEvent(at=datetime.now(UTC)).model_dump_json())
+    store = await _store_version(recovery, "", streaks)
+    hello = ChangeEvent(at=datetime.now(UTC), recovery=recovery is not None)
+    await websocket.send_text(hello.model_dump_json())
     loop = asyncio.get_running_loop()
     while True:
         try:
@@ -205,7 +241,9 @@ async def _push_changes(websocket: WebSocket, source: DataSource, poll_interval_
         current = await _snapshot(source, previous, streaks)
         event = diff_versions(previous, current)
         previous = current
-        if event.changed or event.removed:
+        now = await _store_version(recovery, store, streaks)
+        event.recovery, store = now != store, now
+        if event.changed or event.removed or event.recovery:
             await websocket.send_text(event.model_dump_json())
 
 
@@ -229,6 +267,7 @@ def create_app(
     app.add_middleware(FrameDenyMiddleware)  # added last: outermost, so the 400s carry it too
     app.mount("/static", StaticFiles(directory=static, check_dir=False), name="static")
     listing = FailureStreaks("listing the threads of")
+    recovery_source = source if isinstance(source, RecoverySource) else None
 
     # Plain `def` endpoints: the source does blocking sqlite I/O, and FastAPI runs sync
     # endpoints in its threadpool. They return JSONResponse, so FastAPI infers no
@@ -288,6 +327,21 @@ def create_app(
     def graphs() -> JSONResponse:
         return JSONResponse([g.model_dump(mode="json") for g in source.graphs()])
 
+    @app.get("/api/recovery")
+    def recovery() -> JSONResponse:
+        """The supervisor's view; an empty one (no store) from a source that reads none. A
+        missing or unreadable store is part of the view, not an error status."""
+        if recovery_source is None:
+            return JSONResponse(RecoveryView().model_dump(mode="json"))
+        try:
+            view = recovery_source.recovery()
+        except Exception as exc:
+            log.warning("dashboard: reading the recovery view failed: %s", _reason(exc))
+            raise HTTPException(
+                status_code=503, detail=f"the recovery view cannot be read: {_reason(exc)}"
+            ) from None
+        return JSONResponse(view.model_dump(mode="json"))
+
     @app.websocket("/ws")
     async def changes(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")
@@ -296,7 +350,7 @@ def create_app(
             await websocket.close(code=POLICY_VIOLATION)
             return
         try:
-            await _push_changes(websocket, source, poll_interval_s)
+            await _push_changes(websocket, source, poll_interval_s, recovery_source)
         except (WebSocketDisconnect, WebSocketDisconnected):
             return  # the client went away mid-send: nothing to report
 
