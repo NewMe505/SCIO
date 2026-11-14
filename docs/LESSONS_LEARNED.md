@@ -761,4 +761,4 @@ On the final commit `dda626f` all three pass, one trial each, run in parallel: $
 
 ### After the merge (issue #91)
 - The live check of the new hook found two things. The session had restarted outside the repository and was running no hooks at all (I-178, open, the owner's decision). Fed by hand, the hook script also showed that its push and commit gates had failed open on every `cd /c/...` line: 8 commits unlinted and 3 pushes unchecked in this pass, each with a warning nobody read (I-179, fixed).
-- Still to verify, in a session started in the SCIO directory: a live `printf %s 'x\\y'`, a backslash heredoc and a piped `mypy | tail -1` are each denied. That also confirms I-176's premise, that the hook sees a command before the Bash tool halves it.
+- Verified live on 2026-11-13, in a session started in the SCIO directory: a `printf %s 'x\\y'`, a backslash heredoc and a piped `mypy | tail -1` were each denied with the hook's message. That confirms I-176's premise, that the hook sees a command before the Bash tool halves it. After `cd /c/...`, a `git push --dry-run` went through with no "could not check" warning (I-179).
