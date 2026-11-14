@@ -1729,3 +1729,12 @@ Template:
 - Fix: not yet. The likely fix is `git status --porcelain -z`, which writes neither quotes nor arrows.
 - Sweep: -
 - Resolved: - · Status: open
+
+### I-199 · `watch_ci.py` crashed on a commit GitHub had made, because it resolved every SHA locally
+- Found: 2026-11-14 · watching PR #108 after `gh pr update-branch 108` · `scripts/watch_ci.py::full_sha`
+- Symptom: `watch_ci.py --sha 88f20a57...` ended in a traceback: `git rev-parse --verify 88f20a57...^{commit}` returned exit 128. `gh pr update-branch` had made the merge commit on GitHub, so this clone did not have it yet. The PR's CI went unwatched until a `git fetch` and a rerun.
+- Root cause: `full_sha` resolved every SHA through the local clone. That is right for a short SHA (I-172) and needless for a full one. And `main` let the `CalledProcessError` escape.
+- Fix: a full 40-hex SHA is taken as given, lower-cased, with no lookup. A short SHA that cannot be resolved ends with exit 2 and the message "`git fetch` first, or pass the full 40-character SHA".
+- Sweep: every `git rev-parse --verify` in `scripts/` and `recovery/`. `recovery/runtime.py` resolves a target only after `fetch origin`, and `push_gate.py` resolves only local refs.
+- Guard: `test_a_full_sha_made_on_github_is_taken_as_given` (the old code raised `CalledProcessError`) and `test_an_unresolvable_short_sha_ends_with_a_message_not_a_traceback`. Guardrail 80.
+- Resolved: 2026-11-14 · Status: resolved

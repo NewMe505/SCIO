@@ -81,6 +81,7 @@ Every bug and every correction becomes one rule here (the owner's rule, 2026-10-
 73. **Always** make a guard repair a habitual mistake when the repair is certain, rather than refuse it. A refusal that fires about sixteen times in one pass is a tax, not a guard. The hook now prepends `set -o pipefail;` to a piped check instead of denying the line (I-188, the owner's request). Guard: `hook:push_gate`, `test:test_a_piped_check_is_rewritten_to_fail_closed_not_refused`, `test:test_a_rewritten_line_still_meets_the_git_gates_and_the_backslash_refusal`
 76. **Always** lint exactly what a commit can contain: the staged files plus the paths the command line names, and the whole tree on any doubt. One session's unfinished files must never block another session's finished commit (I-186). Guard: `test:test_the_commit_gate_lints_what_the_commit_can_hold`, `test:test_work_tree_paths_reads_git_add_and_git_commit`
 77. **Never** strip leading whitespace from `git status --porcelain` output before parsing it by column. The status code's first column is often a space (I-193). Guard: `test:test_the_commit_gate_lints_what_the_commit_can_hold`
+80. **Never** require a commit that GitHub made to exist in the local clone before using its full SHA. `gh pr update-branch` makes commits remotely (I-199). Guard: `test:test_a_full_sha_made_on_github_is_taken_as_given`
 
 ## Standing pre-flight list (apply at the start of every milestone)
 
