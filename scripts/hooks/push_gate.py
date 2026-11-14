@@ -8,9 +8,11 @@
 2. A bare ``git stash`` (``git stash``, ``git stash push``, ``git stash save``, ``git stash -m``)
    is denied: parallel sessions share one stash stack (owner correction).
 3. ``git commit`` waits for lint (I-106: a line over the limit reached a commit). In a repository
-   whose ``pyproject.toml`` configures ruff, every changed Python file (staged, modified or
-   untracked, since ``git add ... && git commit`` stages in the same line) must pass
-   ``ruff check`` and ``ruff format --check``.
+   whose ``pyproject.toml`` configures ruff, every Python file the commit can hold must pass
+   ``ruff check`` and ``ruff format --check``. The hook runs before the line, so it reads the
+   line (I-186): the staged files, plus the changed files under the paths that a ``git add``
+   before the commit, or the commit itself, names. ``git commit -a``, ``git add -A``/``.``/``-u``,
+   or a line it cannot read (``xargs git add``, ``$VAR``, an alias) lints every changed file.
 4. A heredoc body or a ``python -c`` script holding a backslash, or a double backslash
    anywhere, is denied (guardrail 17, issue #88, I-176): the Bash tool halves ``\\\\`` before
    the shell runs, and the shell rewrites escapes in scripts; the Edit and Write tools carry
@@ -178,6 +180,67 @@ def git_call(words: list[str]) -> tuple[str, list[str], str | None] | None:
     return words[i], words[i + 1 :], directory
 
 
+REDIRECT_RE = re.compile(r"^(?:\d*|&)(?:>>?|<)")  # 2>&1, >/dev/null, &>log, <in
+REDIRECT_OP_RE = re.compile(r"(?:\d*|&)(?:>>?|<)&?")  # an operator whose target is the next word
+SHELL_DOUBT_RE = re.compile(r"[$`(){}~<>\"']")  # the shell rewrites it, or shlex could not split
+WHOLE_TREE_LONG = {"--all", "--update", "--no-ignore-removal", "--patch", "--interactive", "--edit"}
+WHOLE_TREE_LETTERS = {"add": "Aupie", "commit": "ap"}
+VALUE_LETTERS = "mFCctuS"  # git commit: the rest of the cluster, or for mFCct the next word
+VALUE_LONG = {
+    "--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
+    "--date", "--cleanup", "--fixup", "--squash", "--trailer",
+}  # fmt: skip
+# Subcommands that never copy working-tree content into the index. Any other one before the
+# commit (an alias, ``update-index``) may, so the gate lints the whole tree.
+NOT_STAGING = {
+    "status", "diff", "log", "show", "branch", "switch", "checkout", "restore", "reset", "rm",
+    "mv", "stash", "fetch", "pull", "push", "rev-parse", "ls-files", "config", "remote", "tag",
+}  # fmt: skip
+
+
+def _operands(args: list[str]) -> list[str]:
+    """``args`` without shell redirections (``2>&1``, ``> /dev/null``)."""
+    out: list[str] = []
+    target = False
+    for arg in args:
+        if target:
+            target = False
+        elif REDIRECT_RE.match(arg):
+            target = REDIRECT_OP_RE.fullmatch(arg) is not None
+        else:
+            out.append(arg)
+    return out
+
+
+def work_tree_paths(sub: str, args: list[str]) -> list[str] | None:
+    """The pathspecs a ``git add`` or ``git commit`` takes from the working tree (I-186), or
+    None when it may take the whole tree: ``git add -A``/``-u``/``.``, ``git commit -a``/``-am``,
+    ``--pathspec-from-file``, or a word the shell still rewrites (``$FILES``, ``{a,b}.py``)."""
+    paths: list[str] = []
+    words = iter(_operands(args))
+    for arg in words:
+        if arg == "--":
+            paths += words
+        elif arg.startswith("--"):
+            if arg in WHOLE_TREE_LONG or arg.startswith("--pathspec-from-file"):
+                return None
+            if arg in VALUE_LONG:
+                next(words, None)
+        elif arg.startswith("-") and arg != "-":
+            for k, letter in enumerate(arg[1:], 2):
+                if letter in WHOLE_TREE_LETTERS[sub]:
+                    return None
+                if letter in VALUE_LETTERS:
+                    if k == len(arg) and letter in "mFCct":
+                        next(words, None)
+                    break
+        else:
+            paths.append(arg)
+    if any(p == "." or SHELL_DOUBT_RE.search(p) for p in paths):
+        return None
+    return paths
+
+
 def is_bare_stash(args: list[str]) -> bool:
     """``git stash`` with no subcommand, or one that pushes onto the shared stack."""
     return not args or args[0] in {"push", "save"} or args[0].startswith("-")
@@ -224,11 +287,14 @@ def _run(argv: list[str], cwd: str) -> str:
     r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=20)
     if r.returncode != 0:
         raise RuntimeError(f"{' '.join(argv[:3])} failed: {(r.stderr or r.stdout).strip()[:200]}")
-    return r.stdout.strip()
+    # rstrip, not strip: a porcelain line starts with a space (" M a.py"), and stripping the
+    # first one turned it into "M a.py", whose path read as ".py" and was never linted.
+    return r.stdout.rstrip()
 
 
 def changed_python_files(porcelain: str, root: str) -> list[str]:
-    """The ``.py`` files ``git status --porcelain`` lists as added, modified or untracked."""
+    """The ``.py`` files ``git status --porcelain`` lists as added, modified or untracked.
+    Paths are relative to the repository root, wherever git ran."""
     files: list[str] = []
     for line in porcelain.splitlines():
         if len(line) < 4 or "D" in line[:2]:
@@ -254,7 +320,26 @@ def lint_reason(files: list[str], run: Callable[[list[str]], tuple[int, str]]) -
     return None
 
 
-def commit_reason(cwd: str) -> str | None:
+Scope = list[tuple[str, list[str]]]  # (directory git ran in, pathspecs it staged from there)
+
+
+def commit_files(root: str, scope: Scope) -> list[str]:
+    """The ``.py`` files a commit can hold (I-186): the staged ones, and the changed ones
+    under each pathspec the line stages. ``git status`` resolves a pathspec the way
+    ``git add`` does (a directory, a glob, ``:(top)``), so the hook does not reimplement it."""
+    staged = _run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"], root)
+    files = [p for p in staged.split("\0") if p.endswith(".py")]
+    for directory, specs in scope:
+        if specs:
+            status = ["git", "status", "--porcelain", "--untracked-files=all", "--", *specs]
+            files += changed_python_files(_run(status, directory), root)
+    return [p for p in dict.fromkeys(files) if os.path.isfile(os.path.join(root, p))]
+
+
+def commit_reason(cwd: str, scope: Scope | None = None) -> str | None:
+    """Why a commit in ``cwd`` must wait for lint, or None. ``scope`` is what the line stages
+    before the commit (``evaluate``); None lints every changed file, as does a pathspec git
+    refuses (``/dev/null``): the whole tree is the safe direction."""
     root = _run(["git", "rev-parse", "--show-toplevel"], cwd)
     pyproject = os.path.join(root, "pyproject.toml")
     if not os.path.isfile(pyproject):
@@ -262,13 +347,21 @@ def commit_reason(cwd: str) -> str | None:
     with open(pyproject, encoding="utf-8") as f:
         if "[tool.ruff" not in f.read():
             return None
-    porcelain = _run(["git", "status", "--porcelain", "--untracked-files=all"], root)
+    files = None
+    if scope is not None:
+        try:
+            files = commit_files(root, scope)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            files = None
+    if files is None:
+        porcelain = _run(["git", "status", "--porcelain", "--untracked-files=all"], root)
+        files = changed_python_files(porcelain, root)
 
     def run(argv: list[str]) -> tuple[int, str]:
         r = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=25)
         return r.returncode, r.stdout + r.stderr
 
-    return lint_reason(changed_python_files(porcelain, root), run)
+    return lint_reason(files, run)
 
 
 def latest_run(branch: str, cwd: str) -> dict[str, Any] | None:
@@ -286,12 +379,15 @@ def latest_run(branch: str, cwd: str) -> dict[str, Any] | None:
 def evaluate(command: str, cwd: str) -> tuple[str | None, str | None]:
     """``(deny reason, warning)`` for one Bash command line."""
     here = cwd
+    scope: Scope | None = []  # what the line stages before a commit; None: the whole tree
     for words in segments(command):
         if words[0] == "cd" and len(words) > 1:
             here = os.path.join(here, native_dir(words[1]))
             continue
         call = git_call(words)
         if call is None:
+            if any(os.path.basename(w).removesuffix(".exe") == "git" for w in words):
+                scope = None  # `xargs git add`, `env git ...`: the hook cannot read what it stages
             continue
         sub, args, directory = call
         repo = os.path.join(here, native_dir(directory)) if directory else here
@@ -301,9 +397,14 @@ def evaluate(command: str, cwd: str) -> tuple[str | None, str | None]:
                 "Copy the files aside or make a temporary commit instead.",
                 None,
             )
+        if sub in ("add", "commit"):
+            paths = work_tree_paths(sub, args)
+            scope = None if scope is None or paths is None else [*scope, (repo, paths)]
+        elif sub not in NOT_STAGING:
+            scope = None
         if sub == "commit":
             try:
-                reason = commit_reason(repo)
+                reason = commit_reason(repo, scope)
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
                 return None, f"commit gate could not run ruff, commit allowed: {e}"
             if reason:
