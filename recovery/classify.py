@@ -39,6 +39,7 @@ TRANSIENT_MARKERS: tuple[str, ...] = (
     "scio build stopped on github:",
     "connection reset",
     "temporarily unavailable",
+    "claude -p timed out",  # SCIO's TIMEOUT_MESSAGE: a hung claude, killed (I-180, #105)
 )
 
 NOT_A_DEFECT: frozenset[str] = frozenset({"BudgetExceeded", "RefusalError"})
@@ -47,6 +48,14 @@ cap and a model's refusal. A feature line naming one is a task fault, never a re
 
 GITHUB_HALT = "github"
 """The outcome file's ``exit_reason`` for ``scio build stopped on GitHub:``."""
+
+HARNESS_STOP = re.compile(
+    r"scio (?P<command>\w+) stopped on a harness error: (?P<type>[A-Za-z_][\w.]*): "
+    r"(?P<message>.*)"
+)
+"""``scio/cli.py``'s ``harness_stop_line``: a ``HarnessError`` that no node caught stopped
+``scio <command>`` (outcome ``exit_reason`` ``harness``, I-182). Before, the same failure
+was a traceback through SCIO (row 8)."""
 
 TRACEBACK_HEADER = "Traceback (most recent call last):"
 CHAIN_SENTENCES: tuple[str, ...] = (
@@ -175,7 +184,11 @@ def _stderr_failure(ev: Evidence) -> str:
     if ev.halt_reason and ev.halt_reason != GITHUB_HALT:
         return ""
     lines = ev.stderr_tail.splitlines()
-    start = max(traceback_chain_start(lines), _last_index(lines, "scio build stopped on github:"))
+    start = max(
+        traceback_chain_start(lines),
+        _last_index(lines, "scio build stopped on github:"),
+        _last_index(lines, "stopped on a harness error:"),
+    )
     if start < 0:
         return ev.stderr_tail
     kept = [ln for ln in lines[start:] if ln.strip() and not ln[:1].isspace()]
@@ -289,6 +302,9 @@ def classify(ev: Evidence) -> Classification:
        (``... failed: <Type>: ...``): ``HARNESS_SUSPECT``. ``BudgetExceeded`` and
        ``RefusalError`` (``NOT_A_DEFECT``) are ``TASK_FAULT``: a spend cap and a model's
        refusal are not SCIO defects.
+    9b. SCIO's ``scio <command> stopped on a harness error: <Type>: ...`` line (outcome
+        ``exit_reason`` ``harness``, I-182): ``HARNESS_SUSPECT``, and ``NOT_A_DEFECT`` types
+        ``TASK_FAULT``, as in row 9. A timed-out ``claude -p`` was row 6 already.
     10. Anything else: ``UNKNOWN``.
 
     ``signature`` is "" for ``DONE`` and ``HUMAN_STOP``.
@@ -374,6 +390,18 @@ def classify(ev: Evidence) -> Classification:
                 frame,
                 message="feature attempt failed exit=error",
             )
+    # row 9b: a HarnessError no node caught, which SCIO's CLI stopped on (I-182): read as
+    # row 9 reads a feature's, since before I-182 it was a traceback through scio (row 8)
+    if m := HARNESS_STOP.search(text):
+        if _short_type(m["type"]) in NOT_A_DEFECT:
+            return _task_fault(ev, frame)
+        return _result(
+            FailureClass.HARNESS_SUSPECT,
+            f"scio {m['command']} stopped on {m['type']}: {_first_line(m['message'])}",
+            frame,
+            exception_type=m["type"],
+            message=m["message"],
+        )
     # row 10
     detail = (
         _first_line(ev.exception_message)

@@ -21,6 +21,7 @@ from scio.cli import OUTCOME_VERSION as SCIO_OUTCOME_VERSION
 from scio.cli import main
 from scio.graph.run import RunOutcome, initial_state
 from scio.graph.run_context import RunContext
+from scio.harness.failures import FatalError
 from scio.harness.github.client import GitHubError
 from scio.state.models import ExitReason, LedgerEntry, Role, TaskSpec
 
@@ -286,6 +287,45 @@ def test_scio_run_and_resume_record_their_stops_and_a_builtin_crash(
     assert data["exception"]["message"] == str(info.value) == "'missing'"
     assert data["exception"]["frames"] == _frames(info.value)[1:]
     assert data["exception"]["frames"][-1]["function"] == "broken"
+
+
+def test_a_harness_error_stops_new_run_and_resume_with_a_resume_hint_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The I-182 sweep: the interviewer, the product planner and every task-graph node guard
+    only ``BudgetExceeded``, so any other ``HarnessError`` (an expired login, a schema the
+    model never met, retries run out) ended ``scio new``, ``run`` and ``resume`` in a
+    traceback. Each stops with the error and the command that resumes its thread."""
+    import scio.cli as cli
+    import scio.product
+
+    def failing(*args: Any, **kwargs: Any) -> Any:
+        raise FatalError("claude -p failed: no message (subtype=-)")
+
+    monkeypatch.setattr(scio.product, "run_product", failing)
+    monkeypatch.setattr(cli, "run_graph", failing)
+    monkeypatch.setattr(cli, "resume_graph", failing)
+    spec = tmp_path / "task.md"
+    spec.write_text("# t\n\n- [ ] a\n", encoding="utf-8", newline="\n")
+    sandbox = ["--sandbox", str(tmp_path / "sb")]
+    task_resume = f"scio resume --thread r-h --sandbox {tmp_path / 'sb'}"
+    cases = [
+        (["new", "--prompt", PROMPT, "--dir", str(tmp_path / "p")], "n-h", "scio new --thread n-h"),
+        (["run", "--spec", str(spec), "--repo", "r", *sandbox], "r-h", task_resume),
+        (["resume", *sandbox], "r-h", task_resume),
+    ]
+    file = tmp_path / "outcome.json"
+    for argv, thread, resume in cases:
+        command = argv[0]
+        capsys.readouterr()
+        assert main([*argv, "--thread", thread, "--outcome-file", str(file)]) == 1, command
+        stop = f"scio {command} stopped on a harness error: FatalError: claude -p failed"
+        err = capsys.readouterr().err
+        assert stop in err and resume in err and "Traceback" not in err, err
+        data = _outcome(file)
+        assert (data["status"], data["exit_reason"]) == ("halted", "harness"), command
+        assert data["thread"] == thread and data["resume"] == resume
+        assert data["reason"] == f"{stop}: no message (subtype=-)"
 
 
 def test_without_the_flag_nothing_is_written(

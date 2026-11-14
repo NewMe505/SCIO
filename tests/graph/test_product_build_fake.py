@@ -21,7 +21,7 @@ from scio.graph.run_context import RunContext
 from scio.harness.budget import BudgetGuard, BudgetLimits
 from scio.harness.config import ModelsConfig, ProviderRegistry
 from scio.harness.core import Harness
-from scio.harness.failures import FatalError
+from scio.harness.failures import FatalError, RetryableError
 from scio.harness.github.client import GitHubClient, GitHubError
 from scio.harness.providers.fake import FakeProvider, FakeReply
 from scio.harness.retry import RetryPolicy
@@ -1740,6 +1740,63 @@ def test_a_github_refusal_stops_scio_build_with_a_resume_hint_not_a_traceback(
     err = capsys.readouterr().err
     assert "scio build stopped on GitHub" in err and "product-mode" in err
     assert "run the same scio build command again to resume" in err and "Traceback" not in err
+
+
+def test_a_harness_error_in_an_orchestrator_node_stops_scio_build_with_a_resume_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I-180, I-182, issue #105 (incident inc-20261114094856-5356c9), in the incident's
+    shape: ``--decision merge`` answered the merge stop, the next milestone's planner timed
+    out on every try, and ``scio build`` ended in a traceback with outcome ``crashed``. A
+    ``HarnessError`` an orchestrator node does not catch now stops the command with the
+    error and the command that resumes the thread at the failed node (no ``--decision``: the
+    thread no longer waits at a stop), and that command carries the build on."""
+    import scio.cli as cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCIO_PROVIDER_OVERRIDE", "fake")
+    monkeypatch.setenv("SCIO_FAKE_SCRIPT", "1")
+    monkeypatch.setenv("SCIO_MAX_ATTEMPTS", "1")  # the harness's retries have run out
+    monkeypatch.setenv("SCIO_CHECKPOINT_DSN", f"sqlite:///{(tmp_path / 'ckpt.sqlite').as_posix()}")
+    target = str(tmp_path / "product")
+    assert cli.main(["new", "--prompt", PROMPT, "--dir", target, "--thread", "new-h"]) == 0
+    assert cli.main(["new", "--thread", "new-h", "--dir", target, "--decision", "answers"]) == 0
+    assert cli.main(["new", "--thread", "new-h", "--dir", target, "--decision", "approve"]) == 0
+    hung = {"planner": False}
+    scripted = cli._scripted_harness
+
+    def harness(settings: Any) -> Harness | None:
+        h = scripted(settings)
+        assert h is not None
+        inner = ScriptedResponder()
+
+        def responder(req: CompletionRequest) -> Any:
+            if hung["planner"] and req.role == "milestone_planner":
+                raise RetryableError("claude -p timed out after 600s; its process tree was killed")
+            return inner(req)
+
+        h.providers.register("fake", FakeProvider(responder=responder))
+        return h
+
+    monkeypatch.setattr(cli, "_scripted_harness", harness)
+    assert cli.main(["build", "--product", target]) == 0  # M1 waits at its merge stop
+    capsys.readouterr()
+    hung["planner"] = True
+    file = tmp_path / "outcome.json"
+    argv = ["build", "--product", target, "--decision", "merge", "--outcome-file", str(file)]
+    assert cli.main(argv) == 1
+    err = capsys.readouterr().err
+    stop = "scio build stopped on a harness error: RetryableError: claude -p timed out after 600s"
+    assert stop in err and "Traceback" not in err
+    data = json.loads(file.read_text(encoding="utf-8"))
+    thread = build_thread_id(PRODUCT)
+    resume = f"scio build --product {target} --thread {thread}"
+    assert (data["status"], data["exit_reason"], data["thread"]) == ("halted", "harness", thread)
+    assert data["reason"].startswith(stop) and data["resume"] == resume and resume in err
+    hung["planner"] = False
+    assert cli.main(resume.split()[1:]) == 0  # the hint resumes at the planner, and M2 builds
+    out = capsys.readouterr().out
+    assert "milestones done M1 " in out and "current M2 " in out and "PAUSED for a human" in out
 
 
 def test_a_feature_added_at_the_release_stop_holds_the_release(tmp_path: Path) -> None:
